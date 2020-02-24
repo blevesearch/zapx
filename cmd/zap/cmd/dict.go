@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package zap
+package cmd
 
 import (
 	"encoding/binary"
@@ -20,7 +20,7 @@ import (
 	"math"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/blevesearch/bleve/index/scorch/segment/zap"
+	"github.com/blevesearch/zap"
 	"github.com/couchbase/vellum"
 	"github.com/spf13/cobra"
 )

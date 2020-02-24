@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package zap
+package cmd
 
 import (
 	"fmt"
 	"os"
 
-	"github.com/blevesearch/bleve/index/scorch/segment/zap"
+	"github.com/blevesearch/zap"
 	"github.com/spf13/cobra"
 )
 

@@ -793,10 +793,23 @@ func (p *PostingsIterator) DocNum1Hit() (uint64, bool) {
 	return 0, false
 }
 
+// ActualBitmap returns the underlying actual bitmap
+// which can be used up the stack for optimizations
+func (p *PostingsIterator) ActualBitmap() *roaring.Bitmap {
+	return p.ActualBM
+}
+
+// ReplaceActual replaces the ActualBM with the provided
+// bitmap
+func (p *PostingsIterator) ReplaceActual(abm *roaring.Bitmap) {
+	p.ActualBM = abm
+	p.Actual = abm.Iterator()
+}
+
 // PostingsIteratorFromBitmap constructs a PostingsIterator given an
 // "actual" bitmap.
 func PostingsIteratorFromBitmap(bm *roaring.Bitmap,
-	includeFreqNorm, includeLocs bool) (*PostingsIterator, error) {
+	includeFreqNorm, includeLocs bool) (segment.PostingsIterator, error) {
 	return &PostingsIterator{
 		ActualBM:        bm,
 		Actual:          bm.Iterator(),
@@ -807,11 +820,11 @@ func PostingsIteratorFromBitmap(bm *roaring.Bitmap,
 
 // PostingsIteratorFrom1Hit constructs a PostingsIterator given a
 // 1-hit docNum.
-func PostingsIteratorFrom1Hit(docNum1Hit, normBits1Hit uint64,
-	includeFreqNorm, includeLocs bool) (*PostingsIterator, error) {
+func PostingsIteratorFrom1Hit(docNum1Hit uint64,
+	includeFreqNorm, includeLocs bool) (segment.PostingsIterator, error) {
 	return &PostingsIterator{
 		docNum1Hit:      docNum1Hit,
-		normBits1Hit:    normBits1Hit,
+		normBits1Hit:    NormBits1Hit,
 		includeFreqNorm: includeFreqNorm,
 		includeLocs:     includeLocs,
 	}, nil

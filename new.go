@@ -25,6 +25,7 @@ import (
 	"github.com/blevesearch/bleve/analysis"
 	"github.com/blevesearch/bleve/document"
 	"github.com/blevesearch/bleve/index"
+	"github.com/blevesearch/bleve/index/scorch/segment"
 	"github.com/couchbase/vellum"
 	"github.com/golang/snappy"
 )
@@ -41,10 +42,17 @@ var ValidateDocFields = func(field document.Field) error {
 	return nil
 }
 
+var defaultChunkFactor uint32 = 1024
+
 // AnalysisResultsToSegmentBase produces an in-memory zap-encoded
 // SegmentBase from analysis results
-func AnalysisResultsToSegmentBase(results []*index.AnalysisResult,
-	chunkFactor uint32) (*SegmentBase, uint64, error) {
+func (z *ZapPlugin) New(results []*index.AnalysisResult) (
+	segment.Segment, uint64, error) {
+	return z.newWithChunkFactor(results, defaultChunkFactor)
+}
+
+func (*ZapPlugin) newWithChunkFactor(results []*index.AnalysisResult,
+	chunkFactor uint32) (segment.Segment, uint64, error) {
 	s := interimPool.Get().(*interim)
 
 	var br bytes.Buffer

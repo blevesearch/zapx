@@ -31,32 +31,30 @@ import (
 
 var DefaultFileMergerBufferSize = 1024 * 1024
 
-// ValidateMerge can be set by applications to perform additional checks
-// on a new segment produced by a merge, by default this does nothing.
-// Caller should provide EITHER segments or memSegments, but not both.
-// This API is experimental and may be removed at any time.
-var ValidateMerge = func(segments []*Segment, memSegments []*SegmentBase, drops []*roaring.Bitmap, newSegment *Segment) error {
-	return nil
-}
-
 const docDropped = math.MaxUint64 // sentinel docNum to represent a deleted doc
 
-// Merge takes a slice of zap segments and bit masks describing which
+// Merge takes a slice of segments and bit masks describing which
 // documents may be dropped, and creates a new segment containing the
-// remaining data.  This new segment is built at the specified path,
-// with the provided chunkFactor.
-func Merge(segments []*Segment, drops []*roaring.Bitmap, path string,
-	chunkFactor uint32, closeCh chan struct{}, s seg.StatsReporter) (
+// remaining data.  This new segment is built at the specified path.
+func (*ZapPlugin) Merge(segments []seg.Segment, drops []*roaring.Bitmap, path string,
+	closeCh chan struct{}, s seg.StatsReporter) (
 	[][]uint64, uint64, error) {
+
 	segmentBases := make([]*SegmentBase, len(segments))
 	for segmenti, segment := range segments {
-		segmentBases[segmenti] = &segment.SegmentBase
+		switch segmentx := segment.(type) {
+		case *Segment:
+			segmentBases[segmenti] = &segmentx.SegmentBase
+		case *SegmentBase:
+			segmentBases[segmenti] = segmentx
+		default:
+			panic(fmt.Sprintf("oops, unexpected segment type: %T", segment))
+		}
 	}
-
-	return MergeSegmentBases(segmentBases, drops, path, chunkFactor, closeCh, s)
+	return mergeSegmentBases(segmentBases, drops, path, defaultChunkFactor, closeCh, s)
 }
 
-func MergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, path string,
+func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, path string,
 	chunkFactor uint32, closeCh chan struct{}, s seg.StatsReporter) (
 	[][]uint64, uint64, error) {
 	flag := os.O_RDWR | os.O_CREATE

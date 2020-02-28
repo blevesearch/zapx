@@ -99,7 +99,8 @@ func buildTestSegmentForDict() (*SegmentBase, uint64, error) {
 		},
 	}
 
-	return AnalysisResultsToSegmentBase(results, 1024)
+	seg, size, err := zapPlugin.newWithChunkFactor(results, 1024)
+	return seg.(*SegmentBase), size, err
 }
 
 func TestDictionary(t *testing.T) {
@@ -112,7 +113,7 @@ func TestDictionary(t *testing.T) {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	segment, err := Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open("/tmp/scorch.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -198,7 +199,7 @@ func TestDictionaryError(t *testing.T) {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	segment, err := Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open("/tmp/scorch.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -302,7 +303,7 @@ func TestDictionaryBug1156(t *testing.T) {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	segment, err := Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open("/tmp/scorch.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}

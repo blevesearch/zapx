@@ -25,6 +25,9 @@ import (
 	"github.com/blevesearch/bleve/index/scorch/segment"
 )
 
+// zap plugin instance for testing only
+var zapPlugin = &ZapPlugin{}
+
 func TestOpen(t *testing.T) {
 	_ = os.RemoveAll("/tmp/scorch.zap")
 
@@ -34,7 +37,7 @@ func TestOpen(t *testing.T) {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	segment, err := Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open("/tmp/scorch.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -334,7 +337,7 @@ func TestOpenMulti(t *testing.T) {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	segment, err := Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open("/tmp/scorch.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -434,7 +437,7 @@ func TestOpenMultiWithTwoChunks(t *testing.T) {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	segment, err := Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open("/tmp/scorch.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -529,7 +532,7 @@ func TestSegmentVisitableDocValueFieldsList(t *testing.T) {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	seg, err := Open("/tmp/scorch.zap")
+	seg, err := zapPlugin.Open("/tmp/scorch.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -557,7 +560,7 @@ func TestSegmentVisitableDocValueFieldsList(t *testing.T) {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	seg, err = Open("/tmp/scorch.zap")
+	seg, err = zapPlugin.Open("/tmp/scorch.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -612,7 +615,7 @@ func TestSegmentDocsWithNonOverlappingFields(t *testing.T) {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	segment, err := Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open("/tmp/scorch.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -665,7 +668,7 @@ func TestMergedSegmentDocsWithNonOverlappingFields(t *testing.T) {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	segment1, err := Open("/tmp/scorch1.zap")
+	segment1, err := zapPlugin.Open("/tmp/scorch1.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -676,7 +679,7 @@ func TestMergedSegmentDocsWithNonOverlappingFields(t *testing.T) {
 		}
 	}()
 
-	segment2, err := Open("/tmp/scorch2.zap")
+	segment2, err := zapPlugin.Open("/tmp/scorch2.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -687,11 +690,11 @@ func TestMergedSegmentDocsWithNonOverlappingFields(t *testing.T) {
 		}
 	}()
 
-	segsToMerge := make([]*Segment, 2)
-	segsToMerge[0] = segment1.(*Segment)
-	segsToMerge[1] = segment2.(*Segment)
+	segsToMerge := make([]segment.Segment, 2)
+	segsToMerge[0] = segment1
+	segsToMerge[1] = segment2
 
-	_, nBytes, err := Merge(segsToMerge, []*roaring.Bitmap{nil, nil}, "/tmp/scorch3.zap", 1024, nil, nil)
+	_, nBytes, err := zapPlugin.Merge(segsToMerge, []*roaring.Bitmap{nil, nil}, "/tmp/scorch3.zap", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -700,7 +703,7 @@ func TestMergedSegmentDocsWithNonOverlappingFields(t *testing.T) {
 		t.Fatalf("expected a non zero total_compaction_written_bytes")
 	}
 
-	segmentM, err := Open("/tmp/scorch3.zap")
+	segmentM, err := zapPlugin.Open("/tmp/scorch3.zap")
 	if err != nil {
 		t.Fatalf("error opening merged segment: %v", err)
 	}

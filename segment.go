@@ -39,7 +39,7 @@ func init() {
 }
 
 // Open returns a zap impl of a segment
-func Open(path string) (segment.Segment, error) {
+func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err

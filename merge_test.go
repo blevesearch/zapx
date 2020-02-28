@@ -26,6 +26,7 @@ import (
 	"github.com/blevesearch/bleve/analysis"
 	"github.com/blevesearch/bleve/document"
 	"github.com/blevesearch/bleve/index"
+	seg "github.com/blevesearch/bleve/index/scorch/segment"
 )
 
 func TestMerge(t *testing.T) {
@@ -45,7 +46,7 @@ func TestMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	segment, err := Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open("/tmp/scorch.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -56,7 +57,7 @@ func TestMerge(t *testing.T) {
 		}
 	}()
 
-	segment2, err := Open("/tmp/scorch2.zap")
+	segment2, err := zapPlugin.Open("/tmp/scorch2.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -67,16 +68,16 @@ func TestMerge(t *testing.T) {
 		}
 	}()
 
-	segsToMerge := make([]*Segment, 2)
-	segsToMerge[0] = segment.(*Segment)
-	segsToMerge[1] = segment2.(*Segment)
+	segsToMerge := make([]seg.Segment, 2)
+	segsToMerge[0] = segment
+	segsToMerge[1] = segment2
 
-	_, _, err = Merge(segsToMerge, []*roaring.Bitmap{nil, nil}, "/tmp/scorch3.zap", 1024, nil, nil)
+	_, _, err = zapPlugin.Merge(segsToMerge, []*roaring.Bitmap{nil, nil}, "/tmp/scorch3.zap", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	segm, err := Open("/tmp/scorch3.zap")
+	segm, err := zapPlugin.Open("/tmp/scorch3.zap")
 	if err != nil {
 		t.Fatalf("error opening merged segment: %v", err)
 	}
@@ -125,7 +126,7 @@ func testMergeWithEmptySegments(t *testing.T, before bool, numEmptySegments int)
 	if err != nil {
 		t.Fatal(err)
 	}
-	segment, err := Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open("/tmp/scorch.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -136,27 +137,26 @@ func testMergeWithEmptySegments(t *testing.T, before bool, numEmptySegments int)
 		}
 	}()
 
-	var segsToMerge []*Segment
+	var segsToMerge []seg.Segment
 
 	if before {
-		segsToMerge = append(segsToMerge, segment.(*Segment))
+		segsToMerge = append(segsToMerge, segment)
 	}
 
 	for i := 0; i < numEmptySegments; i++ {
 		fname := fmt.Sprintf("scorch-empty-%d.zap", i)
 
 		_ = os.RemoveAll("/tmp/" + fname)
-
-		emptySegment, _, err := AnalysisResultsToSegmentBase([]*index.AnalysisResult{}, 1024)
+		emptySegment, _, err := zapPlugin.newWithChunkFactor([]*index.AnalysisResult{}, 1024)
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = PersistSegmentBase(emptySegment, "/tmp/"+fname)
+		err = PersistSegmentBase(emptySegment.(*SegmentBase), "/tmp/"+fname)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		emptyFileSegment, err := Open("/tmp/" + fname)
+		emptyFileSegment, err := zapPlugin.Open("/tmp/" + fname)
 		if err != nil {
 			t.Fatalf("error opening segment: %v", err)
 		}
@@ -167,23 +167,23 @@ func testMergeWithEmptySegments(t *testing.T, before bool, numEmptySegments int)
 			}
 		}(emptyFileSegment.(*Segment))
 
-		segsToMerge = append(segsToMerge, emptyFileSegment.(*Segment))
+		segsToMerge = append(segsToMerge, emptyFileSegment)
 	}
 
 	if !before {
-		segsToMerge = append(segsToMerge, segment.(*Segment))
+		segsToMerge = append(segsToMerge, segment)
 	}
 
 	_ = os.RemoveAll("/tmp/scorch3.zap")
 
 	drops := make([]*roaring.Bitmap, len(segsToMerge))
 
-	_, _, err = Merge(segsToMerge, drops, "/tmp/scorch3.zap", 1024, nil, nil)
+	_, _, err = zapPlugin.Merge(segsToMerge, drops, "/tmp/scorch3.zap", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	segm, err := Open("/tmp/scorch3.zap")
+	segm, err := zapPlugin.Open("/tmp/scorch3.zap")
 	if err != nil {
 		t.Fatalf("error opening merged segment: %v", err)
 	}
@@ -217,15 +217,15 @@ func testMergeWithSelf(t *testing.T, segCur *Segment, expectedCount uint64) {
 
 		_ = os.RemoveAll("/tmp/" + fname)
 
-		segsToMerge := make([]*Segment, 1)
+		segsToMerge := make([]seg.Segment, 1)
 		segsToMerge[0] = segCur
 
-		_, _, err := Merge(segsToMerge, []*roaring.Bitmap{nil, nil}, "/tmp/"+fname, 1024, nil, nil)
+		_, _, err := zapPlugin.Merge(segsToMerge, []*roaring.Bitmap{nil, nil}, "/tmp/"+fname, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		segm, err := Open("/tmp/" + fname)
+		segm, err := zapPlugin.Open("/tmp/" + fname)
 		if err != nil {
 			t.Fatalf("error opening merged segment: %v", err)
 		}
@@ -469,7 +469,7 @@ func testMergeAndDrop(t *testing.T, docsToDrop []*roaring.Bitmap) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	segment, err := Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open("/tmp/scorch.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -486,7 +486,7 @@ func testMergeAndDrop(t *testing.T, docsToDrop []*roaring.Bitmap) {
 		t.Fatal(err)
 	}
 
-	segment2, err := Open("/tmp/scorch2.zap")
+	segment2, err := zapPlugin.Open("/tmp/scorch2.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -497,9 +497,9 @@ func testMergeAndDrop(t *testing.T, docsToDrop []*roaring.Bitmap) {
 		}
 	}()
 
-	segsToMerge := make([]*Segment, 2)
-	segsToMerge[0] = segment.(*Segment)
-	segsToMerge[1] = segment2.(*Segment)
+	segsToMerge := make([]seg.Segment, 2)
+	segsToMerge[0] = segment
+	segsToMerge[1] = segment2
 
 	testMergeAndDropSegments(t, segsToMerge, docsToDrop, 2)
 }
@@ -559,7 +559,7 @@ func TestMergeWithUpdatesOnOneDoc(t *testing.T) {
 }
 
 func testMergeWithUpdates(t *testing.T, segmentDocIds [][]string, docsToDrop []*roaring.Bitmap, expectedNumDocs uint64) {
-	var segsToMerge []*Segment
+	var segsToMerge []seg.Segment
 
 	// convert segmentDocIds to segsToMerge
 	for i, docIds := range segmentDocIds {
@@ -572,7 +572,7 @@ func testMergeWithUpdates(t *testing.T, segmentDocIds [][]string, docsToDrop []*
 		if err != nil {
 			t.Fatal(err)
 		}
-		segment, err := Open("/tmp/" + fname)
+		segment, err := zapPlugin.Open("/tmp/" + fname)
 		if err != nil {
 			t.Fatalf("error opening segment: %v", err)
 		}
@@ -583,21 +583,21 @@ func testMergeWithUpdates(t *testing.T, segmentDocIds [][]string, docsToDrop []*
 			}
 		}(segment.(*Segment))
 
-		segsToMerge = append(segsToMerge, segment.(*Segment))
+		segsToMerge = append(segsToMerge, segment)
 	}
 
 	testMergeAndDropSegments(t, segsToMerge, docsToDrop, expectedNumDocs)
 }
 
-func testMergeAndDropSegments(t *testing.T, segsToMerge []*Segment, docsToDrop []*roaring.Bitmap, expectedNumDocs uint64) {
+func testMergeAndDropSegments(t *testing.T, segsToMerge []seg.Segment, docsToDrop []*roaring.Bitmap, expectedNumDocs uint64) {
 	_ = os.RemoveAll("/tmp/scorch-merged.zap")
 
-	_, _, err := Merge(segsToMerge, docsToDrop, "/tmp/scorch-merged.zap", 1024, nil, nil)
+	_, _, err := zapPlugin.Merge(segsToMerge, docsToDrop, "/tmp/scorch-merged.zap", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	segm, err := Open("/tmp/scorch-merged.zap")
+	segm, err := zapPlugin.Open("/tmp/scorch-merged.zap")
 	if err != nil {
 		t.Fatalf("error opening merged segment: %v", err)
 	}
@@ -780,7 +780,8 @@ func buildTestSegmentMultiHelper(docIds []string) (*SegmentBase, uint64, error) 
 		}
 	}
 
-	return AnalysisResultsToSegmentBase(results, 1024)
+	seg, size, err := zapPlugin.newWithChunkFactor(results, 1024)
+	return seg.(*SegmentBase), size, err
 }
 
 func TestMergeBytesWritten(t *testing.T) {
@@ -800,7 +801,7 @@ func TestMergeBytesWritten(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	segment, err := Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open("/tmp/scorch.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -811,7 +812,7 @@ func TestMergeBytesWritten(t *testing.T) {
 		}
 	}()
 
-	segment2, err := Open("/tmp/scorch2.zap")
+	segment2, err := zapPlugin.Open("/tmp/scorch2.zap")
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -822,11 +823,11 @@ func TestMergeBytesWritten(t *testing.T) {
 		}
 	}()
 
-	segsToMerge := make([]*Segment, 2)
-	segsToMerge[0] = segment.(*Segment)
-	segsToMerge[1] = segment2.(*Segment)
+	segsToMerge := make([]seg.Segment, 2)
+	segsToMerge[0] = segment
+	segsToMerge[1] = segment2
 
-	_, nBytes, err := Merge(segsToMerge, []*roaring.Bitmap{nil, nil}, "/tmp/scorch3.zap", 1024, nil, nil)
+	_, nBytes, err := zapPlugin.Merge(segsToMerge, []*roaring.Bitmap{nil, nil}, "/tmp/scorch3.zap", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -835,7 +836,7 @@ func TestMergeBytesWritten(t *testing.T) {
 		t.Fatalf("expected a non zero total_compaction_written_bytes")
 	}
 
-	segm, err := Open("/tmp/scorch3.zap")
+	segm, err := zapPlugin.Open("/tmp/scorch3.zap")
 	if err != nil {
 		t.Fatalf("error opening merged segment: %v", err)
 	}

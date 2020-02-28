@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/blevesearch/zap"
+	"github.com/blevesearch/zap/v11"
 	"github.com/spf13/cobra"
 )
 
@@ -35,7 +35,8 @@ var RootCmd = &cobra.Command{
 			return fmt.Errorf("must specify path to zap file")
 		}
 
-		segInf, err := zap.Open(args[0])
+		zp := &zap.ZapPlugin{}
+		segInf, err := zp.Open(args[0])
 		if err != nil {
 			return fmt.Errorf("error opening zap file: %v", err)
 		}

@@ -28,6 +28,10 @@ const Type string = "zap"
 
 const fieldNotUninverted = math.MaxUint64
 
+func (sb *SegmentBase) Persist(path string) error {
+	return PersistSegmentBase(sb, path)
+}
+
 // PersistSegmentBase persists SegmentBase in the zap file format.
 func PersistSegmentBase(sb *SegmentBase, path string) error {
 	flag := os.O_RDWR | os.O_CREATE

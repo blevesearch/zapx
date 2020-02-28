@@ -23,7 +23,7 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/blevesearch/zap/v11"
+	"github.com/blevesearch/zap/v12"
 	"github.com/golang/snappy"
 	"github.com/spf13/cobra"
 )
@@ -179,7 +179,7 @@ var docvalueCmd = &cobra.Command{
 		}
 
 		// find the chunkNumber where the docValues are stored
-		docInChunk := uint64(localDocNum) / uint64(segment.ChunkFactor())
+		docInChunk := uint64(localDocNum) / uint64(1024)
 
 		if fieldChunkCount < docInChunk {
 			return fmt.Errorf("No chunk exists for chunk number: %d for "+

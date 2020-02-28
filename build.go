@@ -22,7 +22,7 @@ import (
 	"github.com/couchbase/vellum"
 )
 
-const Version uint32 = 11
+const Version uint32 = 12
 
 const Type string = "zap"
 
@@ -55,7 +55,7 @@ func PersistSegmentBase(sb *SegmentBase, path string) error {
 	}
 
 	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.fieldsIndexOffset, sb.docValueOffset,
-		sb.chunkFactor, sb.memCRC, br)
+		sb.chunkMode, sb.memCRC, br)
 	if err != nil {
 		cleanup()
 		return err
@@ -127,14 +127,14 @@ func persistStoredFieldValues(fieldID int,
 	return curr, data, nil
 }
 
-func InitSegmentBase(mem []byte, memCRC uint32, chunkFactor uint32,
+func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32,
 	fieldsMap map[string]uint16, fieldsInv []string, numDocs uint64,
 	storedIndexOffset uint64, fieldsIndexOffset uint64, docValueOffset uint64,
 	dictLocs []uint64) (*SegmentBase, error) {
 	sb := &SegmentBase{
 		mem:               mem,
 		memCRC:            memCRC,
-		chunkFactor:       chunkFactor,
+		chunkMode:         chunkMode,
 		fieldsMap:         fieldsMap,
 		fieldsInv:         fieldsInv,
 		numDocs:           numDocs,

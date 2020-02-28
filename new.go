@@ -42,17 +42,15 @@ var ValidateDocFields = func(field document.Field) error {
 	return nil
 }
 
-var defaultChunkFactor uint32 = 1024
-
 // AnalysisResultsToSegmentBase produces an in-memory zap-encoded
 // SegmentBase from analysis results
 func (z *ZapPlugin) New(results []*index.AnalysisResult) (
 	segment.Segment, uint64, error) {
-	return z.newWithChunkFactor(results, defaultChunkFactor)
+	return z.newWithChunkMode(results, DefaultChunkMode)
 }
 
-func (*ZapPlugin) newWithChunkFactor(results []*index.AnalysisResult,
-	chunkFactor uint32) (segment.Segment, uint64, error) {
+func (*ZapPlugin) newWithChunkMode(results []*index.AnalysisResult,
+	chunkMode uint32) (segment.Segment, uint64, error) {
 	s := interimPool.Get().(*interim)
 
 	var br bytes.Buffer
@@ -69,7 +67,7 @@ func (*ZapPlugin) newWithChunkFactor(results []*index.AnalysisResult,
 	}
 
 	s.results = results
-	s.chunkFactor = chunkFactor
+	s.chunkMode = chunkMode
 	s.w = NewCountHashWriter(&br)
 
 	storedIndexOffset, fieldsIndexOffset, fdvIndexOffset, dictOffsets,
@@ -78,7 +76,7 @@ func (*ZapPlugin) newWithChunkFactor(results []*index.AnalysisResult,
 		return nil, uint64(0), err
 	}
 
-	sb, err := InitSegmentBase(br.Bytes(), s.w.Sum32(), chunkFactor,
+	sb, err := InitSegmentBase(br.Bytes(), s.w.Sum32(), chunkMode,
 		s.FieldsMap, s.FieldsInv, uint64(len(results)),
 		storedIndexOffset, fieldsIndexOffset, fdvIndexOffset, dictOffsets)
 
@@ -98,7 +96,7 @@ var interimPool = sync.Pool{New: func() interface{} { return &interim{} }}
 type interim struct {
 	results []*index.AnalysisResult
 
-	chunkFactor uint32
+	chunkMode uint32
 
 	w *CountHashWriter
 
@@ -150,7 +148,7 @@ type interim struct {
 
 func (s *interim) reset() (err error) {
 	s.results = nil
-	s.chunkFactor = 0
+	s.chunkMode = 0
 	s.w = nil
 	s.FieldsMap = nil
 	s.FieldsInv = nil
@@ -618,9 +616,11 @@ func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err
 
 	buf := s.grabBuf(binary.MaxVarintLen64)
 
-	tfEncoder := newChunkedIntCoder(uint64(s.chunkFactor), uint64(len(s.results)-1))
-	locEncoder := newChunkedIntCoder(uint64(s.chunkFactor), uint64(len(s.results)-1))
-	fdvEncoder := newChunkedContentCoder(uint64(s.chunkFactor), uint64(len(s.results)-1), s.w, false)
+	// these int coders are initialized with chunk size 1024
+	// however this will be reset to the correct chunk size
+	// while processing each individual field-term section
+	tfEncoder := newChunkedIntCoder(1024, uint64(len(s.results)-1))
+	locEncoder := newChunkedIntCoder(1024, uint64(len(s.results)-1))
 
 	var docTermMap [][]byte
 
@@ -653,6 +653,13 @@ func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err
 
 			locs := s.Locs[pid]
 			locOffset := 0
+
+			chunkSize, err := getChunkSize(s.chunkMode, postingsBS.GetCardinality(), uint64(len(s.results)))
+			if err != nil {
+				return 0, nil, err
+			}
+			tfEncoder.SetChunkSize(chunkSize, uint64(len(s.results)-1))
+			locEncoder.SetChunkSize(chunkSize, uint64(len(s.results)-1))
 
 			postingsItr := postingsBS.Iterator()
 			for postingsItr.HasNext() {
@@ -756,6 +763,12 @@ func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err
 		}
 
 		// write the field doc values
+		// NOTE: doc values continue to use legacy chunk mode
+		chunkSize, err := getChunkSize(LegacyChunkMode, 0, 0)
+		if err != nil {
+			return 0, nil, err
+		}
+		fdvEncoder := newChunkedContentCoder(chunkSize, uint64(len(s.results)-1), s.w, false)
 		if s.IncludeDocValues[fieldID] {
 			for docNum, docTerms := range docTermMap {
 				if len(docTerms) > 0 {

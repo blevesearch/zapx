@@ -15,7 +15,7 @@
 package main
 
 import (
-	"github.com/blevesearch/zap/v11/cmd/zap/cmd"
+	"github.com/blevesearch/zap/v12/cmd/zap/cmd"
 )
 
 func main() {

@@ -99,7 +99,7 @@ func buildTestSegmentForDict() (*SegmentBase, uint64, error) {
 		},
 	}
 
-	seg, size, err := zapPlugin.newWithChunkFactor(results, 1024)
+	seg, size, err := zapPlugin.newWithChunkMode(results, 1024)
 	return seg.(*SegmentBase), size, err
 }
 

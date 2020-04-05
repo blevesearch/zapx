@@ -4,7 +4,7 @@ go 1.12
 
 require (
 	github.com/RoaringBitmap/roaring v0.4.21
-	github.com/blevesearch/bleve v1.0.2
+	github.com/blevesearch/bleve v1.0.3
 	github.com/blevesearch/go-porterstemmer v1.0.2 // indirect
 	github.com/blevesearch/segment v0.0.0-20160105220820-db70c57796cc // indirect
 	github.com/couchbase/vellum v0.0.0-20190829182332-ef2e028c01fd

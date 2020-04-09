@@ -73,7 +73,7 @@ func TestChunkedContentCoder(t *testing.T) {
 		}
 
 		if !bytes.Equal(test.expected, actual.Bytes()) {
-			t.Errorf("got:%s, expected:%s", string(actual.Bytes()), string(test.expected))
+			t.Errorf("got:%s, expected:%s", actual.String(), string(test.expected))
 		}
 	}
 }
@@ -120,6 +120,6 @@ func TestChunkedContentCoders(t *testing.T) {
 	}
 
 	if !bytes.Equal(actual1.Bytes(), actual2.Bytes()) {
-		t.Errorf("%s != %s", string(actual1.Bytes()), string(actual2.Bytes()))
+		t.Errorf("%s != %s", actual1.String(), actual2.String())
 	}
 }

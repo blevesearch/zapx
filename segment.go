@@ -116,7 +116,7 @@ func (sb *SegmentBase) updateSize() {
 		cap(sb.mem)
 
 	// fieldsMap
-	for k, _ := range sb.fieldsMap {
+	for k := range sb.fieldsMap {
 		sizeInBytes += (len(k) + size.SizeOfString) + size.SizeOfUint16
 	}
 

@@ -36,7 +36,7 @@ func buildTestSegmentForDict() (*SegmentBase, uint64, error) {
 
 	// forge analyzed docs
 	results := []*index.AnalysisResult{
-		&index.AnalysisResult{
+		{
 			Document: doc,
 			Analyzed: []analysis.TokenFrequencies{
 				analysis.TokenFrequency(analysis.TokenStream{

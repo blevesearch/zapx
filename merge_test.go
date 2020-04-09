@@ -507,8 +507,8 @@ func testMergeAndDrop(t *testing.T, docsToDrop []*roaring.Bitmap) {
 
 func TestMergeWithUpdates(t *testing.T) {
 	segmentDocIds := [][]string{
-		[]string{"a", "b"},
-		[]string{"b", "c"}, // doc "b" updated
+		{"a", "b"},
+		{"b", "c"}, // doc "b" updated
 	}
 
 	docsToDrop := make([]*roaring.Bitmap, 2)
@@ -521,10 +521,10 @@ func TestMergeWithUpdates(t *testing.T) {
 
 func TestMergeWithUpdatesOnManySegments(t *testing.T) {
 	segmentDocIds := [][]string{
-		[]string{"a", "b"},
-		[]string{"b", "c"}, // doc "b" updated
-		[]string{"c", "d"}, // doc "c" updated
-		[]string{"d", "e"}, // doc "d" updated
+		{"a", "b"},
+		{"b", "c"}, // doc "b" updated
+		{"c", "d"}, // doc "c" updated
+		{"d", "e"}, // doc "d" updated
 	}
 
 	docsToDrop := make([]*roaring.Bitmap, 4)
@@ -541,10 +541,10 @@ func TestMergeWithUpdatesOnManySegments(t *testing.T) {
 
 func TestMergeWithUpdatesOnOneDoc(t *testing.T) {
 	segmentDocIds := [][]string{
-		[]string{"a", "b"},
-		[]string{"a", "c"}, // doc "a" updated
-		[]string{"a", "d"}, // doc "a" updated
-		[]string{"a", "e"}, // doc "a" updated
+		{"a", "b"},
+		{"a", "c"}, // doc "a" updated
+		{"a", "d"}, // doc "a" updated
+		{"a", "e"}, // doc "a" updated
 	}
 
 	docsToDrop := make([]*roaring.Bitmap, 4)
@@ -654,7 +654,7 @@ func buildTestSegmentMultiHelper(docIds []string) (*SegmentBase, uint64, error) 
 
 	// forge analyzed docs
 	results := []*index.AnalysisResult{
-		&index.AnalysisResult{
+		{
 			Document: doc,
 			Analyzed: []analysis.TokenFrequencies{
 				analysis.TokenFrequency(analysis.TokenStream{
@@ -712,7 +712,7 @@ func buildTestSegmentMultiHelper(docIds []string) (*SegmentBase, uint64, error) 
 				1,
 			},
 		},
-		&index.AnalysisResult{
+		{
 			Document: doc2,
 			Analyzed: []analysis.TokenFrequencies{
 				analysis.TokenFrequency(analysis.TokenStream{

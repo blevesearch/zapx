@@ -516,58 +516,6 @@ func (i *PostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.Posting, err
 	return rv, nil
 }
 
-var freqHasLocs1Hit = encodeFreqHasLocs(1, false)
-
-// nextBytes returns the docNum and the encoded freq & loc bytes for
-// the next posting
-func (i *PostingsIterator) nextBytes() (
-	docNumOut uint64, freq uint64, normBits uint64,
-	bytesFreqNorm []byte, bytesLoc []byte, err error) {
-	docNum, exists, err := i.nextDocNumAtOrAfter(0)
-	if err != nil || !exists {
-		return 0, 0, 0, nil, nil, err
-	}
-
-	if i.normBits1Hit != 0 {
-		if i.buf == nil {
-			i.buf = make([]byte, binary.MaxVarintLen64*2)
-		}
-		n := binary.PutUvarint(i.buf, freqHasLocs1Hit)
-		n += binary.PutUvarint(i.buf[n:], i.normBits1Hit)
-		return docNum, uint64(1), i.normBits1Hit, i.buf[:n], nil, nil
-	}
-
-	startFreqNorm := i.freqNormReader.remainingLen()
-
-	var hasLocs bool
-
-	freq, normBits, hasLocs, err = i.readFreqNormHasLocs()
-	if err != nil {
-		return 0, 0, 0, nil, nil, err
-	}
-
-	endFreqNorm := i.freqNormReader.remainingLen()
-	bytesFreqNorm = i.freqNormReader.readBytes(startFreqNorm, endFreqNorm)
-
-	if hasLocs {
-		startLoc := i.locReader.remainingLen()
-
-		numLocsBytes, err := i.locReader.readUvarint()
-		if err != nil {
-			return 0, 0, 0, nil, nil,
-				fmt.Errorf("error reading location nextBytes numLocs: %v", err)
-		}
-
-		// skip over all the location bytes
-		i.locReader.SkipBytes(int(numLocsBytes))
-
-		endLoc := i.locReader.remainingLen()
-		bytesLoc = i.locReader.readBytes(startLoc, endLoc)
-	}
-
-	return docNum, freq, normBits, bytesFreqNorm, bytesLoc, nil
-}
-
 // nextDocNum returns the next docNum on the postings list, and also
 // sets up the currChunk / loc related fields of the iterator.
 func (i *PostingsIterator) nextDocNumAtOrAfter(atOrAfter uint64) (uint64, bool, error) {

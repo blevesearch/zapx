@@ -33,7 +33,7 @@ func TestChunkIntCoder(t *testing.T) {
 			chunkSize: 1,
 			docNums:   []uint64{0},
 			vals: [][]uint64{
-				[]uint64{3},
+				{3},
 			},
 			// 1 chunk, chunk-0 length 1, value 3
 			expected: []byte{0x1, 0x1, 0x3},
@@ -43,8 +43,8 @@ func TestChunkIntCoder(t *testing.T) {
 			chunkSize: 1,
 			docNums:   []uint64{0, 1},
 			vals: [][]uint64{
-				[]uint64{3},
-				[]uint64{7},
+				{3},
+				{7},
 			},
 			// 2 chunks, chunk-0 offset 1, chunk-1 offset 2, value 3, value 7
 			expected: []byte{0x2, 0x1, 0x2, 0x3, 0x7},

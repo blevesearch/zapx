@@ -41,12 +41,12 @@ func TestEnumerator(t *testing.T) {
 		{
 			desc: "two non-empty enumerators with no duplicate keys",
 			in: [][]enumTestEntry{
-				[]enumTestEntry{
+				{
 					{"a", 1},
 					{"c", 3},
 					{"e", 5},
 				},
-				[]enumTestEntry{
+				{
 					{"b", 2},
 					{"d", 4},
 					{"f", 6},
@@ -64,12 +64,12 @@ func TestEnumerator(t *testing.T) {
 		{
 			desc: "two non-empty enumerators with duplicate keys",
 			in: [][]enumTestEntry{
-				[]enumTestEntry{
+				{
 					{"a", 1},
 					{"c", 3},
 					{"e", 5},
 				},
-				[]enumTestEntry{
+				{
 					{"a", 2},
 					{"c", 4},
 					{"e", 6},
@@ -87,8 +87,8 @@ func TestEnumerator(t *testing.T) {
 		{
 			desc: "first iterator is empty",
 			in: [][]enumTestEntry{
-				[]enumTestEntry{},
-				[]enumTestEntry{
+				{},
+				{
 					{"a", 2},
 					{"c", 4},
 					{"e", 6},
@@ -103,12 +103,12 @@ func TestEnumerator(t *testing.T) {
 		{
 			desc: "last iterator is empty",
 			in: [][]enumTestEntry{
-				[]enumTestEntry{
+				{
 					{"a", 1},
 					{"c", 3},
 					{"e", 5},
 				},
-				[]enumTestEntry{},
+				{},
 			},
 			want: []enumTestWant{
 				{"a", 0, 1},
@@ -119,12 +119,12 @@ func TestEnumerator(t *testing.T) {
 		{
 			desc: "two different length enumerators with duplicate keys",
 			in: [][]enumTestEntry{
-				[]enumTestEntry{
+				{
 					{"a", 1},
 					{"c", 3},
 					{"e", 5},
 				},
-				[]enumTestEntry{
+				{
 					{"a", 2},
 					{"b", 4},
 					{"d", 1000},

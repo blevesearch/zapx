@@ -76,10 +76,6 @@ func (di *docValueReader) cloneInto(rv *docValueReader) *docValueReader {
 	return rv
 }
 
-func (di *docValueReader) fieldName() string {
-	return di.field
-}
-
 func (di *docValueReader) curChunkNumber() uint64 {
 	return di.curChunkNum
 }

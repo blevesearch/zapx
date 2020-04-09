@@ -49,11 +49,11 @@ func TestOpen(t *testing.T) {
 	}()
 
 	expectFields := map[string]struct{}{
-		"_id":  struct{}{},
-		"_all": struct{}{},
-		"name": struct{}{},
-		"desc": struct{}{},
-		"tag":  struct{}{},
+		"_id":  {},
+		"_all": {},
+		"name": {},
+		"desc": {},
+		"tag":  {},
 	}
 	fields := segment.Fields()
 	if len(fields) != len(expectFields) {
@@ -631,13 +631,13 @@ func TestSegmentDocsWithNonOverlappingFields(t *testing.T) {
 	}
 
 	expectFields := map[string]struct{}{
-		"_id":           struct{}{},
-		"_all":          struct{}{},
-		"name":          struct{}{},
-		"dept":          struct{}{},
-		"manages.id":    struct{}{},
-		"manages.count": struct{}{},
-		"reportsTo.id":  struct{}{},
+		"_id":           {},
+		"_all":          {},
+		"name":          {},
+		"dept":          {},
+		"manages.id":    {},
+		"manages.count": {},
+		"reportsTo.id":  {},
 	}
 
 	fields := segment.Fields()
@@ -719,13 +719,13 @@ func TestMergedSegmentDocsWithNonOverlappingFields(t *testing.T) {
 	}
 
 	expectFields := map[string]struct{}{
-		"_id":           struct{}{},
-		"_all":          struct{}{},
-		"name":          struct{}{},
-		"dept":          struct{}{},
-		"manages.id":    struct{}{},
-		"manages.count": struct{}{},
-		"reportsTo.id":  struct{}{},
+		"_id":           {},
+		"_all":          {},
+		"name":          {},
+		"dept":          {},
+		"manages.id":    {},
+		"manages.count": {},
+		"reportsTo.id":  {},
 	}
 
 	fields := segmentM.Fields()

@@ -53,7 +53,7 @@ func buildTestSegment() (*SegmentBase, uint64, error) {
 
 	// forge analyzed docs
 	results := []*index.AnalysisResult{
-		&index.AnalysisResult{
+		{
 			Document: doc,
 			Analyzed: []analysis.TokenFrequencies{
 				analysis.TokenFrequency(analysis.TokenStream{
@@ -178,7 +178,7 @@ func buildTestAnalysisResultsMulti() []*index.AnalysisResult {
 
 	// forge analyzed docs
 	results := []*index.AnalysisResult{
-		&index.AnalysisResult{
+		{
 			Document: doc,
 			Analyzed: []analysis.TokenFrequencies{
 				analysis.TokenFrequency(analysis.TokenStream{
@@ -236,7 +236,7 @@ func buildTestAnalysisResultsMulti() []*index.AnalysisResult {
 				1,
 			},
 		},
-		&index.AnalysisResult{
+		{
 			Document: doc2,
 			Analyzed: []analysis.TokenFrequencies{
 				analysis.TokenFrequency(analysis.TokenStream{
@@ -493,7 +493,7 @@ func buildTestSegmentWithDefaultFieldMapping(chunkFactor uint32) (
 
 	// forge analyzed docs
 	results := []*index.AnalysisResult{
-		&index.AnalysisResult{
+		{
 			Document: doc,
 			Analyzed: []analysis.TokenFrequencies{
 				analysis.TokenFrequency(analysis.TokenStream{

@@ -27,7 +27,7 @@ import (
 	"github.com/blevesearch/bleve/index/scorch/segment"
 	"github.com/blevesearch/bleve/size"
 	"github.com/couchbase/vellum"
-	mmap "github.com/edsrzf/mmap-go"
+	mmap "github.com/blevesearch/mmap-go"
 	"github.com/golang/snappy"
 )
 

@@ -22,7 +22,7 @@ import (
 	"github.com/couchbase/vellum"
 )
 
-const Version uint32 = 12
+const Version uint32 = 13
 
 const Type string = "zap"
 

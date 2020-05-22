@@ -20,10 +20,12 @@ import (
 	"math"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/blevesearch/zap/v12"
+	"github.com/blevesearch/zap/v13"
 	"github.com/couchbase/vellum"
 	"github.com/spf13/cobra"
 )
+
+const termNotEncoded = 0
 
 // exploreCmd represents the explore command
 var exploreCmd = &cobra.Command{
@@ -109,7 +111,7 @@ var exploreCmd = &cobra.Command{
 						running += offset
 					}
 
-					if locAddr != math.MaxUint64 {
+					if locAddr != termNotEncoded {
 						fmt.Printf("Loc details at: %d (%x)\n", locAddr, locAddr)
 						numLChunks, r4 := binary.Uvarint(data[locAddr : locAddr+binary.MaxVarintLen64])
 						n = uint64(r4)

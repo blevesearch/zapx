@@ -20,7 +20,7 @@ import (
 	"math"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/blevesearch/zap/v12"
+	"github.com/blevesearch/zap/v13"
 	"github.com/couchbase/vellum"
 	"github.com/spf13/cobra"
 )

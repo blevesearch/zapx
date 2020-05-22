@@ -18,10 +18,13 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"math"
 )
 
-const termNotEncoded = math.MaxUint64
+// We can safely use 0 to represent termNotEncoded since 0
+// could never be a valid address for term location information.
+// (stored field index is always non-empty and earlier in the
+// file)
+const termNotEncoded = 0
 
 type chunkedIntCoder struct {
 	final     []byte

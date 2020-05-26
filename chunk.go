@@ -24,7 +24,7 @@ var LegacyChunkMode uint32 = 1024
 
 // DefaultChunkMode is the most recent improvement to chunking and should
 // be used by default.
-var DefaultChunkMode uint32 = 1025
+var DefaultChunkMode uint32 = 1026
 
 func getChunkSize(chunkMode uint32, cardinality uint64, maxDocs uint64) (uint64, error) {
 	switch {
@@ -49,6 +49,19 @@ func getChunkSize(chunkMode uint32, cardinality uint64, maxDocs uint64) (uint64,
 			return maxDocs, nil
 		}
 		return 1024, nil
+
+	case chunkMode == 1026:
+		// improve upon the ideas tested in chunkMode 1025
+		// the observation that the fewest number of dense chunks is the most
+		// desirable layout, given the built-in assumptions of chunking
+		// (that we want to put an upper-bound on the number of items you must
+		//  walk over without skipping, currently tuned to 1024)
+		//
+		// 1.  compute the number of chunks needed (max 1024/chunk)
+		// 2.  convert to chunkSize, dividing into maxDocs
+		numChunks := (cardinality / 1024) + 1
+		chunkSize := maxDocs / numChunks
+		return chunkSize, nil
 	}
 	return 0, fmt.Errorf("unknown chunk mode %d", chunkMode)
 }

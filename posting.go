@@ -223,6 +223,14 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 		rv.Actual = rv.all // Optimize to use same iterator for all & Actual.
 	}
 
+	var err error
+	rv.chunkSize, err = getChunkSize(rv.postings.sb.chunkMode,
+		rv.postings.postings.GetCardinality(),
+		rv.postings.sb.numDocs)
+	if err != nil {
+		rv.chunkSize = 0
+	}
+
 	return rv
 }
 
@@ -309,6 +317,8 @@ type PostingsIterator struct {
 
 	includeFreqNorm bool
 	includeLocs     bool
+
+	chunkSize uint64
 }
 
 var emptyPostingsIterator = &PostingsIterator{}
@@ -551,14 +561,13 @@ func (i *PostingsIterator) nextDocNumAtOrAfter(atOrAfter uint64) (uint64, bool, 
 	n := i.Actual.Next()
 	allN := i.all.Next()
 
-	chunkSize, err := getChunkSize(i.postings.sb.chunkMode, i.postings.postings.GetCardinality(), i.postings.sb.numDocs)
-	if err != nil {
-		return 0, false, err
+	if i.chunkSize == 0 {
+		return 0, false, fmt.Errorf("unknown chunk mode %d", i.postings.sb.chunkMode)
 	}
-	nChunk := n / uint32(chunkSize)
+	nChunk := n / uint32(i.chunkSize)
 
 	// when allN becomes >= to here, then allN is in the same chunk as nChunk.
-	allNReachesNChunk := nChunk * uint32(chunkSize)
+	allNReachesNChunk := nChunk * uint32(i.chunkSize)
 
 	// n is the next actual hit (excluding some postings), and
 	// allN is the next hit in the full postings, and
@@ -600,21 +609,20 @@ func (i *PostingsIterator) nextDocNumAtOrAfterClean(
 		return uint64(i.Actual.Next()), true, nil
 	}
 
-	chunkSize, err := getChunkSize(i.postings.sb.chunkMode, i.postings.postings.GetCardinality(), i.postings.sb.numDocs)
-	if err != nil {
-		return 0, false, err
-	}
-
 	// freq-norm's needed, so maintain freq-norm chunk reader
 	sameChunkNexts := 0 // # of times we called Next() in the same chunk
 	n := i.Actual.Next()
-	nChunk := n / uint32(chunkSize)
+
+	if i.chunkSize == 0 {
+		return 0, false, fmt.Errorf("unknown chunk mode %d", i.postings.sb.chunkMode)
+	}
+	nChunk := n / uint32(i.chunkSize)
 
 	for uint64(n) < atOrAfter && i.Actual.HasNext() {
 		n = i.Actual.Next()
 
 		nChunkPrev := nChunk
-		nChunk = n / uint32(chunkSize)
+		nChunk = n / uint32(i.chunkSize)
 
 		if nChunk != nChunkPrev {
 			sameChunkNexts = 0

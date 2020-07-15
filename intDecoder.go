@@ -30,11 +30,11 @@ type chunkedIntDecoder struct {
 	r               *segment.MemUvarintReader
 }
 
+// newChunkedIntDecoder expects an optional or reset chunkedIntDecoder for better reuse.
 func newChunkedIntDecoder(buf []byte, offset uint64, rv *chunkedIntDecoder) *chunkedIntDecoder {
 	if rv == nil {
 		rv = &chunkedIntDecoder{startOffset: offset, data: buf}
 	} else {
-		rv.reset()
 		rv.startOffset = offset
 		rv.data = buf
 	}

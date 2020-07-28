@@ -870,3 +870,25 @@ func TestUnder32Bits(t *testing.T) {
 		t.Errorf("under32Bits wrong")
 	}
 }
+
+func TestEncodeDecodeFieldLenAndNorm(t *testing.T) {
+	// verifying the floating point correctness for field
+	// length and norm encode and decode ops up to some
+	// reasonable field length of 2400.
+	fieldLensIn := make([]uint64, 2400)
+	for i := range fieldLensIn {
+		fieldLensIn[i] = uint64(i + 1)
+	}
+
+	norms := make([]float64, 2400)
+	for i := range fieldLensIn {
+		norms[i] = normFromFieldLen(fieldLensIn[i])
+	}
+
+	for i := range norms {
+		if fieldLenFromNorm(norms[i]) != fieldLensIn[i] {
+			t.Errorf("Field length for norm: %v, expected: %d, got %d",
+				norms[i], fieldLensIn[i], fieldLenFromNorm(norms[i]))
+		}
+	}
+}

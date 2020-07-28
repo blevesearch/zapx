@@ -487,7 +487,7 @@ func mergeTermFreqNormLocs(fieldsMap map[string]uint16, term []byte, postItr *Po
 		newRoaring.Add(uint32(hitNewDocNum))
 
 		nextFreq := next.Frequency()
-		nextNorm := uint64(math.Float32bits(float32(next.Norm())))
+		nextNorm := fieldLenFromNorm(next.Norm())
 
 		locs := next.Locations()
 

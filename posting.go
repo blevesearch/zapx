@@ -478,8 +478,7 @@ func (i *PostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.Posting, err
 	if err != nil {
 		return nil, err
 	}
-
-	rv.norm = normFromFieldLen(normBits)
+	rv.norm = float32(normBits)
 
 	if i.includeLocs && hasLocs {
 		// prepare locations into reused slices, where we assume
@@ -722,7 +721,7 @@ func PostingsIteratorFrom1Hit(docNum1Hit uint64,
 type Posting struct {
 	docNum uint64
 	freq   uint64
-	norm   float64
+	norm   float32
 	locs   []segment.Location
 }
 
@@ -748,7 +747,7 @@ func (p *Posting) Frequency() uint64 {
 
 // Norm returns the normalization factor for this posting
 func (p *Posting) Norm() float64 {
-	return p.norm
+	return float64(p.norm)
 }
 
 // Locations returns the location information for each occurrence
@@ -795,14 +794,4 @@ func (l *Location) Pos() uint64 {
 // ArrayPositions returns the array position vector associated with this occurrence
 func (l *Location) ArrayPositions() []uint64 {
 	return l.ap
-}
-
-func fieldLenFromNorm(norm float64) uint64 {
-	rv := float64(int(1000*1/norm)) / 1000
-	return uint64(math.Ceil(rv * rv))
-}
-
-func normFromFieldLen(fieldLen uint64) float64 {
-	rv := float32(1.0 / math.Sqrt(float64(fieldLen)))
-	return float64(rv)
 }

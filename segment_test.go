@@ -216,7 +216,7 @@ func TestOpen(t *testing.T) {
 		if nextPosting.Number() != 0 {
 			t.Errorf("expected doc number 0, got %d", nextPosting.Number())
 		}
-		expectedNorm := float32(1.0 / math.Sqrt(float64(5)))
+		expectedNorm := float32(5)
 		if nextPosting.Norm() != float64(expectedNorm) {
 			t.Errorf("expected norm %f, got %f", expectedNorm, nextPosting.Norm())
 		}

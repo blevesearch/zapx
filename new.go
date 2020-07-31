@@ -210,7 +210,7 @@ type interimStoredField struct {
 
 type interimFreqNorm struct {
 	freq    uint64
-	norm    uint64
+	norm    float32
 	numLocs int
 }
 
@@ -456,7 +456,7 @@ func (s *interim) processDocument(docNum uint64,
 	// now that it's been rolled up into fieldTFs, walk that
 	for fieldID, tfs := range fieldTFs {
 		dict := s.Dicts[fieldID]
-		norm := uint64(fieldLens[fieldID])
+		norm := math.Float32frombits(uint32(fieldLens[fieldID]))
 
 		for term, tf := range tfs {
 			pid := dict[term] - 1
@@ -669,7 +669,7 @@ func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err
 
 				err = tfEncoder.Add(docNum,
 					encodeFreqHasLocs(freqNorm.freq, freqNorm.numLocs > 0),
-					freqNorm.norm)
+					uint64(math.Float32bits(freqNorm.norm)))
 				if err != nil {
 					return 0, nil, err
 				}

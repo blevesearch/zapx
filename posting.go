@@ -277,8 +277,8 @@ func (rv *PostingsList) read(postingsOffset uint64, d *Dictionary) error {
 		return fmt.Errorf("error loading roaring bitmap: %v", err)
 	}
 
-	rv.chunkSize, err = getChunkSize(rv.sb.chunkMode,
-		rv.postings.GetCardinality(), rv.sb.numDocs)
+	rv.chunkSize, err = getChunkSize(d.sb.chunkMode,
+		rv.postings.GetCardinality(), d.sb.numDocs)
 	if err != nil {
 		return err
 	}

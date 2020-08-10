@@ -208,12 +208,12 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 
 	// initialize freq chunk reader
 	if rv.includeFreqNorm {
-		rv.freqNormReader = newChunkedIntDecoder(p.sb.mem, p.freqOffset)
+		rv.freqNormReader = newChunkedIntDecoder(p.sb.mem, p.freqOffset, rv.freqNormReader)
 	}
 
 	// initialize the loc chunk reader
 	if rv.includeLocs {
-		rv.locReader = newChunkedIntDecoder(p.sb.mem, p.locOffset)
+		rv.locReader = newChunkedIntDecoder(p.sb.mem, p.locOffset, rv.locReader)
 	}
 
 	rv.all = p.postings.Iterator()

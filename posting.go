@@ -478,7 +478,8 @@ func (i *PostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.Posting, err
 	if err != nil {
 		return nil, err
 	}
-	rv.norm = float32(normBits)
+
+	rv.norm = math.Float32frombits(uint32(normBits))
 
 	if i.includeLocs && hasLocs {
 		// prepare locations into reused slices, where we assume
@@ -747,12 +748,17 @@ func (p *Posting) Frequency() uint64 {
 
 // Norm returns the normalization factor for this posting
 func (p *Posting) Norm() float64 {
-	return float64(p.norm)
+	return float64(float32(1.0 / math.Sqrt(float64(math.Float32bits(p.norm)))))
 }
 
 // Locations returns the location information for each occurrence
 func (p *Posting) Locations() []segment.Location {
 	return p.locs
+}
+
+// NormUint64 returns the norm value as uint64
+func (p *Posting) NormUint64() uint64 {
+	return uint64(math.Float32bits(p.norm))
 }
 
 // Location represents the location of a single occurrence

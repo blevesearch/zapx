@@ -487,7 +487,12 @@ func mergeTermFreqNormLocs(fieldsMap map[string]uint16, term []byte, postItr *Po
 		newRoaring.Add(uint32(hitNewDocNum))
 
 		nextFreq := next.Frequency()
-		nextNorm := uint64(next.Norm())
+		var nextNorm uint64
+		if pi, ok := next.(*Posting); ok {
+			nextNorm = pi.NormUint64()
+		} else {
+			return 0, 0, 0, nil, fmt.Errorf("unexpected posting type %T", next)
+		}
 
 		locs := next.Locations()
 

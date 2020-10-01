@@ -456,7 +456,7 @@ func (s *interim) processDocument(docNum uint64,
 	// now that it's been rolled up into fieldTFs, walk that
 	for fieldID, tfs := range fieldTFs {
 		dict := s.Dicts[fieldID]
-		norm := float32(1.0 / math.Sqrt(float64(fieldLens[fieldID])))
+		norm := math.Float32frombits(uint32(fieldLens[fieldID]))
 
 		for term, tf := range tfs {
 			pid := dict[term] - 1

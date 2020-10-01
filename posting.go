@@ -92,7 +92,7 @@ func under32Bits(x uint64) bool {
 
 const DocNum1HitFinished = math.MaxUint64
 
-var NormBits1Hit = uint64(math.Float32bits(float32(1)))
+var NormBits1Hit = uint64(1)
 
 // PostingsList is an in-memory representation of a postings list
 type PostingsList struct {
@@ -746,12 +746,17 @@ func (p *Posting) Frequency() uint64 {
 
 // Norm returns the normalization factor for this posting
 func (p *Posting) Norm() float64 {
-	return float64(p.norm)
+	return float64(float32(1.0 / math.Sqrt(float64(math.Float32bits(p.norm)))))
 }
 
 // Locations returns the location information for each occurrence
 func (p *Posting) Locations() []segment.Location {
 	return p.locs
+}
+
+// NormUint64 returns the norm value as uint64
+func (p *Posting) NormUint64() uint64 {
+	return uint64(math.Float32bits(p.norm))
 }
 
 // Location represents the location of a single occurrence

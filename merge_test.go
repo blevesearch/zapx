@@ -23,10 +23,8 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/blevesearch/bleve/analysis"
-	"github.com/blevesearch/bleve/document"
-	"github.com/blevesearch/bleve/index"
-	seg "github.com/blevesearch/bleve/index/scorch/segment"
+	index "github.com/blevesearch/bleve_index_api"
+	seg "github.com/blevesearch/scorch_segment_api"
 )
 
 func TestMerge(t *testing.T) {
@@ -623,161 +621,30 @@ func buildTestSegmentMulti2() (*SegmentBase, uint64, error) {
 }
 
 func buildTestSegmentMultiHelper(docIds []string) (*SegmentBase, uint64, error) {
-	doc := &document.Document{
-		ID: "c",
-		Fields: []document.Field{
-			document.NewTextFieldCustom("_id", nil, []byte(docIds[0]), document.IndexField|document.StoreField, nil),
-			document.NewTextFieldCustom("name", nil, []byte("mat"), document.IndexField|document.StoreField|document.IncludeTermVectors, nil),
-			document.NewTextFieldCustom("desc", nil, []byte("some thing"), document.IndexField|document.StoreField|document.IncludeTermVectors, nil),
-			document.NewTextFieldCustom("tag", []uint64{0}, []byte("cold"), document.IndexField|document.StoreField|document.IncludeTermVectors, nil),
-			document.NewTextFieldCustom("tag", []uint64{1}, []byte("dark"), document.IndexField|document.StoreField|document.IncludeTermVectors, nil),
-		},
-		CompositeFields: []*document.CompositeField{
-			document.NewCompositeField("_all", true, nil, []string{"_id"}),
-		},
-	}
+	doc := newStubDocument("c", []*stubField{
+		newStubFieldSplitString("_id", nil, "c", true, false, false),
+		newStubFieldSplitString("name", nil, "mat", true, false, true),
+		newStubFieldSplitString("desc", nil, "some thing", true, false, true),
+		newStubFieldSplitString("tag", []uint64{0}, "cold", true, false, true),
+		newStubFieldSplitString("tag", []uint64{1}, "dark", true, false, true),
+	}, "_all")
 
-	doc2 := &document.Document{
-		ID: "d",
-		Fields: []document.Field{
-			document.NewTextFieldCustom("_id", nil, []byte(docIds[1]), document.IndexField|document.StoreField, nil),
-			document.NewTextFieldCustom("name", nil, []byte("joa"), document.IndexField|document.StoreField|document.IncludeTermVectors, nil),
-			document.NewTextFieldCustom("desc", nil, []byte("some thing"), document.IndexField|document.StoreField|document.IncludeTermVectors, nil),
-			document.NewTextFieldCustom("tag", []uint64{0}, []byte("cold"), document.IndexField|document.StoreField|document.IncludeTermVectors, nil),
-			document.NewTextFieldCustom("tag", []uint64{1}, []byte("dark"), document.IndexField|document.StoreField|document.IncludeTermVectors, nil),
-		},
-		CompositeFields: []*document.CompositeField{
-			document.NewCompositeField("_all", true, nil, []string{"_id"}),
-		},
-	}
+	doc2 := newStubDocument("d", []*stubField{
+		newStubFieldSplitString("_id", nil, "d", true, false, false),
+		newStubFieldSplitString("name", nil, "joa", true, false, true),
+		newStubFieldSplitString("desc", nil, "some thing", true, false, true),
+		newStubFieldSplitString("tag", []uint64{0}, "cold", true, false, true),
+		newStubFieldSplitString("tag", []uint64{1}, "dark", true, false, true),
+	}, "_all")
 
 	// forge analyzed docs
 	results := []*index.AnalysisResult{
 		{
 			Document: doc,
-			Analyzed: []analysis.TokenFrequencies{
-				analysis.TokenFrequency(analysis.TokenStream{
-					&analysis.Token{
-						Start:    0,
-						End:      1,
-						Position: 1,
-						Term:     []byte(docIds[0]),
-					},
-				}, nil, false),
-				analysis.TokenFrequency(analysis.TokenStream{
-					&analysis.Token{
-						Start:    0,
-						End:      3,
-						Position: 1,
-						Term:     []byte("mat"),
-					},
-				}, nil, true),
-				analysis.TokenFrequency(analysis.TokenStream{
-					&analysis.Token{
-						Start:    0,
-						End:      4,
-						Position: 1,
-						Term:     []byte("some"),
-					},
-					&analysis.Token{
-						Start:    5,
-						End:      10,
-						Position: 2,
-						Term:     []byte("thing"),
-					},
-				}, nil, true),
-				analysis.TokenFrequency(analysis.TokenStream{
-					&analysis.Token{
-						Start:    0,
-						End:      4,
-						Position: 1,
-						Term:     []byte("cold"),
-					},
-				}, []uint64{0}, true),
-				analysis.TokenFrequency(analysis.TokenStream{
-					&analysis.Token{
-						Start:    0,
-						End:      4,
-						Position: 1,
-						Term:     []byte("dark"),
-					},
-				}, []uint64{1}, true),
-			},
-			Length: []int{
-				1,
-				1,
-				2,
-				1,
-				1,
-			},
 		},
 		{
 			Document: doc2,
-			Analyzed: []analysis.TokenFrequencies{
-				analysis.TokenFrequency(analysis.TokenStream{
-					&analysis.Token{
-						Start:    0,
-						End:      1,
-						Position: 1,
-						Term:     []byte(docIds[1]),
-					},
-				}, nil, false),
-				analysis.TokenFrequency(analysis.TokenStream{
-					&analysis.Token{
-						Start:    0,
-						End:      3,
-						Position: 1,
-						Term:     []byte("joa"),
-					},
-				}, nil, true),
-				analysis.TokenFrequency(analysis.TokenStream{
-					&analysis.Token{
-						Start:    0,
-						End:      4,
-						Position: 1,
-						Term:     []byte("some"),
-					},
-					&analysis.Token{
-						Start:    5,
-						End:      10,
-						Position: 2,
-						Term:     []byte("thing"),
-					},
-				}, nil, true),
-				analysis.TokenFrequency(analysis.TokenStream{
-					&analysis.Token{
-						Start:    0,
-						End:      4,
-						Position: 1,
-						Term:     []byte("cold"),
-					},
-				}, []uint64{0}, true),
-				analysis.TokenFrequency(analysis.TokenStream{
-					&analysis.Token{
-						Start:    0,
-						End:      4,
-						Position: 1,
-						Term:     []byte("dark"),
-					},
-				}, []uint64{1}, true),
-			},
-			Length: []int{
-				1,
-				1,
-				2,
-				1,
-				1,
-			},
 		},
-	}
-
-	// fix up composite fields
-	for _, ar := range results {
-		for i, f := range ar.Document.Fields {
-			for _, cf := range ar.Document.CompositeFields {
-				cf.Compose(f.Name(), ar.Length[i], ar.Analyzed[i])
-			}
-		}
 	}
 
 	seg, size, err := zapPlugin.newWithChunkFactor(results, 1024)

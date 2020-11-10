@@ -19,83 +19,20 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/blevesearch/bleve/analysis"
-	"github.com/blevesearch/bleve/document"
-	"github.com/blevesearch/bleve/index"
+	index "github.com/blevesearch/bleve_index_api"
 	"github.com/couchbase/vellum/levenshtein"
 )
 
 func buildTestSegmentForDict() (*SegmentBase, uint64, error) {
-	doc := &document.Document{
-		ID: "a",
-		Fields: []document.Field{
-			document.NewTextFieldCustom("_id", nil, []byte("a"), document.IndexField|document.StoreField, nil),
-			document.NewTextFieldCustom("desc", nil, []byte("apple ball cat dog egg fish bat"), document.IndexField|document.StoreField|document.IncludeTermVectors, nil),
-		},
-	}
+	doc := newStubDocument("a", []*stubField{
+		newStubFieldSplitString("_id", nil, "a", true, false, false),
+		newStubFieldSplitString("desc", nil, "apple ball cat dog egg fish bat", true, false, true),
+	}, "_all")
 
 	// forge analyzed docs
 	results := []*index.AnalysisResult{
 		{
 			Document: doc,
-			Analyzed: []analysis.TokenFrequencies{
-				analysis.TokenFrequency(analysis.TokenStream{
-					&analysis.Token{
-						Start:    0,
-						End:      1,
-						Position: 1,
-						Term:     []byte("a"),
-					},
-				}, nil, false),
-				analysis.TokenFrequency(analysis.TokenStream{
-					&analysis.Token{
-						Start:    0,
-						End:      5,
-						Position: 1,
-						Term:     []byte("apple"),
-					},
-					&analysis.Token{
-						Start:    6,
-						End:      10,
-						Position: 2,
-						Term:     []byte("ball"),
-					},
-					&analysis.Token{
-						Start:    11,
-						End:      14,
-						Position: 3,
-						Term:     []byte("cat"),
-					},
-					&analysis.Token{
-						Start:    15,
-						End:      18,
-						Position: 4,
-						Term:     []byte("dog"),
-					},
-					&analysis.Token{
-						Start:    19,
-						End:      22,
-						Position: 5,
-						Term:     []byte("egg"),
-					},
-					&analysis.Token{
-						Start:    20,
-						End:      24,
-						Position: 6,
-						Term:     []byte("fish"),
-					},
-					&analysis.Token{
-						Start:    25,
-						End:      28,
-						Position: 7,
-						Term:     []byte("bat"),
-					},
-				}, nil, true),
-			},
-			Length: []int{
-				1,
-				7,
-			},
 		},
 	}
 

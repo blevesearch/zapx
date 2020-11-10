@@ -24,10 +24,9 @@ import (
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/blevesearch/bleve/index/scorch/segment"
-	"github.com/blevesearch/bleve/size"
-	"github.com/couchbase/vellum"
 	mmap "github.com/blevesearch/mmap-go"
+	segment "github.com/blevesearch/scorch_segment_api"
+	"github.com/couchbase/vellum"
 	"github.com/golang/snappy"
 )
 
@@ -117,18 +116,18 @@ func (sb *SegmentBase) updateSize() {
 
 	// fieldsMap
 	for k := range sb.fieldsMap {
-		sizeInBytes += (len(k) + size.SizeOfString) + size.SizeOfUint16
+		sizeInBytes += (len(k) + SizeOfString) + SizeOfUint16
 	}
 
 	// fieldsInv, dictLocs
 	for _, entry := range sb.fieldsInv {
-		sizeInBytes += len(entry) + size.SizeOfString
+		sizeInBytes += len(entry) + SizeOfString
 	}
-	sizeInBytes += len(sb.dictLocs) * size.SizeOfUint64
+	sizeInBytes += len(sb.dictLocs) * SizeOfUint64
 
 	// fieldDvReaders
 	for _, v := range sb.fieldDvReaders {
-		sizeInBytes += size.SizeOfUint16 + size.SizeOfPtr
+		sizeInBytes += SizeOfUint16 + SizeOfPtr
 		if v != nil {
 			sizeInBytes += v.size()
 		}
@@ -162,7 +161,7 @@ func (s *Segment) Size() int {
 	// 4 /* size of crc -> uint32 */
 	sizeOfUints := 16
 
-	sizeInBytes := (len(s.path) + size.SizeOfString) + sizeOfUints
+	sizeInBytes := (len(s.path) + SizeOfString) + sizeOfUints
 
 	// mutex, refs -> int64
 	sizeInBytes += 16

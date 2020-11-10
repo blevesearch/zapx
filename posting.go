@@ -21,8 +21,7 @@ import (
 	"reflect"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/blevesearch/bleve/index/scorch/segment"
-	"github.com/blevesearch/bleve/size"
+	segment "github.com/blevesearch/scorch_segment_api"
 )
 
 var reflectStaticSizePostingsList int
@@ -113,7 +112,7 @@ type PostingsList struct {
 var emptyPostingsList = &PostingsList{}
 
 func (p *PostingsList) Size() int {
-	sizeInBytes := reflectStaticSizePostingsList + size.SizeOfPtr
+	sizeInBytes := reflectStaticSizePostingsList + SizeOfPtr
 
 	if p.except != nil {
 		sizeInBytes += int(p.except.GetSizeInBytes())
@@ -357,11 +356,11 @@ type PostingsIterator struct {
 var emptyPostingsIterator = &PostingsIterator{}
 
 func (i *PostingsIterator) Size() int {
-	sizeInBytes := reflectStaticSizePostingsIterator + size.SizeOfPtr +
+	sizeInBytes := reflectStaticSizePostingsIterator + SizeOfPtr +
 		len(i.currChunkFreqNorm) +
 		len(i.currChunkLoc) +
-		len(i.freqChunkOffsets)*size.SizeOfUint64 +
-		len(i.locChunkOffsets)*size.SizeOfUint64 +
+		len(i.freqChunkOffsets)*SizeOfUint64 +
+		len(i.locChunkOffsets)*SizeOfUint64 +
 		i.next.Size()
 
 	for _, entry := range i.nextLocs {
@@ -880,7 +879,7 @@ type Location struct {
 func (l *Location) Size() int {
 	return reflectStaticSizeLocation +
 		len(l.field) +
-		len(l.ap)*size.SizeOfUint64
+		len(l.ap)*SizeOfUint64
 }
 
 // Field returns the name of the field (useful in composite fields to know

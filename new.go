@@ -22,10 +22,8 @@ import (
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/blevesearch/bleve/analysis"
-	"github.com/blevesearch/bleve/document"
-	"github.com/blevesearch/bleve/index"
-	"github.com/blevesearch/bleve/index/scorch/segment"
+	index "github.com/blevesearch/bleve_index_api"
+	segment "github.com/blevesearch/scorch_segment_api"
 	"github.com/couchbase/vellum"
 	"github.com/golang/snappy"
 )
@@ -38,7 +36,7 @@ var NewSegmentBufferAvgBytesPerDocFactor float64 = 1.0
 // on fields in a document being added to a new segment, by default it does
 // nothing.
 // This API is experimental and may be removed at any time.
-var ValidateDocFields = func(field document.Field) error {
+var ValidateDocFields = func(field index.Field) error {
 	return nil
 }
 
@@ -230,12 +228,12 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, error) {
 	s.getOrDefineField("_id") // _id field is fieldID 0
 
 	for _, result := range s.results {
-		for _, field := range result.Document.CompositeFields {
+		result.Document.VisitComposite(func(field index.CompositeField) {
 			s.getOrDefineField(field.Name())
-		}
-		for _, field := range result.Document.Fields {
+		})
+		result.Document.VisitFields(func(field index.Field) {
 			s.getOrDefineField(field.Name())
-		}
+		})
 	}
 
 	sort.Strings(s.FieldsInv[1:]) // keep _id as first field
@@ -311,10 +309,13 @@ func (s *interim) prepareDicts() {
 	var totTFs int
 	var totLocs int
 
-	visitField := func(fieldID uint16, tfs analysis.TokenFrequencies) {
+	visitField := func(field index.Field) {
+		fieldID := uint16(s.getOrDefineField(field.Name()))
+
 		dict := s.Dicts[fieldID]
 		dictKeys := s.DictKeys[fieldID]
 
+		tfs := field.AnalyzedTokenFrequencies()
 		for term, tf := range tfs {
 			pidPlus1, exists := dict[term]
 			if !exists {
@@ -343,18 +344,12 @@ func (s *interim) prepareDicts() {
 
 	for _, result := range s.results {
 		// walk each composite field
-		for _, field := range result.Document.CompositeFields {
-			fieldID := uint16(s.getOrDefineField(field.Name()))
-			_, tf := field.Analyze()
-			visitField(fieldID, tf)
-		}
+		result.Document.VisitComposite(func(field index.CompositeField) {
+			visitField(field)
+		})
 
 		// walk each field
-		for i, field := range result.Document.Fields {
-			fieldID := uint16(s.getOrDefineField(field.Name()))
-			tf := result.Analyzed[i]
-			visitField(fieldID, tf)
-		}
+		result.Document.VisitFields(visitField)
 	}
 
 	numPostingsLists := pidNext
@@ -412,7 +407,7 @@ func (s *interim) prepareDicts() {
 func (s *interim) processDocuments() {
 	numFields := len(s.FieldsInv)
 	reuseFieldLens := make([]int, numFields)
-	reuseFieldTFs := make([]analysis.TokenFrequencies, numFields)
+	reuseFieldTFs := make([]index.TokenFrequencies, numFields)
 
 	for docNum, result := range s.results {
 		for i := 0; i < numFields; i++ { // clear these for reuse
@@ -427,33 +422,27 @@ func (s *interim) processDocuments() {
 
 func (s *interim) processDocument(docNum uint64,
 	result *index.AnalysisResult,
-	fieldLens []int, fieldTFs []analysis.TokenFrequencies) {
-	visitField := func(fieldID uint16, fieldName string,
-		ln int, tf analysis.TokenFrequencies) {
-		fieldLens[fieldID] += ln
+	fieldLens []int, fieldTFs []index.TokenFrequencies) {
+
+	visitField := func(field index.Field) {
+		fieldID := uint16(s.getOrDefineField(field.Name()))
+		fieldLens[fieldID] += field.AnalyzedLength()
 
 		existingFreqs := fieldTFs[fieldID]
 		if existingFreqs != nil {
-			existingFreqs.MergeAll(fieldName, tf)
+			existingFreqs.MergeAll(field.Name(), field.AnalyzedTokenFrequencies())
 		} else {
-			fieldTFs[fieldID] = tf
+			fieldTFs[fieldID] = field.AnalyzedTokenFrequencies()
 		}
 	}
 
 	// walk each composite field
-	for _, field := range result.Document.CompositeFields {
-		fieldID := uint16(s.getOrDefineField(field.Name()))
-		ln, tf := field.Analyze()
-		visitField(fieldID, field.Name(), ln, tf)
-	}
+	result.Document.VisitComposite(func(field index.CompositeField) {
+		visitField(field)
+	})
 
 	// walk each field
-	for i, field := range result.Document.Fields {
-		fieldID := uint16(s.getOrDefineField(field.Name()))
-		ln := result.Length[i]
-		tf := result.Analyzed[i]
-		visitField(fieldID, field.Name(), ln, tf)
-	}
+	result.Document.VisitFields(visitField)
 
 	// now that it's been rolled up into fieldTFs, walk that
 	for fieldID, tfs := range fieldTFs {
@@ -521,27 +510,29 @@ func (s *interim) writeStoredFields() (
 			delete(docStoredFields, fieldID)
 		}
 
-		for _, field := range result.Document.Fields {
+		var validationErr error
+		result.Document.VisitFields(func(field index.Field) {
 			fieldID := uint16(s.getOrDefineField(field.Name()))
 
-			opts := field.Options()
-
-			if opts.IsStored() {
+			if field.IsStored() {
 				isf := docStoredFields[fieldID]
 				isf.vals = append(isf.vals, field.Value())
-				isf.typs = append(isf.typs, encodeFieldType(field))
+				isf.typs = append(isf.typs, field.EncodedFieldType())
 				isf.arrayposs = append(isf.arrayposs, field.ArrayPositions())
 				docStoredFields[fieldID] = isf
 			}
 
-			if opts.IncludeDocValues() {
+			if field.IncludeDocValues() {
 				s.IncludeDocValues[fieldID] = true
 			}
 
 			err := ValidateDocFields(field)
-			if err != nil {
-				return 0, err
+			if err != nil && validationErr == nil {
+				validationErr = err
 			}
+		})
+		if validationErr != nil {
+			return 0, validationErr
 		}
 
 		var curr int
@@ -802,25 +793,6 @@ func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err
 	}
 
 	return fdvIndexOffset, dictOffsets, nil
-}
-
-func encodeFieldType(f document.Field) byte {
-	fieldType := byte('x')
-	switch f.(type) {
-	case *document.TextField:
-		fieldType = 't'
-	case *document.NumericField:
-		fieldType = 'n'
-	case *document.DateTimeField:
-		fieldType = 'd'
-	case *document.BooleanField:
-		fieldType = 'b'
-	case *document.GeoPointField:
-		fieldType = 'g'
-	case *document.CompositeField:
-		fieldType = 'c'
-	}
-	return fieldType
 }
 
 // returns the total # of bytes needed to encode the given uint64's

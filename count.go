@@ -18,7 +18,7 @@ import (
 	"hash/crc32"
 	"io"
 
-	"github.com/blevesearch/bleve/index/scorch/segment"
+	segment "github.com/blevesearch/scorch_segment_api"
 )
 
 // CountHashWriter is a wrapper around a Writer which counts the number of

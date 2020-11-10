@@ -22,9 +22,8 @@ import (
 	"reflect"
 	"sort"
 
-	"github.com/blevesearch/bleve/index"
-	"github.com/blevesearch/bleve/index/scorch/segment"
-	"github.com/blevesearch/bleve/size"
+	index "github.com/blevesearch/bleve_index_api"
+	segment "github.com/blevesearch/scorch_segment_api"
 	"github.com/golang/snappy"
 )
 
@@ -53,9 +52,9 @@ type docValueReader struct {
 }
 
 func (di *docValueReader) size() int {
-	return reflectStaticSizedocValueReader + size.SizeOfPtr +
+	return reflectStaticSizedocValueReader + SizeOfPtr +
 		len(di.field) +
-		len(di.chunkOffsets)*size.SizeOfUint64 +
+		len(di.chunkOffsets)*SizeOfUint64 +
 		len(di.curChunkHeader)*reflectStaticSizeMetaData +
 		len(di.curChunkData)
 }

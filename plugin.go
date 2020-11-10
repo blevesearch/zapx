@@ -15,11 +15,11 @@
 package zap
 
 import (
-	"github.com/blevesearch/bleve/index/scorch/segment"
+	segment "github.com/blevesearch/scorch_segment_api"
 )
 
 // ZapPlugin implements the Plugin interface of
-// the blevesearch/bleve/index/scorch/segment pkg
+// the blevesearch/scorch_segment_api pkg
 type ZapPlugin struct{}
 
 func (*ZapPlugin) Type() string {

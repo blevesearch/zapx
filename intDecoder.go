@@ -18,7 +18,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/blevesearch/bleve/index/scorch/segment"
+	segment "github.com/blevesearch/scorch_segment_api"
 )
 
 type chunkedIntDecoder struct {

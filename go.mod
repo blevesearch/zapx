@@ -1,4 +1,4 @@
-module github.com/blevesearch/zap/v11
+module github.com/blevesearch/zapx/v11
 
 go 1.12
 

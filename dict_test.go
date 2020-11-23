@@ -69,7 +69,7 @@ func TestDictionary(t *testing.T) {
 	// test basic full iterator
 	expected := []string{"apple", "ball", "bat", "cat", "dog", "egg", "fish"}
 	var got []string
-	itr := dict.Iterator()
+	itr := dict.AutomatonIterator(nil, nil, nil)
 	next, err := itr.Next()
 	for next != nil && err == nil {
 		got = append(got, next.Term)
@@ -86,7 +86,7 @@ func TestDictionary(t *testing.T) {
 	// test prefix iterator
 	expected = []string{"ball", "bat"}
 	got = got[:0]
-	itr = dict.PrefixIterator("b")
+	itr = dict.AutomatonIterator(nil, []byte("b"), []byte("c"))
 	next, err = itr.Next()
 	for next != nil && err == nil {
 		got = append(got, next.Term)
@@ -103,7 +103,7 @@ func TestDictionary(t *testing.T) {
 	// test range iterator
 	expected = []string{"cat", "dog", "egg"}
 	got = got[:0]
-	itr = dict.RangeIterator("cat", "egg")
+	itr = dict.AutomatonIterator(nil, []byte("cat"), append([]byte("egg"), 0))
 	next, err = itr.Next()
 	for next != nil && err == nil {
 		got = append(got, next.Term)
@@ -259,7 +259,7 @@ func TestDictionaryBug1156(t *testing.T) {
 	// test range iterator
 	expected := []string{"cat", "dog", "egg", "fish"}
 	var got []string
-	itr := dict.RangeIterator("cat", "")
+	itr := dict.AutomatonIterator(nil, []byte("cat"), nil)
 	next, err := itr.Next()
 	for next != nil && err == nil {
 		got = append(got, next.Term)

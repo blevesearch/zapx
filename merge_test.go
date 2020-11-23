@@ -285,8 +285,8 @@ func compareSegments(a, b *Segment) string {
 				fieldName, adict.(*Dictionary).fst.Len(), bdict.(*Dictionary).fst.Len()))
 		}
 
-		aitr := adict.Iterator()
-		bitr := bdict.Iterator()
+		aitr := adict.AutomatonIterator(nil, nil, nil)
+		bitr := bdict.AutomatonIterator(nil, nil, nil)
 		for {
 			anext, aerr := aitr.Next()
 			bnext, berr := bitr.Next()

@@ -331,8 +331,8 @@ type PostingsIterator struct {
 	currChunkFreqNorm []byte
 	currChunkLoc      []byte
 
-	freqNormReader *segment.MemUvarintReader
-	locReader      *segment.MemUvarintReader
+	freqNormReader *memUvarintReader
+	locReader      *memUvarintReader
 
 	freqChunkOffsets []uint64
 	freqChunkStart   uint64
@@ -383,7 +383,7 @@ func (i *PostingsIterator) loadChunk(chunk int) error {
 		end += e
 		i.currChunkFreqNorm = i.postings.sb.mem[start:end]
 		if i.freqNormReader == nil {
-			i.freqNormReader = segment.NewMemUvarintReader(i.currChunkFreqNorm)
+			i.freqNormReader = newMemUvarintReader(i.currChunkFreqNorm)
 		} else {
 			i.freqNormReader.Reset(i.currChunkFreqNorm)
 		}
@@ -401,7 +401,7 @@ func (i *PostingsIterator) loadChunk(chunk int) error {
 		end += e
 		i.currChunkLoc = i.postings.sb.mem[start:end]
 		if i.locReader == nil {
-			i.locReader = segment.NewMemUvarintReader(i.currChunkLoc)
+			i.locReader = newMemUvarintReader(i.currChunkLoc)
 		} else {
 			i.locReader.Reset(i.currChunkLoc)
 		}

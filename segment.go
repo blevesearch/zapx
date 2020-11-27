@@ -245,7 +245,7 @@ func (s *SegmentBase) loadFields() error {
 func (s *SegmentBase) Dictionary(field string) (segment.TermDictionary, error) {
 	dict, err := s.dictionary(field)
 	if err == nil && dict == nil {
-		return &segment.EmptyDictionary{}, nil
+		return emptyDictionary, nil
 	}
 	return dict, err
 }

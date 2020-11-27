@@ -15,7 +15,6 @@
 package zap
 
 import (
-	"bytes"
 	"fmt"
 
 	"github.com/RoaringBitmap/roaring"
@@ -32,6 +31,9 @@ type Dictionary struct {
 	fst       *vellum.FST
 	fstReader *vellum.Reader
 }
+
+// represents an immutable, empty dictionary
+var emptyDictionary = &Dictionary{}
 
 // PostingsList returns the postings list for the specified term
 func (d *Dictionary) PostingsList(term []byte, except *roaring.Bitmap,
@@ -96,140 +98,31 @@ func (d *Dictionary) postingsListInit(rv *PostingsList, except *roaring.Bitmap) 
 }
 
 func (d *Dictionary) Contains(key []byte) (bool, error) {
-	return d.fst.Contains(key)
-}
-
-// Iterator returns an iterator for this dictionary
-func (d *Dictionary) Iterator() segment.DictionaryIterator {
-	rv := &DictionaryIterator{
-		d: d,
-	}
-
 	if d.fst != nil {
-		itr, err := d.fst.Iterator(nil, nil)
-		if err == nil {
-			rv.itr = itr
-		} else if err != vellum.ErrIteratorDone {
-			rv.err = err
-		}
+		return d.fst.Contains(key)
 	}
-
-	return rv
-}
-
-// PrefixIterator returns an iterator which only visits terms having the
-// the specified prefix
-func (d *Dictionary) PrefixIterator(prefix string) segment.DictionaryIterator {
-	rv := &DictionaryIterator{
-		d: d,
-	}
-
-	kBeg := []byte(prefix)
-	kEnd := segment.IncrementBytes(kBeg)
-
-	if d.fst != nil {
-		itr, err := d.fst.Iterator(kBeg, kEnd)
-		if err == nil {
-			rv.itr = itr
-		} else if err != vellum.ErrIteratorDone {
-			rv.err = err
-		}
-	}
-
-	return rv
-}
-
-// RangeIterator returns an iterator which only visits terms between the
-// start and end terms.  NOTE: bleve.index API specifies the end is inclusive.
-func (d *Dictionary) RangeIterator(start, end string) segment.DictionaryIterator {
-	rv := &DictionaryIterator{
-		d: d,
-	}
-
-	// need to increment the end position to be inclusive
-	var endBytes []byte
-	if len(end) > 0 {
-		endBytes = []byte(end)
-		if endBytes[len(endBytes)-1] < 0xff {
-			endBytes[len(endBytes)-1]++
-		} else {
-			endBytes = append(endBytes, 0xff)
-		}
-	}
-
-	if d.fst != nil {
-		itr, err := d.fst.Iterator([]byte(start), endBytes)
-		if err == nil {
-			rv.itr = itr
-		} else if err != vellum.ErrIteratorDone {
-			rv.err = err
-		}
-	}
-
-	return rv
+	return false, nil
 }
 
 // AutomatonIterator returns an iterator which only visits terms
 // having the the vellum automaton and start/end key range
 func (d *Dictionary) AutomatonIterator(a vellum.Automaton,
 	startKeyInclusive, endKeyExclusive []byte) segment.DictionaryIterator {
-	rv := &DictionaryIterator{
-		d: d,
-	}
-
 	if d.fst != nil {
+		rv := &DictionaryIterator{
+			d: d,
+		}
+
 		itr, err := d.fst.Search(a, startKeyInclusive, endKeyExclusive)
 		if err == nil {
 			rv.itr = itr
 		} else if err != vellum.ErrIteratorDone {
 			rv.err = err
 		}
-	}
 
-	return rv
-}
-
-func (d *Dictionary) OnlyIterator(onlyTerms [][]byte,
-	includeCount bool) segment.DictionaryIterator {
-
-	rv := &DictionaryIterator{
-		d:         d,
-		omitCount: !includeCount,
-	}
-
-	var buf bytes.Buffer
-	builder, err := vellum.New(&buf, nil)
-	if err != nil {
-		rv.err = err
 		return rv
 	}
-	for _, term := range onlyTerms {
-		err = builder.Insert(term, 0)
-		if err != nil {
-			rv.err = err
-			return rv
-		}
-	}
-	err = builder.Close()
-	if err != nil {
-		rv.err = err
-		return rv
-	}
-
-	onlyFST, err := vellum.Load(buf.Bytes())
-	if err != nil {
-		rv.err = err
-		return rv
-	}
-
-	itr, err := d.fst.Search(onlyFST, nil, nil)
-	if err == nil {
-		rv.itr = itr
-	} else if err != vellum.ErrIteratorDone {
-		rv.err = err
-	}
-
-	return rv
+	return emptyDictionaryIterator
 }
 
 // DictionaryIterator is an iterator for term dictionary
@@ -241,6 +134,8 @@ type DictionaryIterator struct {
 	entry     index.DictEntry
 	omitCount bool
 }
+
+var emptyDictionaryIterator = &DictionaryIterator{}
 
 // Next returns the next entry in the dictionary
 func (i *DictionaryIterator) Next() (*index.DictEntry, error) {

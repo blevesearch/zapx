@@ -17,8 +17,6 @@ package zap
 import (
 	"encoding/binary"
 	"fmt"
-
-	segment "github.com/blevesearch/scorch_segment_api"
 )
 
 type chunkedIntDecoder struct {
@@ -27,7 +25,7 @@ type chunkedIntDecoder struct {
 	chunkOffsets    []uint64
 	curChunkBytes   []byte
 	data            []byte
-	r               *segment.MemUvarintReader
+	r               *memUvarintReader
 }
 
 func newChunkedIntDecoder(buf []byte, offset uint64) *chunkedIntDecoder {
@@ -56,7 +54,7 @@ func newChunkedIntDecoder(buf []byte, offset uint64) *chunkedIntDecoder {
 
 func (d *chunkedIntDecoder) loadChunk(chunk int) error {
 	if d.startOffset == termNotEncoded {
-		d.r = segment.NewMemUvarintReader([]byte(nil))
+		d.r = newMemUvarintReader([]byte(nil))
 		return nil
 	}
 
@@ -71,7 +69,7 @@ func (d *chunkedIntDecoder) loadChunk(chunk int) error {
 	end += e
 	d.curChunkBytes = d.data[start:end]
 	if d.r == nil {
-		d.r = segment.NewMemUvarintReader(d.curChunkBytes)
+		d.r = newMemUvarintReader(d.curChunkBytes)
 	} else {
 		d.r.Reset(d.curChunkBytes)
 	}

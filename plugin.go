@@ -14,10 +14,6 @@
 
 package zap
 
-import (
-	segment "github.com/blevesearch/scorch_segment_api"
-)
-
 // ZapPlugin implements the Plugin interface of
 // the blevesearch/scorch_segment_api pkg
 type ZapPlugin struct{}
@@ -28,10 +24,4 @@ func (*ZapPlugin) Type() string {
 
 func (*ZapPlugin) Version() uint32 {
 	return Version
-}
-
-// Plugin returns an instance segment.Plugin for use
-// by the Scorch indexing scheme
-func Plugin() segment.Plugin {
-	return &ZapPlugin{}
 }

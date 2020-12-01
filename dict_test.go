@@ -30,10 +30,8 @@ func buildTestSegmentForDict() (*SegmentBase, uint64, error) {
 	}, "_all")
 
 	// forge analyzed docs
-	results := []*index.AnalysisResult{
-		{
-			Document: doc,
-		},
+	results := []index.Document{
+		doc,
 	}
 
 	seg, size, err := zapPlugin.newWithChunkFactor(results, 1024)

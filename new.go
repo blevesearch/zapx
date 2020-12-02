@@ -42,8 +42,7 @@ var ValidateDocFields = func(field index.Field) error {
 
 var defaultChunkFactor uint32 = 1024
 
-// AnalysisResultsToSegmentBase produces an in-memory zap-encoded
-// SegmentBase from analysis results
+// New an in-memory zap-encoded SegmentBase from a set of Documents
 func (z *ZapPlugin) New(results []index.Document) (
 	segment.Segment, uint64, error) {
 	return z.newWithChunkFactor(results, defaultChunkFactor)

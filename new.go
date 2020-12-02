@@ -40,14 +40,13 @@ var ValidateDocFields = func(field index.Field) error {
 	return nil
 }
 
-// AnalysisResultsToSegmentBase produces an in-memory zap-encoded
-// SegmentBase from analysis results
-func (z *ZapPlugin) New(results []*index.AnalysisResult) (
+// New creates an in-memory zap-encoded SegmentBase from a set of Documents
+func (z *ZapPlugin) New(results []index.Document) (
 	segment.Segment, uint64, error) {
 	return z.newWithChunkMode(results, DefaultChunkMode)
 }
 
-func (*ZapPlugin) newWithChunkMode(results []*index.AnalysisResult,
+func (*ZapPlugin) newWithChunkMode(results []index.Document,
 	chunkMode uint32) (segment.Segment, uint64, error) {
 	s := interimPool.Get().(*interim)
 
@@ -92,7 +91,7 @@ var interimPool = sync.Pool{New: func() interface{} { return &interim{} }}
 // interim holds temporary working data used while converting from
 // analysis results to a zap-encoded segment
 type interim struct {
-	results []*index.AnalysisResult
+	results []index.Document
 
 	chunkMode uint32
 
@@ -226,10 +225,10 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, error) {
 	s.getOrDefineField("_id") // _id field is fieldID 0
 
 	for _, result := range s.results {
-		result.Document.VisitComposite(func(field index.CompositeField) {
+		result.VisitComposite(func(field index.CompositeField) {
 			s.getOrDefineField(field.Name())
 		})
-		result.Document.VisitFields(func(field index.Field) {
+		result.VisitFields(func(field index.Field) {
 			s.getOrDefineField(field.Name())
 		})
 	}
@@ -342,12 +341,12 @@ func (s *interim) prepareDicts() {
 
 	for _, result := range s.results {
 		// walk each composite field
-		result.Document.VisitComposite(func(field index.CompositeField) {
+		result.VisitComposite(func(field index.CompositeField) {
 			visitField(field)
 		})
 
 		// walk each field
-		result.Document.VisitFields(visitField)
+		result.VisitFields(visitField)
 	}
 
 	numPostingsLists := pidNext
@@ -419,7 +418,7 @@ func (s *interim) processDocuments() {
 }
 
 func (s *interim) processDocument(docNum uint64,
-	result *index.AnalysisResult,
+	result index.Document,
 	fieldLens []int, fieldTFs []index.TokenFrequencies) {
 
 	visitField := func(field index.Field) {
@@ -435,12 +434,12 @@ func (s *interim) processDocument(docNum uint64,
 	}
 
 	// walk each composite field
-	result.Document.VisitComposite(func(field index.CompositeField) {
+	result.VisitComposite(func(field index.CompositeField) {
 		visitField(field)
 	})
 
 	// walk each field
-	result.Document.VisitFields(visitField)
+	result.VisitFields(visitField)
 
 	// now that it's been rolled up into fieldTFs, walk that
 	for fieldID, tfs := range fieldTFs {
@@ -509,7 +508,7 @@ func (s *interim) writeStoredFields() (
 		}
 
 		var validationErr error
-		result.Document.VisitFields(func(field index.Field) {
+		result.VisitFields(func(field index.Field) {
 			fieldID := uint16(s.getOrDefineField(field.Name()))
 
 			if field.IsStored() {

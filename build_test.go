@@ -44,10 +44,8 @@ func buildTestSegment() (*SegmentBase, uint64, error) {
 	}, "_all")
 
 	// forge analyzed docs
-	results := []*index.AnalysisResult{
-		{
-			Document: doc,
-		},
+	results := []index.Document{
+		doc,
 	}
 
 	seg, size, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode)
@@ -75,7 +73,7 @@ func buildTestSegmentMultiWithDifferentFields(includeDocA, includeDocB bool) (*S
 	return seg.(*SegmentBase), size, err
 }
 
-func buildTestAnalysisResultsMulti() []*index.AnalysisResult {
+func buildTestAnalysisResultsMulti() []index.Document {
 
 	doc := newStubDocument("a", []*stubField{
 		newStubFieldSplitString("_id", nil, "a", true, false, false),
@@ -94,20 +92,16 @@ func buildTestAnalysisResultsMulti() []*index.AnalysisResult {
 	}, "_all")
 
 	// forge analyzed docs
-	results := []*index.AnalysisResult{
-		{
-			Document: doc,
-		},
-		{
-			Document: doc2,
-		},
+	results := []index.Document{
+		doc,
+		doc2,
 	}
 
 	return results
 }
 
-func buildTestAnalysisResultsMultiWithDifferentFields(includeDocA, includeDocB bool) []*index.AnalysisResult {
-	results := []*index.AnalysisResult{}
+func buildTestAnalysisResultsMultiWithDifferentFields(includeDocA, includeDocB bool) []index.Document {
+	results := []index.Document{}
 
 	if includeDocA {
 		doc := newStubDocument("a", []*stubField{
@@ -118,9 +112,7 @@ func buildTestAnalysisResultsMultiWithDifferentFields(includeDocA, includeDocB b
 			newStubFieldSplitString("manages.count", nil, "1", true, false, true),
 		}, "_all")
 
-		result := &index.AnalysisResult{
-			Document: doc,
-		}
+		result := doc
 
 		results = append(results, result)
 	}
@@ -133,9 +125,7 @@ func buildTestAnalysisResultsMultiWithDifferentFields(includeDocA, includeDocB b
 			newStubFieldSplitString("reportsTo.id", nil, "ABC", true, false, true),
 		}, "_all")
 
-		result := &index.AnalysisResult{
-			Document: doc,
-		}
+		result := doc
 
 		results = append(results, result)
 	}
@@ -159,10 +149,8 @@ func buildTestSegmentWithDefaultFieldMapping(chunkFactor uint32) (
 	fields = append(fields, "tag")
 
 	// forge analyzed docs
-	results := []*index.AnalysisResult{
-		{
-			Document: doc,
-		},
+	results := []index.Document{
+		doc,
 	}
 
 	sb, _, err := zapPlugin.newWithChunkMode(results, chunkFactor)

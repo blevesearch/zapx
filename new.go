@@ -657,9 +657,16 @@ func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err
 
 				freqNorm := freqNorms[freqNormOffset]
 
-				err = tfEncoder.Add(docNum,
-					encodeFreqHasLocs(freqNorm.freq, freqNorm.numLocs > 0),
-					uint64(math.Float32bits(freqNorm.norm)))
+				// check if freq/norm is enabled
+				if freqNorm.freq > 0 {
+					err = tfEncoder.Add(docNum,
+						encodeFreqHasLocs(freqNorm.freq, freqNorm.numLocs > 0),
+						uint64(math.Float32bits(freqNorm.norm)))
+				} else {
+					// if disabled, then skip the norm part
+					err = tfEncoder.Add(docNum,
+						encodeFreqHasLocs(freqNorm.freq, freqNorm.numLocs > 0))
+				}
 				if err != nil {
 					return 0, nil, err
 				}

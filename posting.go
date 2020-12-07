@@ -361,6 +361,9 @@ func (i *PostingsIterator) readFreqNormHasLocs() (uint64, uint64, bool, error) {
 	}
 
 	freq, hasLocs := decodeFreqHasLocs(freqHasLocs)
+	if freq == 0 {
+		return freq, 0, hasLocs, nil
+	}
 
 	normBits, err := i.freqNormReader.readUvarint()
 	if err != nil {
@@ -380,9 +383,14 @@ func (i *PostingsIterator) skipFreqNormReadHasLocs() (bool, error) {
 		return false, fmt.Errorf("error reading freqHasLocs: %v", err)
 	}
 
+	freq, hasLocs := decodeFreqHasLocs(freqHasLocs)
+	if freq == 0 {
+		return hasLocs, nil
+	}
+
 	i.freqNormReader.SkipUvarint() // Skip normBits.
 
-	return freqHasLocs&0x01 != 0, nil // See decodeFreqHasLocs() / hasLocs.
+	return hasLocs, nil // See decodeFreqHasLocs() / hasLocs.
 }
 
 func encodeFreqHasLocs(freq uint64, hasLocs bool) uint64 {
@@ -493,15 +501,17 @@ func (i *PostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.Posting, err
 		// rv.freq >= "number of locs", since in a composite field,
 		// some component fields might have their IncludeTermVector
 		// flags disabled while other component fields are enabled
-		if cap(i.nextLocs) >= int(rv.freq) {
-			i.nextLocs = i.nextLocs[0:rv.freq]
-		} else {
-			i.nextLocs = make([]Location, rv.freq, rv.freq*2)
+		if rv.freq > 0 {
+			if cap(i.nextLocs) >= int(rv.freq) {
+				i.nextLocs = i.nextLocs[0:rv.freq]
+			} else {
+				i.nextLocs = make([]Location, rv.freq, rv.freq*2)
+			}
+			if cap(i.nextSegmentLocs) < int(rv.freq) {
+				i.nextSegmentLocs = make([]segment.Location, rv.freq, rv.freq*2)
+			}
+			rv.locs = i.nextSegmentLocs[:0]
 		}
-		if cap(i.nextSegmentLocs) < int(rv.freq) {
-			i.nextSegmentLocs = make([]segment.Location, rv.freq, rv.freq*2)
-		}
-		rv.locs = i.nextSegmentLocs[:0]
 
 		numLocsBytes, err := i.locReader.readUvarint()
 		if err != nil {
@@ -509,13 +519,21 @@ func (i *PostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.Posting, err
 		}
 
 		j := 0
+		var nextLoc *Location
 		startBytesRemaining := i.locReader.Len() // # bytes remaining in the locReader
 		for startBytesRemaining-i.locReader.Len() < int(numLocsBytes) {
-			err := i.readLocation(&i.nextLocs[j])
+			if len(i.nextLocs) > j {
+				nextLoc = &i.nextLocs[j]
+			} else {
+				nextLoc = &Location{}
+			}
+
+			err := i.readLocation(nextLoc)
 			if err != nil {
 				return nil, err
 			}
-			rv.locs = append(rv.locs, &i.nextLocs[j])
+
+			rv.locs = append(rv.locs, nextLoc)
 			j++
 		}
 	}

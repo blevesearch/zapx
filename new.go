@@ -511,7 +511,7 @@ func (s *interim) writeStoredFields() (
 		result.VisitFields(func(field index.Field) {
 			fieldID := uint16(s.getOrDefineField(field.Name()))
 
-			if field.IsStored() {
+			if field.Options().IsStored() {
 				isf := docStoredFields[fieldID]
 				isf.vals = append(isf.vals, field.Value())
 				isf.typs = append(isf.typs, field.EncodedFieldType())
@@ -519,7 +519,7 @@ func (s *interim) writeStoredFields() (
 				docStoredFields[fieldID] = isf
 			}
 
-			if field.IncludeDocValues() {
+			if field.Options().IncludeDocValues() {
 				s.IncludeDocValues[fieldID] = true
 			}
 

@@ -63,7 +63,7 @@ func newStubDocument(id string, fields []*stubField, compositeName string) *stub
 		value:          nil,
 		arrayPositions: nil,
 		encodedType:    'c',
-		options: index.IndexField | index.IncludeTermVectors,
+		options:        index.IndexField | index.IncludeTermVectors,
 		analyzedLen:    0,
 		analyzedFreqs:  make(index.TokenFrequencies),
 	}
@@ -84,7 +84,7 @@ type stubField struct {
 	value          []byte
 	arrayPositions []uint64
 	encodedType    byte
-	options index.FieldIndexingOptions
+	options        index.FieldIndexingOptions
 	analyzedLen    int
 	analyzedFreqs  index.TokenFrequencies
 }
@@ -135,7 +135,7 @@ func newStubFieldSplitString(name string, arrayPositions []uint64, value string,
 		value:          []byte(value),
 		arrayPositions: arrayPositions,
 		encodedType:    't',
-		options: fieldOptions,
+		options:        fieldOptions,
 		analyzedLen:    len(analyzedFreqs),
 		analyzedFreqs:  analyzedFreqs,
 	}

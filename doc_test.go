@@ -63,8 +63,7 @@ func newStubDocument(id string, fields []*stubField, compositeName string) *stub
 		value:          nil,
 		arrayPositions: nil,
 		encodedType:    'c',
-		stored:         false,
-		docVals:        false,
+		options:        index.IndexField | index.IncludeTermVectors,
 		analyzedLen:    0,
 		analyzedFreqs:  make(index.TokenFrequencies),
 	}
@@ -85,8 +84,7 @@ type stubField struct {
 	value          []byte
 	arrayPositions []uint64
 	encodedType    byte
-	stored         bool
-	docVals        bool
+	options        index.FieldIndexingOptions
 	analyzedLen    int
 	analyzedFreqs  index.TokenFrequencies
 }
@@ -124,13 +122,20 @@ func newStubFieldSplitString(name string, arrayPositions []uint64, value string,
 		offset += len(token) + 1
 	}
 
+	var fieldOptions = index.IndexField | index.IncludeTermVectors
+	if stored {
+		fieldOptions |= index.StoreField
+	}
+	if docVals {
+		fieldOptions |= index.DocValues
+	}
+
 	return &stubField{
 		name:           name,
 		value:          []byte(value),
 		arrayPositions: arrayPositions,
 		encodedType:    't',
-		stored:         stored,
-		docVals:        docVals,
+		options:        fieldOptions,
 		analyzedLen:    len(analyzedFreqs),
 		analyzedFreqs:  analyzedFreqs,
 	}
@@ -156,20 +161,8 @@ func (s *stubField) Analyze() {
 
 }
 
-func (s *stubField) IsIndexed() bool {
-	return true
-}
-
-func (s *stubField) IncludeTermVectors() bool {
-	return true
-}
-
-func (s *stubField) IsStored() bool {
-	return s.stored
-}
-
-func (s *stubField) IncludeDocValues() bool {
-	return s.docVals
+func (s *stubField) Options() index.FieldIndexingOptions {
+	return s.options
 }
 
 func (s *stubField) AnalyzedLength() int {

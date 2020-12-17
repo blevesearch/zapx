@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
-	index "github.com/blevesearch/bleve_index_api"
 	segment "github.com/blevesearch/scorch_segment_api"
 )
 
@@ -583,21 +582,21 @@ func TestSegmentVisitableDocValueFieldsList(t *testing.T) {
 			t.Errorf("expected field terms: %#v, got: %#v", expectedFields, fields)
 		}
 
-		fieldTerms := make(index.FieldTerms)
+		actualFieldTerms := make(fieldTerms)
 		_, err = zaps.VisitDocumentFieldTerms(0, fields, func(field string, term []byte) {
-			fieldTerms[field] = append(fieldTerms[field], string(term))
+			actualFieldTerms[field] = append(actualFieldTerms[field], string(term))
 		}, nil)
 		if err != nil {
 			t.Error(err)
 		}
 
-		expectedFieldTerms := index.FieldTerms{
+		expectedFieldTerms := fieldTerms{
 			"name": []string{"wow"},
 			"desc": []string{"some", "thing"},
 			"tag":  []string{"cold"},
 		}
-		if !reflect.DeepEqual(fieldTerms, expectedFieldTerms) {
-			t.Errorf("expected field terms: %#v, got: %#v", expectedFieldTerms, fieldTerms)
+		if !reflect.DeepEqual(actualFieldTerms, expectedFieldTerms) {
+			t.Errorf("expected field terms: %#v, got: %#v", expectedFieldTerms, actualFieldTerms)
 		}
 
 	}
@@ -736,5 +735,28 @@ func TestMergedSegmentDocsWithNonOverlappingFields(t *testing.T) {
 		if _, ok := expectFields[field]; !ok {
 			t.Errorf("got unexpected field: %s", field)
 		}
+	}
+}
+
+// fieldTerms contains the terms used by a document, keyed by field
+type fieldTerms map[string][]string
+
+// FieldsNotYetCached returns a list of fields not yet cached out of a larger list of fields
+func (f fieldTerms) FieldsNotYetCached(fields []string) []string {
+	rv := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if _, ok := f[field]; !ok {
+			rv = append(rv, field)
+		}
+	}
+	return rv
+}
+
+// Merge will combine two fieldTerms
+// it assumes that the terms lists are complete (thus do not need to be merged)
+// field terms from the other list always replace the ones in the receiver
+func (f fieldTerms) Merge(other fieldTerms) {
+	for field, terms := range other {
+		f[field] = terms
 	}
 }

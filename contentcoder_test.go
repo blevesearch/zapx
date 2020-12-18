@@ -20,7 +20,6 @@ import (
 )
 
 func TestChunkedContentCoder(t *testing.T) {
-
 	tests := []struct {
 		maxDocNum uint64
 		chunkSize uint64
@@ -57,7 +56,6 @@ func TestChunkedContentCoder(t *testing.T) {
 	}
 
 	for _, test := range tests {
-
 		var actual bytes.Buffer
 		cic := newChunkedContentCoder(test.chunkSize, test.maxDocNum, &actual, false)
 		for i, docNum := range test.docNums {

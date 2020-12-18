@@ -74,7 +74,6 @@ func buildTestSegmentMultiWithDifferentFields(includeDocA, includeDocB bool) (*S
 }
 
 func buildTestAnalysisResultsMulti() []index.Document {
-
 	doc := newStubDocument("a", []*stubField{
 		newStubFieldSplitString("_id", nil, "a", true, false, false),
 		newStubFieldSplitString("name", nil, "wow", true, false, true),

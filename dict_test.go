@@ -39,7 +39,6 @@ func buildTestSegmentForDict() (*SegmentBase, uint64, error) {
 }
 
 func TestDictionary(t *testing.T) {
-
 	_ = os.RemoveAll("/tmp/scorch.zap")
 
 	testSeg, _, _ := buildTestSegmentForDict()
@@ -229,7 +228,6 @@ func TestDictionaryError(t *testing.T) {
 }
 
 func TestDictionaryBug1156(t *testing.T) {
-
 	_ = os.RemoveAll("/tmp/scorch.zap")
 
 	testSeg, _, _ := buildTestSegmentForDict()

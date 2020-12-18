@@ -7,6 +7,11 @@ on:
     - v12.x
     - v11.x
   pull_request:
+    - master
+    - v14.x
+    - v13.x
+    - v12.x
+    - v11.x
 name: Tests
 jobs:
   test:

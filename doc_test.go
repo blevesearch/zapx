@@ -36,14 +36,6 @@ func (s *stubDocument) VisitComposite(visitor index.CompositeFieldVisitor) {
 	}
 }
 
-func (s *stubDocument) addField(f *stubField) {
-	s.fields = append(s.fields, f)
-}
-
-func (s *stubDocument) addComposite(f *stubField) {
-	s.composite = append(s.composite, f)
-}
-
 func (s *stubDocument) NumPlainTextBytes() uint64 {
 	return 0
 }

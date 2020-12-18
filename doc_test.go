@@ -100,7 +100,7 @@ func newStubFieldSplitString(name string, arrayPositions []uint64, value string,
 		} else {
 			newToken := &index.TokenFreq{
 				Term: []byte(token),
-				Locations: []*index.TokenLocation{&index.TokenLocation{
+				Locations: []*index.TokenLocation{{
 					ArrayPositions: arrayPositions,
 					Start:          offset,
 					End:            offset + len(token),

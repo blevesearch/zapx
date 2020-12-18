@@ -15,7 +15,7 @@
 package zap
 
 import (
-"reflect"
+	"reflect"
 )
 
 func init() {
@@ -57,4 +57,3 @@ var SizeOfUint8 int
 var SizeOfUint16 int
 var SizeOfUint32 int
 var SizeOfUint64 int
-

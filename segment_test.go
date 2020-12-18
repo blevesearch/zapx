@@ -276,7 +276,6 @@ func TestOpen(t *testing.T) {
 
 	nextPosting, err = postingsItr.Next()
 	for nextPosting != nil && err == nil {
-
 		if nextPosting.Frequency() != 1 {
 			t.Errorf("expected frequency 1, got %d", nextPosting.Frequency())
 		}
@@ -598,7 +597,6 @@ func TestSegmentVisitableDocValueFieldsList(t *testing.T) {
 		if !reflect.DeepEqual(actualFieldTerms, expectedFieldTerms) {
 			t.Errorf("expected field terms: %#v, got: %#v", expectedFieldTerms, actualFieldTerms)
 		}
-
 	}
 }
 

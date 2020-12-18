@@ -23,7 +23,7 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/blevesearch/zapx/v13"
+	zap "github.com/blevesearch/zapx/v13"
 	"github.com/golang/snappy"
 	"github.com/spf13/cobra"
 )

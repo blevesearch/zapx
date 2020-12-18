@@ -36,14 +36,6 @@ func (s *stubDocument) VisitComposite(visitor index.CompositeFieldVisitor) {
 	}
 }
 
-func (s *stubDocument) addField(f *stubField) {
-	s.fields = append(s.fields, f)
-}
-
-func (s *stubDocument) addComposite(f *stubField) {
-	s.composite = append(s.composite, f)
-}
-
 func (s *stubDocument) NumPlainTextBytes() uint64 {
 	return 0
 }
@@ -108,7 +100,7 @@ func newStubFieldSplitString(name string, arrayPositions []uint64, value string,
 		} else {
 			newToken := &index.TokenFreq{
 				Term: []byte(token),
-				Locations: []*index.TokenLocation{&index.TokenLocation{
+				Locations: []*index.TokenLocation{{
 					ArrayPositions: arrayPositions,
 					Start:          offset,
 					End:            offset + len(token),

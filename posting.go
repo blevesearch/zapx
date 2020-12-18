@@ -643,7 +643,6 @@ func (i *PostingsIterator) nextBytes() (
 // no deletions) where the all bitmap is the same as the actual bitmap
 func (i *PostingsIterator) nextDocNumAtOrAfterClean(
 	atOrAfter uint64) (uint64, bool, error) {
-
 	if !i.includeFreqNorm {
 		i.Actual.AdvanceIfNeeded(uint32(atOrAfter))
 

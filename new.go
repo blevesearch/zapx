@@ -420,7 +420,6 @@ func (s *interim) processDocuments() {
 func (s *interim) processDocument(docNum uint64,
 	result index.Document,
 	fieldLens []int, fieldTFs []index.TokenFrequencies) {
-
 	visitField := func(field index.Field) {
 		fieldID := uint16(s.getOrDefineField(field.Name()))
 		fieldLens[fieldID] += field.AnalyzedLength()

@@ -52,7 +52,6 @@ func TestChunkIntCoder(t *testing.T) {
 	}
 
 	for _, test := range tests {
-
 		cic := newChunkedIntCoder(test.chunkSize, test.maxDocNum)
 		for i, docNum := range test.docNums {
 			err := cic.Add(docNum, test.vals[i]...)
@@ -73,7 +72,6 @@ func TestChunkIntCoder(t *testing.T) {
 }
 
 func TestChunkLengthToOffsets(t *testing.T) {
-
 	tests := []struct {
 		lengths         []uint64
 		expectedOffsets []uint64
@@ -129,7 +127,6 @@ func TestChunkLengthToOffsets(t *testing.T) {
 }
 
 func TestChunkReadBoundaryFromOffsets(t *testing.T) {
-
 	tests := []struct {
 		chunkNumber   int
 		offsets       []uint64

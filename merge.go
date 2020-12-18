@@ -39,7 +39,6 @@ const docDropped = math.MaxUint64 // sentinel docNum to represent a deleted doc
 func (*ZapPlugin) Merge(segments []seg.Segment, drops []*roaring.Bitmap, path string,
 	closeCh chan struct{}, s seg.StatsReporter) (
 	[][]uint64, uint64, error) {
-
 	segmentBases := make([]*SegmentBase, len(segments))
 	for segmenti, segment := range segments {
 		switch segmentx := segment.(type) {
@@ -180,7 +179,6 @@ func persistMergedRest(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
 	fieldsInv []string, fieldsMap map[string]uint16, fieldsSame bool,
 	newDocNumsIn [][]uint64, newSegDocCount uint64, chunkMode uint32,
 	w *CountHashWriter, closeCh chan struct{}) ([]uint64, uint64, error) {
-
 	var bufMaxVarintLen64 []byte = make([]byte, binary.MaxVarintLen64)
 	var bufLoc []uint64
 
@@ -207,7 +205,6 @@ func persistMergedRest(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
 
 	// for each field
 	for fieldID, fieldName := range fieldsInv {
-
 		// collect FST iterators from all active segments for this field
 		var newDocNums [][]uint64
 		var drops []*roaring.Bitmap
@@ -217,7 +214,6 @@ func persistMergedRest(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
 		var segmentsInFocus []*SegmentBase
 
 		for segmentI, segment := range segments {
-
 			// check for the closure in meantime
 			if isClosed(closeCh) {
 				return nil, 0, seg.ErrClosed

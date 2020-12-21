@@ -302,16 +302,16 @@ var visitDocumentCtxPool = sync.Pool{
 	},
 }
 
-// VisitDocument invokes the DocFieldValueVistor for each stored field
+// VisitStoredFields invokes the StoredFieldValueVisitor for each stored field
 // for the specified doc number
-func (s *SegmentBase) VisitDocument(num uint64, visitor segment.DocumentFieldValueVisitor) error {
+func (s *SegmentBase) VisitStoredFields(num uint64, visitor segment.StoredFieldValueVisitor) error {
 	vdc := visitDocumentCtxPool.Get().(*visitDocumentCtx)
 	defer visitDocumentCtxPool.Put(vdc)
-	return s.visitDocument(vdc, num, visitor)
+	return s.visitStoredFields(vdc, num, visitor)
 }
 
-func (s *SegmentBase) visitDocument(vdc *visitDocumentCtx, num uint64,
-	visitor segment.DocumentFieldValueVisitor) error {
+func (s *SegmentBase) visitStoredFields(vdc *visitDocumentCtx, num uint64,
+	visitor segment.StoredFieldValueVisitor) error {
 	// first make sure this is a valid number in this segment
 	if num < s.numDocs {
 		meta, compressed := s.getDocStoredMetaAndCompressed(num)

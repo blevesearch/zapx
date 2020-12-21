@@ -405,7 +405,7 @@ func compareSegments(a, b *Segment) string {
 						docNumA := apitrn.Number()
 						docNumB := bpitrn.Number()
 						afields := map[string]interface{}{}
-						err = a.VisitDocument(apitrn.Number(),
+						err = a.VisitStoredFields(apitrn.Number(),
 							func(field string, typ byte, value []byte, pos []uint64) bool {
 								afields[field+"-typ"] = typ
 								afields[field+"-value"] = append([]byte(nil), value...)
@@ -416,7 +416,7 @@ func compareSegments(a, b *Segment) string {
 							rv = append(rv, fmt.Sprintf("a.VisitDocument err: %v", err))
 						}
 						bfields := map[string]interface{}{}
-						err = b.VisitDocument(bpitrn.Number(),
+						err = b.VisitStoredFields(bpitrn.Number(),
 							func(field string, typ byte, value []byte, pos []uint64) bool {
 								bfields[field+"-typ"] = typ
 								bfields[field+"-value"] = append([]byte(nil), value...)

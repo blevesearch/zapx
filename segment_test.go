@@ -314,7 +314,7 @@ func TestOpen(t *testing.T) {
 
 	// now try and visit a document
 	var fieldValuesSeen int
-	err = segment.VisitDocument(0, func(field string, typ byte, value []byte, pos []uint64) bool {
+	err = segment.VisitStoredFields(0, func(field string, typ byte, value []byte, pos []uint64) bool {
 		fieldValuesSeen++
 		return true
 	})
@@ -535,7 +535,7 @@ func TestSegmentVisitableDocValueFieldsList(t *testing.T) {
 		t.Fatalf("error opening segment: %v", err)
 	}
 
-	if zaps, ok := seg.(segment.DocumentFieldTermVisitable); ok {
+	if zaps, ok := seg.(segment.DocValueVisitable); ok {
 		fields, err := zaps.VisitableDocValueFields()
 		if err != nil {
 			t.Fatalf("segment VisitableDocValueFields err: %v", err)
@@ -570,7 +570,7 @@ func TestSegmentVisitableDocValueFieldsList(t *testing.T) {
 		}
 	}()
 
-	if zaps, ok := seg.(segment.DocumentFieldTermVisitable); ok {
+	if zaps, ok := seg.(segment.DocValueVisitable); ok {
 		fields, err := zaps.VisitableDocValueFields()
 		if err != nil {
 			t.Fatalf("segment VisitableDocValueFields err: %v", err)
@@ -582,7 +582,7 @@ func TestSegmentVisitableDocValueFieldsList(t *testing.T) {
 		}
 
 		actualFieldTerms := make(fieldTerms)
-		_, err = zaps.VisitDocumentFieldTerms(0, fields, func(field string, term []byte) {
+		_, err = zaps.VisitDocValues(0, fields, func(field string, term []byte) {
 			actualFieldTerms[field] = append(actualFieldTerms[field], string(term))
 		}, nil)
 		if err != nil {

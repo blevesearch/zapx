@@ -199,7 +199,7 @@ func (di *docValueReader) iterateAllDocValues(s *SegmentBase, visitor docNumTerm
 }
 
 func (di *docValueReader) visitDocValues(docNum uint64,
-	visitor index.DocumentFieldTermVisitor) error {
+	visitor index.DocValueVisitor) error {
 	// binary search the term locations for the docNum
 	start, end := di.getDocValueLocs(docNum)
 	if start == math.MaxUint64 || end == math.MaxUint64 || start == end {
@@ -245,10 +245,10 @@ func (di *docValueReader) getDocValueLocs(docNum uint64) (uint64, uint64) {
 	return math.MaxUint64, math.MaxUint64
 }
 
-// VisitDocumentFieldTerms is an implementation of the
-// DocumentFieldTermVisitable interface
-func (s *SegmentBase) VisitDocumentFieldTerms(localDocNum uint64, fields []string,
-	visitor index.DocumentFieldTermVisitor, dvsIn segment.DocVisitState) (
+// VisitDocValues is an implementation of the
+// DocValueVisitable interface
+func (s *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
+	visitor index.DocValueVisitor, dvsIn segment.DocVisitState) (
 	segment.DocVisitState, error) {
 	dvs, ok := dvsIn.(*docVisitState)
 	if !ok || dvs == nil {

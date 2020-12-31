@@ -487,6 +487,7 @@ func mergeTermFreqNormLocsByCopying(term []byte, postItr *PostingsIterator,
 		}
 
 		newRoaring.Add(uint32(hitNewDocNum))
+
 		err = tfEncoder.AddBytes(hitNewDocNum, nextFreqNormBytes)
 		if err != nil {
 			return 0, 0, 0, err
@@ -533,8 +534,13 @@ func mergeTermFreqNormLocs(fieldsMap map[string]uint16, term []byte, postItr *Po
 
 		locs := next.Locations()
 
-		err = tfEncoder.Add(hitNewDocNum,
-			encodeFreqHasLocs(nextFreq, len(locs) > 0), nextNorm)
+		if nextFreq > 0 {
+			err = tfEncoder.Add(hitNewDocNum,
+				encodeFreqHasLocs(nextFreq, len(locs) > 0), nextNorm)
+		} else {
+			err = tfEncoder.Add(hitNewDocNum,
+				encodeFreqHasLocs(nextFreq, len(locs) > 0))
+		}
 		if err != nil {
 			return 0, 0, 0, nil, err
 		}

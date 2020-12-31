@@ -1,4 +1,9 @@
-# zap file format
+# zapx file format
+
+The zapx module is fork of [zap](https://github.com/blevesearch/zap) module which maintains file format compatibility, but removes dependency on bleve, and instead depends only on the indepenent interface modules:
+
+- [bleve_index_api](https://github.com/blevesearch/scorch_segment_api)
+- [scorch_segment_api](https://github.com/blevesearch/scorch_segment_api)
 
 Advanced ZAP File Format Documentation is [here](zap.md).
 

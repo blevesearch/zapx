@@ -20,7 +20,7 @@ import (
 	"testing"
 
 	index "github.com/blevesearch/bleve_index_api"
-	"github.com/couchbase/vellum/levenshtein"
+	"github.com/blevesearch/vellum/levenshtein"
 )
 
 func buildTestSegmentForDict() (*SegmentBase, uint64, error) {

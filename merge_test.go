@@ -24,7 +24,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	index "github.com/blevesearch/bleve_index_api"
-	seg "github.com/blevesearch/scorch_segment_api"
+	seg "github.com/blevesearch/scorch_segment_api/v2"
 )
 
 func TestMerge(t *testing.T) {

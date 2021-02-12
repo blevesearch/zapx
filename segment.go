@@ -25,7 +25,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	mmap "github.com/blevesearch/mmap-go"
-	segment "github.com/blevesearch/scorch_segment_api"
+	segment "github.com/blevesearch/scorch_segment_api/v2"
 	"github.com/blevesearch/vellum"
 	"github.com/golang/snappy"
 )

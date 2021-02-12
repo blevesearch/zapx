@@ -19,7 +19,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	index "github.com/blevesearch/bleve_index_api"
-	segment "github.com/blevesearch/scorch_segment_api"
+	segment "github.com/blevesearch/scorch_segment_api/v2"
 	"github.com/blevesearch/vellum"
 )
 

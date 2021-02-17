@@ -36,14 +36,18 @@ type Dictionary struct {
 var emptyDictionary = &Dictionary{}
 
 // PostingsList returns the postings list for the specified term
-func (d *Dictionary) PostingsList(term []byte, except *roaring.Bitmap,
+func (d *Dictionary) PostingsList(term []byte, except segment.Bitmap,
 	prealloc segment.PostingsList) (segment.PostingsList, error) {
 	var preallocPL *PostingsList
 	pl, ok := prealloc.(*PostingsList)
 	if ok && pl != nil {
 		preallocPL = pl
 	}
-	return d.postingsList(term, except, preallocPL)
+	var rb *roaring.Bitmap
+	if except != nil {
+		rb = (*roaring.Bitmap)(except.(*bitmap))
+	}
+	return d.postingsList(term, rb, preallocPL)
 }
 
 func (d *Dictionary) postingsList(term []byte, except *roaring.Bitmap, rv *PostingsList) (*PostingsList, error) {

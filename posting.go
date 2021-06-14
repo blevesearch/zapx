@@ -749,14 +749,19 @@ func (p *PostingsIterator) DocNum1Hit() (uint64, bool) {
 
 // ActualBitmap returns the underlying actual bitmap
 // which can be used up the stack for optimizations
-func (p *PostingsIterator) ActualBitmap() *roaring.Bitmap {
-	return p.ActualBM
+func (p *PostingsIterator) ActualBitmap() segment.Bitmap {
+	if p.ActualBM == nil {
+		// NOTE: this returns nil segment.Bitmap as opposed to a nil *bitmap
+		// allowing downstream == nil checks to work as expected
+		return nil
+	}
+	return (*bitmap)(p.ActualBM)
 }
 
 // ReplaceActual replaces the ActualBM with the provided
 // bitmap
-func (p *PostingsIterator) ReplaceActual(abm *roaring.Bitmap) {
-	p.ActualBM = abm
+func (p *PostingsIterator) ReplaceActual(abm segment.Bitmap) {
+	p.ActualBM = (*roaring.Bitmap)(abm.(*bitmap))
 	p.Actual = abm.Iterator()
 }
 

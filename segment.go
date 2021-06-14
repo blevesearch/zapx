@@ -418,7 +418,7 @@ func (s *SegmentBase) Count() uint64 {
 
 // DocNumbers returns a bitset corresponding to the doc numbers of all the
 // provided _id strings
-func (s *SegmentBase) DocNumbers(ids []string) (*roaring.Bitmap, error) {
+func (s *SegmentBase) DocNumbers(ids []string) (segment.Bitmap, error) {
 	rv := roaring.New()
 
 	if len(s.fieldsMap) > 0 {
@@ -450,7 +450,7 @@ func (s *SegmentBase) DocNumbers(ids []string) (*roaring.Bitmap, error) {
 		}
 	}
 
-	return rv, nil
+	return (*bitmap)(rv), nil
 }
 
 // Fields returns the field names used in this segment

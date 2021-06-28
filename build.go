@@ -16,6 +16,8 @@ package zap
 
 import (
 	"bufio"
+	"fmt"
+	"io"
 	"math"
 	"os"
 
@@ -32,6 +34,15 @@ func (sb *SegmentBase) Persist(path string) error {
 	return PersistSegmentBase(sb, path)
 }
 
+func (sb *SegmentBase) PersistToWriter(w io.WriteCloser) error {
+	if w == nil {
+		return fmt.Errorf("invalid writer")
+	}
+	err := persistSegmentBaseToWriter(sb, w)
+	w.Close()
+	return err
+}
+
 // PersistSegmentBase persists SegmentBase in the zap file format.
 func PersistSegmentBase(sb *SegmentBase, path string) error {
 	flag := os.O_RDWR | os.O_CREATE
@@ -46,36 +57,40 @@ func PersistSegmentBase(sb *SegmentBase, path string) error {
 		_ = os.Remove(path)
 	}
 
-	br := bufio.NewWriter(f)
-
-	_, err = br.Write(sb.mem)
+	err = persistSegmentBaseToWriter(sb, f)
 	if err != nil {
 		cleanup()
+	}
+
+	err = f.Sync()
+	if err != nil {
+		return err
+	}
+
+	err = f.Close()
+	if err != nil {
+		return err
+	}
+
+	return err
+}
+
+func persistSegmentBaseToWriter(sb *SegmentBase, w io.Writer) error {
+	br := bufio.NewWriter(w)
+
+	_, err := br.Write(sb.mem)
+	if err != nil {
 		return err
 	}
 
 	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.fieldsIndexOffset, sb.docValueOffset,
 		sb.chunkMode, sb.memCRC, br)
 	if err != nil {
-		cleanup()
 		return err
 	}
 
 	err = br.Flush()
 	if err != nil {
-		cleanup()
-		return err
-	}
-
-	err = f.Sync()
-	if err != nil {
-		cleanup()
-		return err
-	}
-
-	err = f.Close()
-	if err != nil {
-		cleanup()
 		return err
 	}
 

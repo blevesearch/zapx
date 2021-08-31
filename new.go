@@ -68,7 +68,7 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 	s.chunkMode = chunkMode
 	s.w = NewCountHashWriter(&br)
 
-	storedIndexOffset, fieldsIndexOffset, fdvIndexOffset, dictOffsets,
+	storedIndexOffset, fieldsIndexOffset, fdvIndexOffset, dictOffsets, newFieldsIndexOffset,
 		err := s.convert()
 	if err != nil {
 		return nil, uint64(0), err
@@ -76,7 +76,7 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 
 	sb, err := InitSegmentBase(br.Bytes(), s.w.Sum32(), chunkMode,
 		s.FieldsMap, s.FieldsInv, uint64(len(results)),
-		storedIndexOffset, fieldsIndexOffset, fdvIndexOffset, dictOffsets)
+		storedIndexOffset, fieldsIndexOffset, fdvIndexOffset, dictOffsets, newFieldsIndexOffset)
 
 	// get the bytes written before the interim's reset() call
 	// write it to the newly formed segment base.
@@ -149,6 +149,14 @@ type interim struct {
 
 	// atomic access to this variable
 	bytesWritten uint64
+	// hacked in for numeric range, fit this into abstraction?
+	numericRangeData nrNodes
+
+	opaque map[int]resetable
+}
+
+type resetable interface {
+	Reset()
 }
 
 func (s *interim) reset() (err error) {
@@ -198,6 +206,16 @@ func (s *interim) reset() (err error) {
 	// reset the bytes written stat count
 	// to avoid leaking of bytesWritten across reuse cycles.
 	s.setBytesWritten(0)
+	// reset numeric range
+	s.numericRangeData = s.numericRangeData[:0]
+
+	if s.opaque != nil {
+		for _, v := range s.opaque {
+			v.Reset()
+		}
+	} else {
+		s.opaque = map[int]resetable{}
+	}
 
 	return err
 }
@@ -231,8 +249,9 @@ type interimLoc struct {
 	arrayposs []uint64
 }
 
-func (s *interim) convert() (uint64, uint64, uint64, []uint64, error) {
+func (s *interim) convert() (uint64, uint64, uint64, []uint64, uint64, error) {
 	s.FieldsMap = map[string]uint16{}
+	s.opaque = map[int]resetable{}
 
 	s.getOrDefineField("_id") // _id field is fieldID 0
 
@@ -267,7 +286,7 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, error) {
 
 	storedIndexOffset, err := s.writeStoredFields()
 	if err != nil {
-		return 0, 0, 0, nil, err
+		return 0, 0, 0, nil, 0, err
 	}
 
 	var fdvIndexOffset uint64
@@ -276,18 +295,30 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, error) {
 	if len(s.results) > 0 {
 		fdvIndexOffset, dictOffsets, err = s.writeDicts()
 		if err != nil {
-			return 0, 0, 0, nil, err
+			return 0, 0, 0, nil, 0, err
 		}
 	} else {
 		dictOffsets = make([]uint64, len(s.FieldsInv))
 	}
 
-	fieldsIndexOffset, err := persistFields(s.FieldsInv, s.w, dictOffsets)
-	if err != nil {
-		return 0, 0, 0, nil, err
+	// we can persist other indexes at this point
+	for _, x := range segmentSections {
+		x.Persist(s.opaque, s.w)
 	}
 
-	return storedIndexOffset, fieldsIndexOffset, fdvIndexOffset, dictOffsets, nil
+	// we can persist a new fields section here
+	// this new fields section will point to the various indexes available
+	newFieldsIndexOffset, err := persistNewFields(s.FieldsInv, s.w, dictOffsets, s.opaque)
+	if err != nil {
+		return 0, 0, 0, nil, 0, err
+	}
+
+	fieldsIndexOffset, err := persistFields(s.FieldsInv, s.w, dictOffsets)
+	if err != nil {
+		return 0, 0, 0, nil, 0, err
+	}
+
+	return storedIndexOffset, fieldsIndexOffset, fdvIndexOffset, dictOffsets, newFieldsIndexOffset, nil
 }
 
 func (s *interim) getOrDefineField(fieldName string) int {
@@ -433,7 +464,14 @@ func (s *interim) processDocument(docNum uint64,
 	result index.Document,
 	fieldLens []int, fieldTFs []index.TokenFrequencies) {
 	visitField := func(field index.Field) {
+
 		fieldID := uint16(s.getOrDefineField(field.Name()))
+
+		// section specific processing
+		for _, section := range segmentSections {
+			section.Process(s.opaque, docNum, field, fieldID)
+		}
+
 		fieldLens[fieldID] += field.AnalyzedLength()
 
 		existingFreqs := fieldTFs[fieldID]

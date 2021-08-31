@@ -71,6 +71,12 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 		return nil, err
 	}
 
+	err = rv.loadFieldsNew()
+	if err != nil {
+		_ = rv.Close()
+		return nil, err
+	}
+
 	err = rv.loadFields()
 	if err != nil {
 		_ = rv.Close()
@@ -89,19 +95,21 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 // SegmentBase is a memory only, read-only implementation of the
 // segment.Segment interface, using zap's data representation.
 type SegmentBase struct {
-	mem               []byte
-	memCRC            uint32
-	chunkMode         uint32
-	fieldsMap         map[string]uint16 // fieldName -> fieldID+1
-	fieldsInv         []string          // fieldID -> fieldName
-	numDocs           uint64
-	storedIndexOffset uint64
-	fieldsIndexOffset uint64
-	docValueOffset    uint64
-	dictLocs          []uint64
-	fieldDvReaders    map[uint16]*docValueReader // naive chunk cache per field
-	fieldDvNames      []string                   // field names cached in fieldDvReaders
-	size              uint64
+	mem                  []byte
+	memCRC               uint32
+	chunkMode            uint32
+	fieldsMap            map[string]uint16   // fieldName -> fieldID+1
+	fieldsInv            []string            // fieldID -> fieldName
+	fieldsSectionsMap    []map[uint16]uint64 // fieldID -> section -> address
+	numDocs              uint64
+	storedIndexOffset    uint64
+	fieldsIndexOffset    uint64
+	newFieldsIndexOffset uint64
+	docValueOffset       uint64
+	dictLocs             []uint64
+	fieldDvReaders       map[uint16]*docValueReader // naive chunk cache per field
+	fieldDvNames         []string                   // field names cached in fieldDvReaders
+	size                 uint64
 
 	// atomic access to these variables
 	bytesRead    uint64
@@ -207,7 +215,10 @@ func (s *Segment) loadConfig() error {
 	docValueOffset := chunkOffset - 8
 	s.docValueOffset = binary.BigEndian.Uint64(s.mm[docValueOffset : docValueOffset+8])
 
-	fieldsIndexOffset := docValueOffset - 8
+	newFieldsIndexOffset := docValueOffset - 8
+	s.newFieldsIndexOffset = binary.BigEndian.Uint64(s.mm[newFieldsIndexOffset : newFieldsIndexOffset+8])
+
+	fieldsIndexOffset := newFieldsIndexOffset - 8
 	s.fieldsIndexOffset = binary.BigEndian.Uint64(s.mm[fieldsIndexOffset : fieldsIndexOffset+8])
 
 	storedIndexOffset := fieldsIndexOffset - 8
@@ -260,6 +271,55 @@ func (s *SegmentBase) ResetBytesRead(val uint64) {}
 func (s *SegmentBase) incrementBytesRead(val uint64) {
 	atomic.AddUint64(&s.bytesRead, val)
 }
+func (s *SegmentBase) loadFieldsNew() error {
+	pos := s.newFieldsIndexOffset
+
+	// read the number of fields
+	numFields, sz := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(sz)
+
+	var fieldID uint64
+
+	for fieldID < numFields {
+		addr := binary.BigEndian.Uint64(s.mem[pos : pos+8])
+
+		fieldSectionMap := make(map[uint16]uint64)
+
+		err := s.loadFieldNew(uint16(fieldID), addr, fieldSectionMap)
+		if err != nil {
+			return err
+		}
+
+		s.fieldsSectionsMap = append(s.fieldsSectionsMap, fieldSectionMap)
+
+		fieldID++
+		pos += 8
+	}
+
+	return nil
+}
+
+func (s *SegmentBase) loadFieldNew(fieldID uint16, addr uint64,
+	fieldSectionMap map[uint16]uint64) error {
+	pos := addr
+	fieldNameLen, sz := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(sz)
+	pos += fieldNameLen
+
+	fieldNumSections, sz := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(sz)
+
+	for sectionIdx := uint64(0); sectionIdx < fieldNumSections; sectionIdx++ {
+		// read section id
+		fieldSectionType := binary.BigEndian.Uint16(s.mem[pos : pos+2])
+		pos += 2
+		fieldSectionAddr := binary.BigEndian.Uint64(s.mem[pos : pos+8])
+		pos += 8
+		fieldSectionMap[fieldSectionType] = fieldSectionAddr
+	}
+
+	return nil
+}
 
 func (s *SegmentBase) loadFields() error {
 	// NOTE for now we assume the fields index immediately precedes
@@ -270,6 +330,7 @@ func (s *SegmentBase) loadFields() error {
 	// iterate through fields index
 	var fieldID uint64
 	for s.fieldsIndexOffset+(8*fieldID) < fieldsIndexEnd {
+
 		addr := binary.BigEndian.Uint64(s.mem[s.fieldsIndexOffset+(8*fieldID) : s.fieldsIndexOffset+(8*fieldID)+8])
 
 		// accounting the address of the dictLoc being read from file

@@ -98,7 +98,7 @@ func persistSegmentBaseToWriter(sb *SegmentBase, w io.Writer) (int, error) {
 		return 0, err
 	}
 
-	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.fieldsIndexOffset,
+	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.fieldsIndexOffset, sb.newFieldsIndexOffset,
 		sb.docValueOffset, sb.chunkMode, sb.memCRC, br)
 	if err != nil {
 		return 0, err
@@ -160,7 +160,7 @@ func persistStoredFieldValues(fieldID int,
 func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32,
 	fieldsMap map[string]uint16, fieldsInv []string, numDocs uint64,
 	storedIndexOffset uint64, fieldsIndexOffset uint64, docValueOffset uint64,
-	dictLocs []uint64) (*SegmentBase, error) {
+	dictLocs []uint64, newFieldsIndexOffset uint64) (*SegmentBase, error) {
 	sb := &SegmentBase{
 		mem:               mem,
 		memCRC:            memCRC,
@@ -170,6 +170,7 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32,
 		numDocs:           numDocs,
 		storedIndexOffset: storedIndexOffset,
 		fieldsIndexOffset: fieldsIndexOffset,
+		newFieldsIndexOffset: newFieldsIndexOffset,
 		docValueOffset:    docValueOffset,
 		dictLocs:          dictLocs,
 		fieldDvReaders:    make(map[uint16]*docValueReader),
@@ -177,7 +178,14 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32,
 	}
 	sb.updateSize()
 
-	err := sb.loadDvReaders()
+	// FIXME load map based on new fields index offset data
+	// (maybe this works now)
+	err := sb.loadFieldsNew()
+	if err != nil {
+		return nil, err
+	}
+
+	err = sb.loadDvReaders()
 	if err != nil {
 		return nil, err
 	}

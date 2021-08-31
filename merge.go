@@ -74,14 +74,14 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 	// wrap it for counting (tracking offsets)
 	cr := NewCountHashWriterWithStatsReporter(br, s)
 
-	newDocNums, numDocs, storedIndexOffset, fieldsIndexOffset, docValueOffset, _, _, _, err :=
+	newDocNums, numDocs, storedIndexOffset, fieldsIndexOffset, docValueOffset, _, _, _, newFieldsIndexOffset, err :=
 		MergeToWriter(segmentBases, drops, chunkMode, cr, closeCh)
 	if err != nil {
 		cleanup()
 		return nil, 0, err
 	}
 
-	err = persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset,
+	err = persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, newFieldsIndexOffset,
 		docValueOffset, chunkMode, cr.Sum32(), cr)
 	if err != nil {
 		cleanup()
@@ -113,7 +113,7 @@ func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	chunkMode uint32, cr *CountHashWriter, closeCh chan struct{}) (
 	newDocNums [][]uint64,
 	numDocs, storedIndexOffset, fieldsIndexOffset, docValueOffset uint64,
-	dictLocs []uint64, fieldsInv []string, fieldsMap map[string]uint16,
+	dictLocs []uint64, fieldsInv []string, fieldsMap map[string]uint16, newFieldsIndexOffset uint64,
 	err error) {
 	docValueOffset = uint64(fieldNotUninverted)
 
@@ -124,32 +124,49 @@ func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	numDocs = computeNewDocCount(segments, drops)
 
 	if isClosed(closeCh) {
-		return nil, 0, 0, 0, 0, nil, nil, nil, seg.ErrClosed
+		return nil, 0, 0, 0, 0, nil, nil, nil, 0, seg.ErrClosed
 	}
+
+	mergeOpaque := map[int]resetable{}
 
 	if numDocs > 0 {
 		storedIndexOffset, newDocNums, err = mergeStoredAndRemap(segments, drops,
 			fieldsMap, fieldsInv, fieldsSame, numDocs, cr, closeCh)
 		if err != nil {
-			return nil, 0, 0, 0, 0, nil, nil, nil, err
+			return nil, 0, 0, 0, 0, nil, nil, nil, 0, err
 		}
 
 		dictLocs, docValueOffset, err = persistMergedRest(segments, drops,
 			fieldsInv, fieldsMap, fieldsSame,
 			newDocNums, numDocs, chunkMode, cr, closeCh)
 		if err != nil {
-			return nil, 0, 0, 0, 0, nil, nil, nil, err
+			return nil, 0, 0, 0, 0, nil, nil, nil, 0, err
+		}
+
+		// at this point, ask each section implementation to merge itself
+		for _, x := range segmentSections {
+			err = x.Merge(mergeOpaque, segments, drops, fieldsInv, newDocNums, cr, closeCh)
+			if err != nil {
+				return nil, 0, 0, 0, 0, nil, nil, nil, 0, err
+			}
 		}
 	} else {
 		dictLocs = make([]uint64, len(fieldsInv))
 	}
 
-	fieldsIndexOffset, err = persistFields(fieldsInv, cr, dictLocs)
+	// we can persist a new fields section here
+	// this new fields section will point to the various indexes available
+	newFieldsIndexOffset, err = persistNewFields(fieldsInv, cr, dictLocs, mergeOpaque)
 	if err != nil {
-		return nil, 0, 0, 0, 0, nil, nil, nil, err
+		return nil, 0, 0, 0, 0, nil, nil, nil, 0, err
 	}
 
-	return newDocNums, numDocs, storedIndexOffset, fieldsIndexOffset, docValueOffset, dictLocs, fieldsInv, fieldsMap, nil
+	fieldsIndexOffset, err = persistFields(fieldsInv, cr, dictLocs)
+	if err != nil {
+		return nil, 0, 0, 0, 0, nil, nil, nil, 0, err
+	}
+
+	return newDocNums, numDocs, storedIndexOffset, fieldsIndexOffset, docValueOffset, dictLocs, fieldsInv, fieldsMap, newFieldsIndexOffset,nil
 }
 
 // mapFields takes the fieldsInv list and returns a map of fieldName

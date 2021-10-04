@@ -10,8 +10,8 @@ github.com/blevesearch/mmap-go v1.0.3 h1:7QkALgFNooSq3a46AE+pWeKASAZc9SiNFJhDGF1
 github.com/blevesearch/mmap-go v1.0.3/go.mod h1:pYvKl/grLQrBxuaRYgoTssa4rVujYYeenDp++2E+yvs=
 github.com/blevesearch/scorch_segment_api/v2 v2.1.0 h1:NFwteOpZEvJk5Vg0H6gD0hxupsG3JYocE4DBvsA2GZI=
 github.com/blevesearch/scorch_segment_api/v2 v2.1.0/go.mod h1:uch7xyyO/Alxkuxa+CGs79vw0QY8BENSBjg6Mw5L5DE=
-github.com/blevesearch/vellum v1.0.6 h1:F7mKWx+xt7e+i3LGtCUhLI2rLonBgT1uke7WP3mL5v4=
-github.com/blevesearch/vellum v1.0.6/go.mod h1:vMf1MTDsr8l1N5GEi6idH9zF0w8XuY8W8gFuwkIB77g=
+github.com/blevesearch/vellum v1.0.7 h1:+vn8rfyCRHxKVRgDLeR0FAXej2+6mEb5Q15aQE/XESQ=
+github.com/blevesearch/vellum v1.0.7/go.mod h1:doBZpmRhwTsASB4QdUZANlJvqVAUdUyX0ZK7QJCTeBE=
 github.com/coreos/etcd v3.3.10+incompatible/go.mod h1:uF7uidLiAD3TWHmW31ZFd/JWoc32PjwdhPthX9715RE=
 github.com/coreos/go-etcd v2.0.0+incompatible/go.mod h1:Jez6KQU2B/sWsbdaef3ED8NzMklzPG4d5KIOhIy30Tk=
 github.com/coreos/go-semver v0.2.0/go.mod h1:nnelYz7RCh+5ahJtPPxZlU+153eP4D4r3EedlOD2RNk=

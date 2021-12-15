@@ -544,7 +544,12 @@ func (i *PostingsIterator) nextDocNumAtOrAfter(atOrAfter uint64) (uint64, bool, 
 		return 0, false, nil
 	}
 
-	if i.postings == nil || i.postings.postings == i.ActualBM {
+	if i.postings == nil || i.postings == emptyPostingsList {
+		// couldn't find anything
+		return 0, false, nil
+	}
+
+	if i.postings.postings == i.ActualBM {
 		return i.nextDocNumAtOrAfterClean(atOrAfter)
 	}
 

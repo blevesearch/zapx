@@ -108,6 +108,7 @@ type PostingsList struct {
 	normBits1Hit uint64
 
 	chunkSize uint64
+	bytesRead uint64
 }
 
 // represents an immutable, empty postings list
@@ -208,11 +209,13 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 	// initialize freq chunk reader
 	if rv.includeFreqNorm {
 		rv.freqNormReader = newChunkedIntDecoder(p.sb.mem, p.freqOffset, rv.freqNormReader)
+		rv.bytesRead += rv.freqNormReader.bytesRead()
 	}
 
 	// initialize the loc chunk reader
 	if rv.includeLocs {
 		rv.locReader = newChunkedIntDecoder(p.sb.mem, p.locOffset, rv.locReader)
+		rv.bytesRead += rv.locReader.bytesRead()
 	}
 
 	rv.all = p.postings.Iterator()
@@ -244,6 +247,18 @@ func (p *PostingsList) Count() uint64 {
 	return n - e
 }
 
+// Implements the segment.DiskStatsReporter interface
+// The purpose of this implementation is to get
+// the bytes read from the postings lists stored
+// on disk, while querying
+func (p *PostingsList) SetBytesRead(val uint64) {
+	p.bytesRead = val
+}
+
+func (p *PostingsList) BytesRead() uint64 {
+	return p.bytesRead
+}
+
 func (rv *PostingsList) read(postingsOffset uint64, d *Dictionary) error {
 	rv.postingsOffset = postingsOffset
 
@@ -267,6 +282,8 @@ func (rv *PostingsList) read(postingsOffset uint64, d *Dictionary) error {
 	n += uint64(read)
 
 	roaringBytes := d.sb.mem[postingsOffset+n : postingsOffset+n+postingsLen]
+
+	rv.bytesRead += (n + postingsLen)
 
 	if rv.postings == nil {
 		rv.postings = roaring.NewBitmap()
@@ -316,6 +333,8 @@ type PostingsIterator struct {
 
 	includeFreqNorm bool
 	includeLocs     bool
+
+	bytesRead uint64
 }
 
 var emptyPostingsIterator = &PostingsIterator{}
@@ -331,12 +350,32 @@ func (i *PostingsIterator) Size() int {
 	return sizeInBytes
 }
 
+// Implements the segment.DiskStatsReporter interface
+// The purpose of this implementation is to get
+// the bytes read from the disk which includes
+// the freqNorm and location specific information
+// of a hit
+func (i *PostingsIterator) SetBytesRead(val uint64) {
+	i.bytesRead = val
+}
+
+func (i *PostingsIterator) BytesRead() uint64 {
+	return i.bytesRead
+}
+
 func (i *PostingsIterator) loadChunk(chunk int) error {
 	if i.includeFreqNorm {
 		err := i.freqNormReader.loadChunk(chunk)
 		if err != nil {
 			return err
 		}
+
+		// assign the bytes read at this point, since
+		// the postingsIterator is tracking only the chunk loaded
+		// and the cumulation is tracked correctly in the downstream
+		// intDecoder
+		i.bytesRead = i.freqNormReader.bytesRead()
+
 	}
 
 	if i.includeLocs {
@@ -344,6 +383,7 @@ func (i *PostingsIterator) loadChunk(chunk int) error {
 		if err != nil {
 			return err
 		}
+		i.bytesRead = i.locReader.bytesRead()
 	}
 
 	i.currChunk = uint32(chunk)

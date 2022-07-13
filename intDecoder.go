@@ -26,6 +26,7 @@ type chunkedIntDecoder struct {
 	curChunkBytes   []byte
 	data            []byte
 	r               *memUvarintReader
+	numBytesRead    uint64
 }
 
 // newChunkedIntDecoder expects an optional or reset chunkedIntDecoder for better reuse.
@@ -55,8 +56,18 @@ func newChunkedIntDecoder(buf []byte, offset uint64, rv *chunkedIntDecoder) *chu
 		rv.chunkOffsets[i], read = binary.Uvarint(buf[offset+n : offset+n+binary.MaxVarintLen64])
 		n += uint64(read)
 	}
+	rv.numBytesRead += n
 	rv.dataStartOffset = offset + n
 	return rv
+}
+
+// A util function which fetches the query time
+// specific bytes encoded by intcoder (for eg the
+// freqNorm and location details of a term in document)
+// the loadChunk retrieves the next chunk and the
+// number of bytes retrieve in that operation is accounted
+func (d *chunkedIntDecoder) bytesRead() uint64 {
+	return d.numBytesRead
 }
 
 func (d *chunkedIntDecoder) loadChunk(chunk int) error {
@@ -75,6 +86,7 @@ func (d *chunkedIntDecoder) loadChunk(chunk int) error {
 	start += s
 	end += e
 	d.curChunkBytes = d.data[start:end]
+	d.numBytesRead += uint64(len(d.curChunkBytes))
 	if d.r == nil {
 		d.r = newMemUvarintReader(d.curChunkBytes)
 	} else {
@@ -89,6 +101,7 @@ func (d *chunkedIntDecoder) reset() {
 	d.dataStartOffset = 0
 	d.chunkOffsets = d.chunkOffsets[:0]
 	d.curChunkBytes = d.curChunkBytes[:0]
+	d.numBytesRead = 0
 	d.data = d.data[:0]
 	if d.r != nil {
 		d.r.Reset([]byte(nil))

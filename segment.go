@@ -101,6 +101,7 @@ type SegmentBase struct {
 	fieldDvReaders    map[uint16]*docValueReader // naive chunk cache per field
 	fieldDvNames      []string                   // field names cached in fieldDvReaders
 	size              uint64
+	bytesRead         uint64
 
 	m         sync.Mutex
 	fieldFSTs map[uint16]*vellum.FST
@@ -210,7 +211,24 @@ func (s *Segment) loadConfig() error {
 
 	numDocsOffset := storedIndexOffset - 8
 	s.numDocs = binary.BigEndian.Uint64(s.mm[numDocsOffset : numDocsOffset+8])
+
+	// 8*4 + 4*3 = 44 bytes being accounted from all the offsets
+	// above being read from the file
+	s.bytesRead += 44
 	return nil
+}
+
+// Implements the segment.DiskStatsReporter interface
+// Only the persistedSegment type implments the
+// interface, as the intention is to retrieve the bytes
+// read from the on-disk segment as part of the current
+// query.
+func (s *Segment) SetBytesRead(val uint64) {
+	s.SegmentBase.bytesRead = val
+}
+
+func (s *Segment) BytesRead() uint64 {
+	return s.bytesRead + s.SegmentBase.bytesRead
 }
 
 func (s *SegmentBase) loadFields() error {
@@ -224,6 +242,9 @@ func (s *SegmentBase) loadFields() error {
 	for s.fieldsIndexOffset+(8*fieldID) < fieldsIndexEnd {
 		addr := binary.BigEndian.Uint64(s.mem[s.fieldsIndexOffset+(8*fieldID) : s.fieldsIndexOffset+(8*fieldID)+8])
 
+		// accounting the address of the dictLoc being read from file
+		s.bytesRead += 8
+
 		dictLoc, read := binary.Uvarint(s.mem[addr:fieldsIndexEnd])
 		n := uint64(read)
 		s.dictLocs = append(s.dictLocs, dictLoc)
@@ -233,6 +254,7 @@ func (s *SegmentBase) loadFields() error {
 		n += uint64(read)
 
 		name := string(s.mem[addr+n : addr+n+nameLen])
+		s.bytesRead += (n + nameLen)
 		s.fieldsInv = append(s.fieldsInv, name)
 		s.fieldsMap[name] = uint16(fieldID + 1)
 
@@ -267,6 +289,7 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 				// read the length of the vellum data
 				vellumLen, read := binary.Uvarint(sb.mem[dictStart : dictStart+binary.MaxVarintLen64])
 				fstBytes := sb.mem[dictStart+uint64(read) : dictStart+uint64(read)+vellumLen]
+				sb.bytesRead += (uint64(read) + vellumLen)
 				rv.fst, err = vellum.Load(fstBytes)
 				if err != nil {
 					sb.m.Unlock()
@@ -556,6 +579,7 @@ func (s *SegmentBase) loadDvReaders() error {
 		}
 		read += uint64(n)
 
+		s.bytesRead += read
 		fieldDvReader, err := s.loadFieldDocValueReader(field, fieldLocStart, fieldLocEnd)
 		if err != nil {
 			return err

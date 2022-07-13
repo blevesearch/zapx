@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
@@ -108,6 +109,8 @@ type PostingsList struct {
 	normBits1Hit uint64
 
 	chunkSize uint64
+
+	// atomic access to this variable
 	bytesRead uint64
 }
 
@@ -209,13 +212,13 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 	// initialize freq chunk reader
 	if rv.includeFreqNorm {
 		rv.freqNormReader = newChunkedIntDecoder(p.sb.mem, p.freqOffset, rv.freqNormReader)
-		rv.bytesRead += rv.freqNormReader.bytesRead()
+		rv.incrementBytesRead(rv.freqNormReader.getBytesRead())
 	}
 
 	// initialize the loc chunk reader
 	if rv.includeLocs {
 		rv.locReader = newChunkedIntDecoder(p.sb.mem, p.locOffset, rv.locReader)
-		rv.bytesRead += rv.locReader.bytesRead()
+		rv.incrementBytesRead(rv.locReader.getBytesRead())
 	}
 
 	rv.all = p.postings.Iterator()
@@ -252,11 +255,15 @@ func (p *PostingsList) Count() uint64 {
 // the bytes read from the postings lists stored
 // on disk, while querying
 func (p *PostingsList) SetBytesRead(val uint64) {
-	p.bytesRead = val
+	atomic.StoreUint64(&p.bytesRead, val)
 }
 
 func (p *PostingsList) BytesRead() uint64 {
-	return p.bytesRead
+	return atomic.LoadUint64(&p.bytesRead)
+}
+
+func (p *PostingsList) incrementBytesRead(val uint64) {
+	atomic.AddUint64(&p.bytesRead, val)
 }
 
 func (rv *PostingsList) read(postingsOffset uint64, d *Dictionary) error {
@@ -283,7 +290,7 @@ func (rv *PostingsList) read(postingsOffset uint64, d *Dictionary) error {
 
 	roaringBytes := d.sb.mem[postingsOffset+n : postingsOffset+n+postingsLen]
 
-	rv.bytesRead += (n + postingsLen)
+	rv.incrementBytesRead(n + postingsLen)
 
 	if rv.postings == nil {
 		rv.postings = roaring.NewBitmap()
@@ -334,6 +341,7 @@ type PostingsIterator struct {
 	includeFreqNorm bool
 	includeLocs     bool
 
+	// atomic access to this variable
 	bytesRead uint64
 }
 
@@ -356,11 +364,15 @@ func (i *PostingsIterator) Size() int {
 // the freqNorm and location specific information
 // of a hit
 func (i *PostingsIterator) SetBytesRead(val uint64) {
-	i.bytesRead = val
+	atomic.StoreUint64(&i.bytesRead, val)
 }
 
 func (i *PostingsIterator) BytesRead() uint64 {
-	return i.bytesRead
+	return atomic.LoadUint64(&i.bytesRead)
+}
+
+func (i *PostingsIterator) incrementBytesRead(val uint64) {
+	atomic.AddUint64(&i.bytesRead, val)
 }
 
 func (i *PostingsIterator) loadChunk(chunk int) error {
@@ -374,8 +386,7 @@ func (i *PostingsIterator) loadChunk(chunk int) error {
 		// the postingsIterator is tracking only the chunk loaded
 		// and the cumulation is tracked correctly in the downstream
 		// intDecoder
-		i.bytesRead = i.freqNormReader.bytesRead()
-
+		i.SetBytesRead(i.freqNormReader.getBytesRead())
 	}
 
 	if i.includeLocs {
@@ -383,7 +394,7 @@ func (i *PostingsIterator) loadChunk(chunk int) error {
 		if err != nil {
 			return err
 		}
-		i.bytesRead = i.locReader.bytesRead()
+		i.SetBytesRead(i.locReader.getBytesRead())
 	}
 
 	i.currChunk = uint32(chunk)

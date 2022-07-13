@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
@@ -101,7 +102,9 @@ type SegmentBase struct {
 	fieldDvReaders    map[uint16]*docValueReader // naive chunk cache per field
 	fieldDvNames      []string                   // field names cached in fieldDvReaders
 	size              uint64
-	bytesRead         uint64
+
+	// atomic access to this variable
+	bytesRead uint64
 
 	m         sync.Mutex
 	fieldFSTs map[uint16]*vellum.FST
@@ -214,7 +217,7 @@ func (s *Segment) loadConfig() error {
 
 	// 8*4 + 4*3 = 44 bytes being accounted from all the offsets
 	// above being read from the file
-	s.bytesRead += 44
+	s.incrementBytesRead(44)
 	return nil
 }
 
@@ -224,11 +227,20 @@ func (s *Segment) loadConfig() error {
 // read from the on-disk segment as part of the current
 // query.
 func (s *Segment) SetBytesRead(val uint64) {
-	s.SegmentBase.bytesRead = val
+	atomic.StoreUint64(&s.SegmentBase.bytesRead, val)
 }
 
 func (s *Segment) BytesRead() uint64 {
-	return s.bytesRead + s.SegmentBase.bytesRead
+	return atomic.LoadUint64(&s.bytesRead) +
+		atomic.LoadUint64(&s.SegmentBase.bytesRead)
+}
+
+func (s *Segment) incrementBytesRead(val uint64) {
+	atomic.AddUint64(&s.bytesRead, val)
+}
+
+func (s *SegmentBase) incrementBytesRead(val uint64) {
+	atomic.AddUint64(&s.bytesRead, val)
 }
 
 func (s *SegmentBase) loadFields() error {
@@ -243,7 +255,7 @@ func (s *SegmentBase) loadFields() error {
 		addr := binary.BigEndian.Uint64(s.mem[s.fieldsIndexOffset+(8*fieldID) : s.fieldsIndexOffset+(8*fieldID)+8])
 
 		// accounting the address of the dictLoc being read from file
-		s.bytesRead += 8
+		s.incrementBytesRead(8)
 
 		dictLoc, read := binary.Uvarint(s.mem[addr:fieldsIndexEnd])
 		n := uint64(read)
@@ -254,7 +266,8 @@ func (s *SegmentBase) loadFields() error {
 		n += uint64(read)
 
 		name := string(s.mem[addr+n : addr+n+nameLen])
-		s.bytesRead += (n + nameLen)
+
+		s.incrementBytesRead(n + nameLen)
 		s.fieldsInv = append(s.fieldsInv, name)
 		s.fieldsMap[name] = uint16(fieldID + 1)
 
@@ -289,7 +302,7 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 				// read the length of the vellum data
 				vellumLen, read := binary.Uvarint(sb.mem[dictStart : dictStart+binary.MaxVarintLen64])
 				fstBytes := sb.mem[dictStart+uint64(read) : dictStart+uint64(read)+vellumLen]
-				sb.bytesRead += (uint64(read) + vellumLen)
+				sb.incrementBytesRead(uint64(read) + vellumLen)
 				rv.fst, err = vellum.Load(fstBytes)
 				if err != nil {
 					sb.m.Unlock()
@@ -579,7 +592,7 @@ func (s *SegmentBase) loadDvReaders() error {
 		}
 		read += uint64(n)
 
-		s.bytesRead += read
+		s.incrementBytesRead(read)
 		fieldDvReader, err := s.loadFieldDocValueReader(field, fieldLocStart, fieldLocEnd)
 		if err != nil {
 			return err

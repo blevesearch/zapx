@@ -236,11 +236,15 @@ func (s *Segment) BytesRead() uint64 {
 }
 
 func (s *Segment) incrementBytesRead(val uint64) {
-	atomic.AddUint64(&s.bytesRead, val)
+	if segment.CollectIOStats {
+		atomic.AddUint64(&s.bytesRead, val)
+	}
 }
 
 func (s *SegmentBase) incrementBytesRead(val uint64) {
-	atomic.AddUint64(&s.bytesRead, val)
+	if segment.CollectIOStats {
+		atomic.AddUint64(&s.bytesRead, val)
+	}
 }
 
 func (s *SegmentBase) loadFields() error {

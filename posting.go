@@ -263,7 +263,9 @@ func (p *PostingsList) BytesRead() uint64 {
 }
 
 func (p *PostingsList) incrementBytesRead(val uint64) {
-	atomic.AddUint64(&p.bytesRead, val)
+	if segment.CollectIOStats {
+		atomic.AddUint64(&p.bytesRead, val)
+	}
 }
 
 func (rv *PostingsList) read(postingsOffset uint64, d *Dictionary) error {
@@ -372,7 +374,9 @@ func (i *PostingsIterator) BytesRead() uint64 {
 }
 
 func (i *PostingsIterator) incrementBytesRead(val uint64) {
-	atomic.AddUint64(&i.bytesRead, val)
+	if segment.CollectIOStats {
+		atomic.AddUint64(&i.bytesRead, val)
+	}
 }
 
 func (i *PostingsIterator) loadChunk(chunk int) error {

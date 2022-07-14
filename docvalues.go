@@ -147,7 +147,9 @@ func (di *docValueReader) SetBytesRead(val uint64) {
 }
 
 func (di *docValueReader) incrementBytesRead(val uint64) {
-	atomic.AddUint64(&di.bytesRead, val)
+	if segment.CollectIOStats {
+		atomic.AddUint64(&di.bytesRead, val)
+	}
 }
 
 func (di *docValueReader) loadDvChunk(chunkNumber uint64, s *SegmentBase) error {

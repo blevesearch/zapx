@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"sync/atomic"
 )
 
 // We can safely use 0 to represent termNotEncoded since 0
@@ -34,6 +35,9 @@ type chunkedIntCoder struct {
 	currChunk uint64
 
 	buf []byte
+
+	// atomic access to this variable
+	bytesWritten uint64
 }
 
 // newChunkedIntCoder returns a new chunk int coder which packs data into
@@ -73,6 +77,16 @@ func (c *chunkedIntCoder) SetChunkSize(chunkSize uint64, maxDocNum uint64) {
 	}
 }
 
+func (c *chunkedIntCoder) incrementBytesWritten(val uint64) {
+	if CollectDiskStats {
+		atomic.AddUint64(&c.bytesWritten, val)
+	}
+}
+
+func (c *chunkedIntCoder) getBytesWritten() uint64 {
+	return atomic.LoadUint64(&c.bytesWritten)
+}
+
 // Add encodes the provided integers into the correct chunk for the provided
 // doc num.  You MUST call Add() with increasing docNums.
 func (c *chunkedIntCoder) Add(docNum uint64, vals ...uint64) error {
@@ -94,6 +108,7 @@ func (c *chunkedIntCoder) Add(docNum uint64, vals ...uint64) error {
 		if err != nil {
 			return err
 		}
+		c.incrementBytesWritten(uint64(wb))
 	}
 
 	return nil

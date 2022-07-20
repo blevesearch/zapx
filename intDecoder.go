@@ -18,8 +18,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sync/atomic"
-
-	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 
 type chunkedIntDecoder struct {
@@ -61,7 +59,7 @@ func newChunkedIntDecoder(buf []byte, offset uint64, rv *chunkedIntDecoder) *chu
 		rv.chunkOffsets[i], read = binary.Uvarint(buf[offset+n : offset+n+binary.MaxVarintLen64])
 		n += uint64(read)
 	}
-	if segment.CollectIOStats {
+	if CollectDiskStats {
 		atomic.AddUint64(&rv.bytesRead, n)
 	}
 	rv.dataStartOffset = offset + n
@@ -93,7 +91,7 @@ func (d *chunkedIntDecoder) loadChunk(chunk int) error {
 	start += s
 	end += e
 	d.curChunkBytes = d.data[start:end]
-	if segment.CollectIOStats {
+	if CollectDiskStats {
 		atomic.AddUint64(&d.bytesRead, uint64(len(d.curChunkBytes)))
 	}
 	if d.r == nil {

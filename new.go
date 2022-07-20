@@ -20,6 +20,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
 	index "github.com/blevesearch/bleve_index_api"
@@ -31,6 +32,10 @@ import (
 var NewSegmentBufferNumResultsBump int = 100
 var NewSegmentBufferNumResultsFactor float64 = 1.0
 var NewSegmentBufferAvgBytesPerDocFactor float64 = 1.0
+
+// This flag controls the disk stats collection from the segment files
+// during indexing and querying
+var CollectDiskStats bool
 
 // ValidateDocFields can be set by applications to perform additional checks
 // on fields in a document being added to a new segment, by default it does
@@ -80,6 +85,7 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 	if err == nil && s.reset() == nil {
 		s.lastNumDocs = len(results)
 		s.lastOutSize = len(br.Bytes())
+		sb.setBytesWritten(s.getBytesWritten())
 		interimPool.Put(s)
 	}
 
@@ -141,6 +147,9 @@ type interim struct {
 
 	lastNumDocs int
 	lastOutSize int
+
+	// atomic access to this variable
+	bytesWritten uint64
 }
 
 func (s *interim) reset() (err error) {
@@ -484,6 +493,16 @@ func (s *interim) processDocument(docNum uint64,
 	}
 }
 
+func (s *interim) getBytesWritten() uint64 {
+	return atomic.LoadUint64(&s.bytesWritten)
+}
+
+func (s *interim) incrementBytesWritten(val uint64) {
+	if CollectDiskStats {
+		atomic.AddUint64(&s.bytesWritten, val)
+	}
+}
+
 func (s *interim) writeStoredFields() (
 	storedIndexOffset uint64, err error) {
 	varBuf := make([]byte, binary.MaxVarintLen64)
@@ -559,7 +578,7 @@ func (s *interim) writeStoredFields() (
 		metaBytes := s.metaBuf.Bytes()
 
 		compressed = snappy.Encode(compressed[:cap(compressed)], data)
-
+		s.incrementBytesWritten(uint64(len(compressed)))
 		docStoredOffsets[docNum] = uint64(s.w.Count())
 
 		_, err := writeUvarints(s.w,
@@ -595,6 +614,12 @@ func (s *interim) writeStoredFields() (
 	}
 
 	return storedIndexOffset, nil
+}
+
+func (s *interim) setBytesWritten(val uint64) {
+	if CollectDiskStats {
+		atomic.StoreUint64(&s.bytesWritten, val)
+	}
 }
 
 func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err error) {
@@ -682,7 +707,7 @@ func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err
 					if err != nil {
 						return 0, nil, err
 					}
-
+					prevBytesWritten := locEncoder.getBytesWritten()
 					for _, loc := range locs[locOffset : locOffset+freqNorm.numLocs] {
 						err = locEncoder.Add(docNum,
 							uint64(loc.fieldID), loc.pos, loc.start, loc.end,
@@ -696,7 +721,9 @@ func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err
 							return 0, nil, err
 						}
 					}
-
+					if locEncoder.getBytesWritten()-prevBytesWritten > 0 {
+						s.incrementBytesWritten(locEncoder.getBytesWritten() - prevBytesWritten)
+					}
 					locOffset += freqNorm.numLocs
 				}
 
@@ -750,6 +777,8 @@ func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err
 			return 0, nil, err
 		}
 
+		s.incrementBytesWritten(uint64(len(vellumData)))
+
 		// reset vellum for reuse
 		s.builderBuf.Reset()
 
@@ -764,6 +793,7 @@ func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err
 		if err != nil {
 			return 0, nil, err
 		}
+
 		fdvEncoder := newChunkedContentCoder(chunkSize, uint64(len(s.results)-1), s.w, false)
 		if s.IncludeDocValues[fieldID] {
 			for docNum, docTerms := range docTermMap {
@@ -778,6 +808,8 @@ func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err
 			if err != nil {
 				return 0, nil, err
 			}
+
+			s.setBytesWritten(s.getBytesWritten())
 
 			fdvOffsetsStart[fieldID] = uint64(s.w.Count())
 

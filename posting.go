@@ -254,7 +254,7 @@ func (p *PostingsList) Count() uint64 {
 // The purpose of this implementation is to get
 // the bytes read from the postings lists stored
 // on disk, while querying
-func (p *PostingsList) SetBytesRead(val uint64) {
+func (p *PostingsList) ResetBytesRead(val uint64) {
 	atomic.StoreUint64(&p.bytesRead, val)
 }
 
@@ -263,9 +263,13 @@ func (p *PostingsList) BytesRead() uint64 {
 }
 
 func (p *PostingsList) incrementBytesRead(val uint64) {
-	if segment.CollectIOStats {
+	if CollectDiskStats {
 		atomic.AddUint64(&p.bytesRead, val)
 	}
+}
+
+func (p *PostingsList) BytesWritten() uint64 {
+	return 0
 }
 
 func (rv *PostingsList) read(postingsOffset uint64, d *Dictionary) error {
@@ -365,7 +369,7 @@ func (i *PostingsIterator) Size() int {
 // the bytes read from the disk which includes
 // the freqNorm and location specific information
 // of a hit
-func (i *PostingsIterator) SetBytesRead(val uint64) {
+func (i *PostingsIterator) ResetBytesRead(val uint64) {
 	atomic.StoreUint64(&i.bytesRead, val)
 }
 
@@ -374,9 +378,13 @@ func (i *PostingsIterator) BytesRead() uint64 {
 }
 
 func (i *PostingsIterator) incrementBytesRead(val uint64) {
-	if segment.CollectIOStats {
+	if CollectDiskStats {
 		atomic.AddUint64(&i.bytesRead, val)
 	}
+}
+
+func (i *PostingsIterator) BytesWritten() uint64 {
+	return 0
 }
 
 func (i *PostingsIterator) loadChunk(chunk int) error {
@@ -390,7 +398,7 @@ func (i *PostingsIterator) loadChunk(chunk int) error {
 		// the postingsIterator is tracking only the chunk loaded
 		// and the cumulation is tracked correctly in the downstream
 		// intDecoder
-		i.SetBytesRead(i.freqNormReader.getBytesRead())
+		i.ResetBytesRead(i.freqNormReader.getBytesRead())
 	}
 
 	if i.includeLocs {
@@ -398,7 +406,7 @@ func (i *PostingsIterator) loadChunk(chunk int) error {
 		if err != nil {
 			return err
 		}
-		i.SetBytesRead(i.locReader.getBytesRead())
+		i.ResetBytesRead(i.locReader.getBytesRead())
 	}
 
 	i.currChunk = uint32(chunk)

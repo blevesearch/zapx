@@ -263,9 +263,7 @@ func (p *PostingsList) BytesRead() uint64 {
 }
 
 func (p *PostingsList) incrementBytesRead(val uint64) {
-	if CollectDiskStats {
-		atomic.AddUint64(&p.bytesRead, val)
-	}
+	atomic.AddUint64(&p.bytesRead, val)
 }
 
 func (p *PostingsList) BytesWritten() uint64 {
@@ -378,9 +376,7 @@ func (i *PostingsIterator) BytesRead() uint64 {
 }
 
 func (i *PostingsIterator) incrementBytesRead(val uint64) {
-	if CollectDiskStats {
-		atomic.AddUint64(&i.bytesRead, val)
-	}
+	atomic.AddUint64(&i.bytesRead, val)
 }
 
 func (i *PostingsIterator) BytesWritten() uint64 {

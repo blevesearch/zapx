@@ -78,9 +78,7 @@ func (c *chunkedIntCoder) SetChunkSize(chunkSize uint64, maxDocNum uint64) {
 }
 
 func (c *chunkedIntCoder) incrementBytesWritten(val uint64) {
-	if CollectDiskStats {
-		atomic.AddUint64(&c.bytesWritten, val)
-	}
+	atomic.AddUint64(&c.bytesWritten, val)
 }
 
 func (c *chunkedIntCoder) getBytesWritten() uint64 {

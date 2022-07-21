@@ -33,10 +33,6 @@ var NewSegmentBufferNumResultsBump int = 100
 var NewSegmentBufferNumResultsFactor float64 = 1.0
 var NewSegmentBufferAvgBytesPerDocFactor float64 = 1.0
 
-// This flag controls the disk stats collection from the segment files
-// during indexing and querying
-var CollectDiskStats bool
-
 // ValidateDocFields can be set by applications to perform additional checks
 // on fields in a document being added to a new segment, by default it does
 // nothing.
@@ -498,9 +494,7 @@ func (s *interim) getBytesWritten() uint64 {
 }
 
 func (s *interim) incrementBytesWritten(val uint64) {
-	if CollectDiskStats {
-		atomic.AddUint64(&s.bytesWritten, val)
-	}
+	atomic.AddUint64(&s.bytesWritten, val)
 }
 
 func (s *interim) writeStoredFields() (
@@ -617,9 +611,7 @@ func (s *interim) writeStoredFields() (
 }
 
 func (s *interim) setBytesWritten(val uint64) {
-	if CollectDiskStats {
-		atomic.StoreUint64(&s.bytesWritten, val)
-	}
+	atomic.StoreUint64(&s.bytesWritten, val)
 }
 
 func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err error) {

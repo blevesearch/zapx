@@ -147,9 +147,7 @@ func (di *docValueReader) ResetBytesRead(val uint64) {
 }
 
 func (di *docValueReader) incrementBytesRead(val uint64) {
-	if CollectDiskStats {
-		atomic.AddUint64(&di.bytesRead, val)
-	}
+	atomic.AddUint64(&di.bytesRead, val)
 }
 
 func (di *docValueReader) BytesWritten() uint64 {

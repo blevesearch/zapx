@@ -142,12 +142,16 @@ func (di *docValueReader) BytesRead() uint64 {
 	return atomic.LoadUint64(&di.bytesRead)
 }
 
-func (di *docValueReader) SetBytesRead(val uint64) {
+func (di *docValueReader) ResetBytesRead(val uint64) {
 	atomic.StoreUint64(&di.bytesRead, val)
 }
 
 func (di *docValueReader) incrementBytesRead(val uint64) {
 	atomic.AddUint64(&di.bytesRead, val)
+}
+
+func (di *docValueReader) BytesWritten() uint64 {
+	return 0
 }
 
 func (di *docValueReader) loadDvChunk(chunkNumber uint64, s *SegmentBase) error {

@@ -104,7 +104,8 @@ type SegmentBase struct {
 	size              uint64
 
 	// atomic access to this variable
-	bytesRead uint64
+	bytesRead    uint64
+	bytesWritten uint64
 
 	m         sync.Mutex
 	fieldFSTs map[uint16]*vellum.FST
@@ -226,7 +227,7 @@ func (s *Segment) loadConfig() error {
 // interface, as the intention is to retrieve the bytes
 // read from the on-disk segment as part of the current
 // query.
-func (s *Segment) SetBytesRead(val uint64) {
+func (s *Segment) ResetBytesRead(val uint64) {
 	atomic.StoreUint64(&s.SegmentBase.bytesRead, val)
 }
 
@@ -235,9 +236,27 @@ func (s *Segment) BytesRead() uint64 {
 		atomic.LoadUint64(&s.SegmentBase.bytesRead)
 }
 
+func (s *Segment) BytesWritten() uint64 {
+	return 0
+}
+
 func (s *Segment) incrementBytesRead(val uint64) {
 	atomic.AddUint64(&s.bytesRead, val)
 }
+
+func (s *SegmentBase) BytesWritten() uint64 {
+	return atomic.LoadUint64(&s.bytesWritten)
+}
+
+func (s *SegmentBase) setBytesWritten(val uint64) {
+	atomic.AddUint64(&s.bytesWritten, val)
+}
+
+func (s *SegmentBase) BytesRead() uint64 {
+	return 0
+}
+
+func (s *SegmentBase) ResetBytesRead(val uint64) {}
 
 func (s *SegmentBase) incrementBytesRead(val uint64) {
 	atomic.AddUint64(&s.bytesRead, val)

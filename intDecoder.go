@@ -59,9 +59,7 @@ func newChunkedIntDecoder(buf []byte, offset uint64, rv *chunkedIntDecoder) *chu
 		rv.chunkOffsets[i], read = binary.Uvarint(buf[offset+n : offset+n+binary.MaxVarintLen64])
 		n += uint64(read)
 	}
-
 	atomic.AddUint64(&rv.bytesRead, n)
-
 	rv.dataStartOffset = offset + n
 	return rv
 }
@@ -91,9 +89,7 @@ func (d *chunkedIntDecoder) loadChunk(chunk int) error {
 	start += s
 	end += e
 	d.curChunkBytes = d.data[start:end]
-
 	atomic.AddUint64(&d.bytesRead, uint64(len(d.curChunkBytes)))
-
 	if d.r == nil {
 		d.r = newMemUvarintReader(d.curChunkBytes)
 	} else {

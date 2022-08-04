@@ -81,6 +81,7 @@ func newChunkedContentCoder(chunkSize uint64, maxDocNum uint64,
 // and re used. You cannot change the chunk size.
 func (c *chunkedContentCoder) Reset() {
 	c.currChunk = 0
+	c.bytesWritten = 0
 	c.final = c.final[:0]
 	c.chunkBuf.Reset()
 	c.chunkMetaBuf.Reset()

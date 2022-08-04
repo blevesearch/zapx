@@ -78,10 +78,13 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 		s.FieldsMap, s.FieldsInv, uint64(len(results)),
 		storedIndexOffset, fieldsIndexOffset, fdvIndexOffset, dictOffsets)
 
+	// get the bytes written before the interim's reset() call
+	// write it to the newly formed segment base.
+	totalBytesWritten := s.getBytesWritten()
 	if err == nil && s.reset() == nil {
 		s.lastNumDocs = len(results)
 		s.lastOutSize = len(br.Bytes())
-		sb.setBytesWritten(s.getBytesWritten())
+		sb.setBytesWritten(totalBytesWritten)
 		interimPool.Put(s)
 	}
 
@@ -191,6 +194,10 @@ func (s *interim) reset() (err error) {
 	s.tmp1 = s.tmp1[:0]
 	s.lastNumDocs = 0
 	s.lastOutSize = 0
+
+	// reset the bytes written stat count
+	// to avoid leaking of bytesWritten across reuse cycles.
+	s.setBytesWritten(0)
 
 	return err
 }
@@ -699,7 +706,6 @@ func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err
 					if err != nil {
 						return 0, nil, err
 					}
-					prevBytesWritten := locEncoder.getBytesWritten()
 					for _, loc := range locs[locOffset : locOffset+freqNorm.numLocs] {
 						err = locEncoder.Add(docNum,
 							uint64(loc.fieldID), loc.pos, loc.start, loc.end,
@@ -713,9 +719,6 @@ func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err
 							return 0, nil, err
 						}
 					}
-					if locEncoder.getBytesWritten()-prevBytesWritten > 0 {
-						s.incrementBytesWritten(locEncoder.getBytesWritten() - prevBytesWritten)
-					}
 					locOffset += freqNorm.numLocs
 				}
 
@@ -728,6 +731,7 @@ func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err
 
 			tfEncoder.Close()
 			locEncoder.Close()
+			s.incrementBytesWritten(locEncoder.getBytesWritten())
 
 			postingsOffset, err :=
 				writePostings(postingsBS, tfEncoder, locEncoder, nil, s.w, buf)
@@ -801,7 +805,7 @@ func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err
 				return 0, nil, err
 			}
 
-			s.setBytesWritten(s.getBytesWritten())
+			s.incrementBytesWritten(fdvEncoder.getBytesWritten())
 
 			fdvOffsetsStart[fieldID] = uint64(s.w.Count())
 

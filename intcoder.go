@@ -58,6 +58,7 @@ func newChunkedIntCoder(chunkSize uint64, maxDocNum uint64) *chunkedIntCoder {
 // from previous use.  you cannot change the chunk size or max doc num.
 func (c *chunkedIntCoder) Reset() {
 	c.final = c.final[:0]
+	c.bytesWritten = 0
 	c.chunkBuf.Reset()
 	c.currChunk = 0
 	for i := range c.chunkLens {
@@ -106,7 +107,6 @@ func (c *chunkedIntCoder) Add(docNum uint64, vals ...uint64) error {
 		if err != nil {
 			return err
 		}
-		c.incrementBytesWritten(uint64(wb))
 	}
 
 	return nil
@@ -129,6 +129,7 @@ func (c *chunkedIntCoder) AddBytes(docNum uint64, buf []byte) error {
 // to be encoded.
 func (c *chunkedIntCoder) Close() {
 	encodingBytes := c.chunkBuf.Bytes()
+	c.incrementBytesWritten(uint64(len(encodingBytes)))
 	c.chunkLens[c.currChunk] = uint64(len(encodingBytes))
 	c.final = append(c.final, encodingBytes...)
 	c.currChunk = uint64(cap(c.chunkLens)) // sentinel to detect double close

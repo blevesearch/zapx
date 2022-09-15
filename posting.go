@@ -255,15 +255,22 @@ func (p *PostingsList) Count() uint64 {
 // the bytes read from the postings lists stored
 // on disk, while querying
 func (p *PostingsList) ResetBytesRead(val uint64) {
-	atomic.StoreUint64(&p.bytesRead, val)
+	if AccountIOStats {
+		atomic.StoreUint64(&p.bytesRead, val)
+	}
 }
 
 func (p *PostingsList) BytesRead() uint64 {
-	return atomic.LoadUint64(&p.bytesRead)
+	if AccountIOStats {
+		return atomic.LoadUint64(&p.bytesRead)
+	}
+	return 0
 }
 
 func (p *PostingsList) incrementBytesRead(val uint64) {
-	atomic.AddUint64(&p.bytesRead, val)
+	if AccountIOStats {
+		atomic.AddUint64(&p.bytesRead, val)
+	}
 }
 
 func (p *PostingsList) BytesWritten() uint64 {
@@ -368,15 +375,22 @@ func (i *PostingsIterator) Size() int {
 // the freqNorm and location specific information
 // of a hit
 func (i *PostingsIterator) ResetBytesRead(val uint64) {
-	atomic.StoreUint64(&i.bytesRead, val)
+	if AccountIOStats {
+		atomic.StoreUint64(&i.bytesRead, val)
+	}
 }
 
 func (i *PostingsIterator) BytesRead() uint64 {
-	return atomic.LoadUint64(&i.bytesRead)
+	if AccountIOStats {
+		return atomic.LoadUint64(&i.bytesRead)
+	}
+	return 0
 }
 
 func (i *PostingsIterator) incrementBytesRead(val uint64) {
-	atomic.AddUint64(&i.bytesRead, val)
+	if AccountIOStats {
+		atomic.AddUint64(&i.bytesRead, val)
+	}
 }
 
 func (i *PostingsIterator) BytesWritten() uint64 {

@@ -113,6 +113,18 @@ type PostingsList struct {
 // represents an immutable, empty postings list
 var emptyPostingsList = &PostingsList{}
 
+func (i *PostingsList) ResetBytesRead(uint64) {}
+
+func (i *PostingsList) BytesRead() uint64 {
+	return 0
+}
+
+func (i *PostingsList) incrementBytesRead(uint64) {}
+
+func (i *PostingsList) BytesWritten() uint64 {
+	return 0
+}
+
 func (p *PostingsList) Size() int {
 	sizeInBytes := reflectStaticSizePostingsList + SizeOfPtr
 
@@ -319,6 +331,18 @@ type PostingsIterator struct {
 }
 
 var emptyPostingsIterator = &PostingsIterator{}
+
+func (i *PostingsIterator) ResetBytesRead(uint64) {}
+
+func (i *PostingsIterator) BytesRead() uint64 {
+	return 0
+}
+
+func (i *PostingsIterator) incrementBytesRead(uint64) {}
+
+func (i *PostingsIterator) BytesWritten() uint64 {
+	return 0
+}
 
 func (i *PostingsIterator) Size() int {
 	sizeInBytes := reflectStaticSizePostingsIterator + SizeOfPtr +

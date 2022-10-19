@@ -228,9 +228,7 @@ func (s *Segment) loadConfig() error {
 // read from the on-disk segment as part of the current
 // query.
 func (s *Segment) ResetBytesRead(val uint64) {
-	if AccountIOStats {
-		atomic.StoreUint64(&s.SegmentBase.bytesRead, val)
-	}
+	atomic.StoreUint64(&s.SegmentBase.bytesRead, val)
 }
 
 func (s *Segment) BytesRead() uint64 {
@@ -243,22 +241,15 @@ func (s *Segment) BytesWritten() uint64 {
 }
 
 func (s *Segment) incrementBytesRead(val uint64) {
-	if AccountIOStats {
-		atomic.AddUint64(&s.bytesRead, val)
-	}
+	atomic.AddUint64(&s.bytesRead, val)
 }
 
 func (s *SegmentBase) BytesWritten() uint64 {
-	if AccountIOStats {
-		return atomic.LoadUint64(&s.bytesWritten)
-	}
-	return 0
+	return atomic.LoadUint64(&s.bytesWritten)
 }
 
 func (s *SegmentBase) setBytesWritten(val uint64) {
-	if AccountIOStats {
-		atomic.AddUint64(&s.bytesWritten, val)
-	}
+	atomic.AddUint64(&s.bytesWritten, val)
 }
 
 func (s *SegmentBase) BytesRead() uint64 {
@@ -268,9 +259,7 @@ func (s *SegmentBase) BytesRead() uint64 {
 func (s *SegmentBase) ResetBytesRead(val uint64) {}
 
 func (s *SegmentBase) incrementBytesRead(val uint64) {
-	if AccountIOStats {
-		atomic.AddUint64(&s.bytesRead, val)
-	}
+	atomic.AddUint64(&s.bytesRead, val)
 }
 
 func (s *SegmentBase) loadFields() error {

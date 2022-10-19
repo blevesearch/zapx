@@ -139,22 +139,15 @@ func (s *SegmentBase) loadFieldDocValueReader(field string,
 // and the bytes retrieved off the disk pertaining to that
 // is accounted as well.
 func (di *docValueReader) BytesRead() uint64 {
-	if AccountIOStats {
-		return atomic.LoadUint64(&di.bytesRead)
-	}
-	return 0
+	return atomic.LoadUint64(&di.bytesRead)
 }
 
 func (di *docValueReader) ResetBytesRead(val uint64) {
-	if AccountIOStats {
-		atomic.StoreUint64(&di.bytesRead, val)
-	}
+	atomic.StoreUint64(&di.bytesRead, val)
 }
 
 func (di *docValueReader) incrementBytesRead(val uint64) {
-	if AccountIOStats {
-		atomic.AddUint64(&di.bytesRead, val)
-	}
+	atomic.AddUint64(&di.bytesRead, val)
 }
 
 func (di *docValueReader) BytesWritten() uint64 {

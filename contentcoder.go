@@ -111,9 +111,7 @@ func (c *chunkedContentCoder) Close() error {
 }
 
 func (c *chunkedContentCoder) incrementBytesWritten(val uint64) {
-	if AccountIOStats {
-		atomic.AddUint64(&c.bytesWritten, val)
-	}
+	atomic.AddUint64(&c.bytesWritten, val)
 }
 
 func (c *chunkedContentCoder) getBytesWritten() uint64 {

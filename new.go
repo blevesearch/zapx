@@ -41,11 +41,6 @@ var ValidateDocFields = func(field index.Field) error {
 	return nil
 }
 
-// This flag controls the IO stats computation for segments
-// during indexing and querying.
-// Note: To be set at init ONLY.
-var AccountIOStats bool
-
 // New creates an in-memory zap-encoded SegmentBase from a set of Documents
 func (z *ZapPlugin) New(results []index.Document) (
 	segment.Segment, uint64, error) {
@@ -502,16 +497,11 @@ func (s *interim) processDocument(docNum uint64,
 }
 
 func (s *interim) getBytesWritten() uint64 {
-	if AccountIOStats {
-		return atomic.LoadUint64(&s.bytesWritten)
-	}
-	return 0
+	return atomic.LoadUint64(&s.bytesWritten)
 }
 
 func (s *interim) incrementBytesWritten(val uint64) {
-	if AccountIOStats {
-		atomic.AddUint64(&s.bytesWritten, val)
-	}
+	atomic.AddUint64(&s.bytesWritten, val)
 }
 
 func (s *interim) writeStoredFields() (
@@ -628,9 +618,7 @@ func (s *interim) writeStoredFields() (
 }
 
 func (s *interim) setBytesWritten(val uint64) {
-	if AccountIOStats {
-		atomic.StoreUint64(&s.bytesWritten, val)
-	}
+	atomic.StoreUint64(&s.bytesWritten, val)
 }
 
 func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err error) {

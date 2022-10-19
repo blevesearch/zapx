@@ -108,6 +108,10 @@ type PostingsList struct {
 	normBits1Hit uint64
 }
 
+// Following methods are dummy implementations for the interface
+// DiskStatsReporter (for backward compatibility).
+// The working implementations are supported only in zap v15.x
+// and not in the earlier versions of zap.
 func (i *PostingsList) ResetBytesRead(uint64) {}
 
 func (i *PostingsList) BytesRead() uint64 {
@@ -324,6 +328,10 @@ type PostingsIterator struct {
 
 var emptyPostingsIterator = &PostingsIterator{}
 
+// Following methods are dummy implementations for the interface
+// DiskStatsReporter (for backward compatibility).
+// The working implementations are supported only in zap v15.x
+// and not in the earlier versions of zap.
 func (i *PostingsIterator) ResetBytesRead(uint64) {}
 
 func (i *PostingsIterator) BytesRead() uint64 {

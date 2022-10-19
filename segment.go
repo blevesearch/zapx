@@ -213,6 +213,10 @@ func (s *Segment) loadConfig() error {
 	return nil
 }
 
+// Following methods are dummy implementations for the interface
+// DiskStatsReporter (for backward compatibility).
+// The working implementations are supported only in zap v15.x
+// and not in the earlier versions of zap.
 func (s *Segment) ResetBytesRead(uint64) {}
 
 func (s *Segment) BytesRead() uint64 {

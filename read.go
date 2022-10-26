@@ -22,7 +22,7 @@ func (s *SegmentBase) getDocStoredMetaAndCompressed(docNum uint64) ([]byte, []by
 	meta := s.mem[storedOffset+n : storedOffset+n+metaLen]
 	data := s.mem[storedOffset+n+metaLen : storedOffset+n+metaLen+dataLen]
 
-	s.incrementBytesRead(metaLen + dataLen)
+	// s.incrementBytesRead(metaLen + dataLen)
 
 	return meta, data
 }
@@ -41,7 +41,7 @@ func (s *SegmentBase) getDocStoredOffsets(docNum uint64) (
 	dataLen, read := binary.Uvarint(s.mem[storedOffset+n : storedOffset+n+binary.MaxVarintLen64])
 	n += uint64(read)
 
-	s.incrementBytesRead(n)
+	// s.incrementBytesRead(n)
 
 	return indexOffset, storedOffset, n, metaLen, dataLen
 }

@@ -321,7 +321,7 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 				// read the length of the vellum data
 				vellumLen, read := binary.Uvarint(sb.mem[dictStart : dictStart+binary.MaxVarintLen64])
 				fstBytes := sb.mem[dictStart+uint64(read) : dictStart+uint64(read)+vellumLen]
-				sb.incrementBytesRead(uint64(read) + vellumLen)
+				rv.incrementBytesRead(uint64(read) + vellumLen)
 				rv.fst, err = vellum.Load(fstBytes)
 				if err != nil {
 					sb.m.Unlock()
@@ -381,6 +381,14 @@ func (s *SegmentBase) visitStoredFields(vdc *visitDocumentCtx, num uint64,
 		idFieldVal := compressed[:idFieldValLen]
 
 		keepGoing := visitor("_id", byte('t'), idFieldVal, nil)
+		if !keepGoing {
+			visitDocumentCtxPool.Put(vdc)
+			return nil
+		}
+
+		totalStoredBytes := make([]byte, 8)
+		binary.LittleEndian.PutUint64(totalStoredBytes, uint64(len(meta)+len(compressed)))
+		keepGoing := visitor("$#", byte('t'), totalStoredBytes, nil)
 		if !keepGoing {
 			visitDocumentCtxPool.Put(vdc)
 			return nil

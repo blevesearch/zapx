@@ -40,7 +40,23 @@ type docNumTermsVisitor func(docNum uint64, terms []byte) error
 type docVisitState struct {
 	dvrs    map[uint16]*docValueReader
 	segment *SegmentBase
+
+	bytesRead uint64
 }
+
+func (d *docVisitState) incrementBytesRead(val uint64) {
+	atomic.AddUint64(&d.bytesRead, val)
+}
+
+func (d *docVisitState) BytesRead() uint64 {
+	return atomic.LoadUint64(&d.bytesRead)
+}
+
+func (d *docVisitState) BytesWritten() uint64 {
+	return 0
+}
+
+func (d *docVisitState) ResetBytesRead(val uint64) {}
 
 type docValueReader struct {
 	field          string
@@ -327,7 +343,7 @@ func (s *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
 				if err != nil {
 					return dvs, err
 				}
-				s.incrementBytesRead(dvr.BytesRead())
+				dvs.incrementBytesRead(dvr.BytesRead())
 			}
 
 			_ = dvr.visitDocValues(localDocNum, visitor)

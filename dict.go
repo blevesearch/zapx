@@ -16,6 +16,7 @@ package zap
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
 	index "github.com/blevesearch/bleve_index_api"
@@ -30,6 +31,8 @@ type Dictionary struct {
 	fieldID   uint16
 	fst       *vellum.FST
 	fstReader *vellum.Reader
+
+	bytesRead uint64
 }
 
 // represents an immutable, empty dictionary
@@ -124,6 +127,18 @@ func (d *Dictionary) AutomatonIterator(a segment.Automaton,
 	}
 	return emptyDictionaryIterator
 }
+
+func (d *Dictionary) incrementBytesRead(val uint64) {
+	atomic.AddUint64(&d.bytesRead, val)
+}
+
+func (d *Dictionary) BytesRead() uint64 {
+	return atomic.LoadUint64(&d.bytesRead)
+}
+
+func (d *Dictionary) ResetBytesRead(val uint64) {}
+
+func (d *Dictionary) BytesWritten() uint64 {}
 
 // DictionaryIterator is an iterator for term dictionary
 type DictionaryIterator struct {

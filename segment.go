@@ -232,8 +232,7 @@ func (s *Segment) ResetBytesRead(val uint64) {
 }
 
 func (s *Segment) BytesRead() uint64 {
-	return atomic.LoadUint64(&s.bytesRead) +
-		atomic.LoadUint64(&s.SegmentBase.bytesRead)
+	return atomic.LoadUint64(&s.bytesRead)
 }
 
 func (s *Segment) BytesWritten() uint64 {
@@ -381,14 +380,6 @@ func (s *SegmentBase) visitStoredFields(vdc *visitDocumentCtx, num uint64,
 		idFieldVal := compressed[:idFieldValLen]
 
 		keepGoing := visitor("_id", byte('t'), idFieldVal, nil)
-		if !keepGoing {
-			visitDocumentCtxPool.Put(vdc)
-			return nil
-		}
-
-		totalStoredBytes := make([]byte, 8)
-		binary.LittleEndian.PutUint64(totalStoredBytes, uint64(len(meta)+len(compressed)))
-		keepGoing := visitor("$#", byte('t'), totalStoredBytes, nil)
 		if !keepGoing {
 			visitDocumentCtxPool.Put(vdc)
 			return nil

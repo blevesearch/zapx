@@ -56,7 +56,9 @@ func (d *docVisitState) BytesWritten() uint64 {
 	return 0
 }
 
-func (d *docVisitState) ResetBytesRead(val uint64) {}
+func (d *docVisitState) ResetBytesRead(val uint64) {
+	d.bytesRead = val
+}
 
 type docValueReader struct {
 	field          string
@@ -305,6 +307,7 @@ func (s *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
 		if dvs.segment != s {
 			dvs.segment = s
 			dvs.dvrs = nil
+			dvs.bytesRead = 0
 		}
 	}
 
@@ -343,7 +346,9 @@ func (s *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
 				if err != nil {
 					return dvs, err
 				}
-				dvs.incrementBytesRead(dvr.BytesRead())
+				dvs.ResetBytesRead(dvr.BytesRead())
+			} else {
+				dvs.ResetBytesRead(0)
 			}
 
 			_ = dvr.visitDocValues(localDocNum, visitor)

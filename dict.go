@@ -136,9 +136,13 @@ func (d *Dictionary) BytesRead() uint64 {
 	return atomic.LoadUint64(&d.bytesRead)
 }
 
-func (d *Dictionary) ResetBytesRead(val uint64) {}
+func (d *Dictionary) ResetBytesRead(val uint64) {
+	d.bytesRead = 0
+}
 
-func (d *Dictionary) BytesWritten() uint64 {}
+func (d *Dictionary) BytesWritten() uint64 {
+	return 0
+}
 
 // DictionaryIterator is an iterator for term dictionary
 type DictionaryIterator struct {

@@ -16,7 +16,6 @@ package zap
 
 import (
 	"fmt"
-	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
 	index "github.com/blevesearch/bleve_index_api"
@@ -129,15 +128,15 @@ func (d *Dictionary) AutomatonIterator(a segment.Automaton,
 }
 
 func (d *Dictionary) incrementBytesRead(val uint64) {
-	atomic.AddUint64(&d.bytesRead, val)
+	d.bytesRead += val
 }
 
 func (d *Dictionary) BytesRead() uint64 {
-	return atomic.LoadUint64(&d.bytesRead)
+	return d.bytesRead
 }
 
 func (d *Dictionary) ResetBytesRead(val uint64) {
-	d.bytesRead = 0
+	d.bytesRead = val
 }
 
 func (d *Dictionary) BytesWritten() uint64 {

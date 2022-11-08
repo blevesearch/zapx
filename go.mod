@@ -4,9 +4,9 @@ go 1.18
 
 require (
 	github.com/RoaringBitmap/roaring v0.9.4
-	github.com/blevesearch/bleve_index_api v1.0.4
+	github.com/blevesearch/bleve_index_api v1.0.5
 	github.com/blevesearch/mmap-go v1.0.4
-	github.com/blevesearch/scorch_segment_api/v2 v2.1.3
+	github.com/blevesearch/scorch_segment_api/v2 v2.1.4
 	github.com/blevesearch/vellum v1.0.9
 	github.com/golang/snappy v0.0.1
 	github.com/spf13/cobra v1.4.0

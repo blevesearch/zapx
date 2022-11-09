@@ -12,6 +12,10 @@ type stubDocument struct {
 	composite []*stubField
 }
 
+func (s *stubDocument) StoredFieldsBytes() uint64 {
+	return 0
+}
+
 func (s *stubDocument) ID() string {
 	return s.id
 }

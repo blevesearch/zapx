@@ -2,12 +2,12 @@ github.com/RoaringBitmap/roaring v0.9.4 h1:ckvZSX5gwCRaJYBNe7syNawCU5oruY9gQmjXl
 github.com/RoaringBitmap/roaring v0.9.4/go.mod h1:icnadbWcNyfEHlYdr+tDlOTih1Bf/h+rzPpv4sbomAA=
 github.com/bits-and-blooms/bitset v1.2.0 h1:Kn4yilvwNtMACtf1eYDlG8H77R07mZSPbMjLyS07ChA=
 github.com/bits-and-blooms/bitset v1.2.0/go.mod h1:gIdJ4wp64HaoK2YrL1Q5/N7Y16edYb8uY+O0FJTyyDA=
-github.com/blevesearch/bleve_index_api v1.0.4 h1:mtlzsyJjMIlDngqqB1mq8kPryUMIuEVVbRbJHOWEexU=
-github.com/blevesearch/bleve_index_api v1.0.4/go.mod h1:YXMDwaXFFXwncRS8UobWs7nvo0DmusriM1nztTlj1ms=
+github.com/blevesearch/bleve_index_api v1.0.5 h1:Lc986kpC4Z0/n1g3gg8ul7H+lxgOQPcXb9SxvQGu+tw=
+github.com/blevesearch/bleve_index_api v1.0.5/go.mod h1:YXMDwaXFFXwncRS8UobWs7nvo0DmusriM1nztTlj1ms=
 github.com/blevesearch/mmap-go v1.0.4 h1:OVhDhT5B/M1HNPpYPBKIEJaD0F3Si+CrEKULGCDPWmc=
 github.com/blevesearch/mmap-go v1.0.4/go.mod h1:EWmEAOmdAS9z/pi/+Toxu99DnsbhG1TIxUoRmJw/pSs=
-github.com/blevesearch/scorch_segment_api/v2 v2.1.3 h1:2UzpR2dR5DvSZk8tVJkcQ7D5xhoK/UBelYw8ttBHrRQ=
-github.com/blevesearch/scorch_segment_api/v2 v2.1.3/go.mod h1:eZrfp1y+lUh+DzFjUcTBUSnKGuunyFIpBIvqYVzJfvc=
+github.com/blevesearch/scorch_segment_api/v2 v2.1.4 h1:LmGmo5twU3gV+natJbKmOktS9eMhokPGKWuR+jX84vk=
+github.com/blevesearch/scorch_segment_api/v2 v2.1.4/go.mod h1:PgVnbbg/t1UkgezPDu8EHLi1BHQ17xUwsFdU6NnOYS0=
 github.com/blevesearch/vellum v1.0.9 h1:PL+NWVk3dDGPCV0hoDu9XLLJgqU4E5s/dOeEJByQ2uQ=
 github.com/blevesearch/vellum v1.0.9/go.mod h1:ul1oT0FhSMDIExNjIxHqJoGpVrBpKCdgDQNxfqgJt7k=
 github.com/cpuguy83/go-md2man/v2 v2.0.1/go.mod h1:tgQtvFlXSQOSOSIRvRPT7W67SCa46tRHOmNcaadrF8o=

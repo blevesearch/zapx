@@ -31,8 +31,10 @@ func init() {
 	reflectStaticSizeMetaData = int(reflect.TypeOf(md).Size())
 }
 
-var termSeparator byte = 0xff
-var termSeparatorSplitSlice = []byte{termSeparator}
+var (
+	termSeparator           byte = 0xff
+	termSeparatorSplitSlice      = []byte{termSeparator}
+)
 
 type chunkedContentCoder struct {
 	final     []byte
@@ -40,18 +42,15 @@ type chunkedContentCoder struct {
 	currChunk uint64
 	chunkLens []uint64
 
-	w                io.Writer
-	progressiveWrite bool
-
-	chunkMetaBuf bytes.Buffer
-	chunkBuf     bytes.Buffer
-
-	chunkMeta []MetaData
-
 	compressed []byte // temp buf for snappy compression
 
-	// atomic access to this variable
-	bytesWritten uint64
+	w                io.Writer
+	bytesWritten     uint64 // atomic access to this variable
+	progressiveWrite bool
+
+	chunkMeta    []MetaData
+	chunkMetaBuf bytes.Buffer
+	chunkBuf     bytes.Buffer
 }
 
 // MetaData represents the data information inside a
@@ -64,7 +63,8 @@ type MetaData struct {
 // newChunkedContentCoder returns a new chunk content coder which
 // packs data into chunks based on the provided chunkSize
 func newChunkedContentCoder(chunkSize uint64, maxDocNum uint64,
-	w io.Writer, progressiveWrite bool) *chunkedContentCoder {
+	w io.Writer, progressiveWrite bool,
+) *chunkedContentCoder {
 	total := maxDocNum/chunkSize + 1
 	rv := &chunkedContentCoder{
 		chunkSize:        chunkSize,
@@ -191,7 +191,6 @@ func (c *chunkedContentCoder) Add(docNum uint64, vals []byte) error {
 //
 // | ..... data ..... | chunk offsets (varints)
 // | position of chunk offsets (uint64) | number of offsets (uint64) |
-//
 func (c *chunkedContentCoder) Write() (int, error) {
 	var tw int
 

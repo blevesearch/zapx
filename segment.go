@@ -103,7 +103,7 @@ type SegmentBase struct {
 	fieldDvNames      []string                   // field names cached in fieldDvReaders
 	size              uint64
 
-	// atomic access to this variable
+	// atomic access to these variables
 	bytesRead    uint64
 	bytesWritten uint64
 

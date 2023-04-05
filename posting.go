@@ -109,7 +109,6 @@ type PostingsList struct {
 
 	chunkSize uint64
 
-	// atomic access to this variable
 	bytesRead uint64
 }
 
@@ -349,7 +348,6 @@ type PostingsIterator struct {
 	includeFreqNorm bool
 	includeLocs     bool
 
-	// atomic access to this variable
 	bytesRead uint64
 }
 

@@ -303,11 +303,16 @@ func (rv *PostingsList) read(postingsOffset uint64, d *Dictionary) error {
 		return fmt.Errorf("error loading roaring bitmap: %v", err)
 	}
 
-	rv.chunkSize, err = getChunkSize(d.sb.chunkMode,
+	chunkSize, err := getChunkSize(d.sb.chunkMode,
 		rv.postings.GetCardinality(), d.sb.numDocs)
 	if err != nil {
 		return err
+	} else if chunkSize == 0 {
+		return fmt.Errorf("chunk size is zero, chunkMode: %v, numDocs: %v",
+			d.sb.chunkMode, d.sb.numDocs)
 	}
+
+	rv.chunkSize = chunkSize
 
 	return nil
 }

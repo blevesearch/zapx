@@ -266,6 +266,10 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 			if rv.fst, ok = sb.fieldFSTs[rv.fieldID]; !ok {
 				// read the length of the vellum data
 				vellumLen, read := binary.Uvarint(sb.mem[dictStart : dictStart+binary.MaxVarintLen64])
+				if vellumLen == 0 {
+					sb.m.Unlock()
+					return nil, fmt.Errorf("empty dictionary for field: %v", field)
+				}
 				fstBytes := sb.mem[dictStart+uint64(read) : dictStart+uint64(read)+vellumLen]
 				rv.fst, err = vellum.Load(fstBytes)
 				if err != nil {

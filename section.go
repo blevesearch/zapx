@@ -11,6 +11,9 @@ import (
 type section interface {
 	Process(opaque map[int]resetable, docNum uint64, f index.Field, fieldID uint16)
 
+	// Might need a ProcessDocDone() which basically commits or does something specific after the entire doc is processed.
+	// for eg combinign the duplicate field's content so that the freq norm calculation is write in inverted index.
+
 	Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error)
 
 	AddrForField(opaque map[int]resetable, fieldID int) int
@@ -52,7 +55,54 @@ func (i *invertedIndexSection) Merge(opaque map[int]resetable, segments []*Segme
 }
 
 func (i *invertedIndexSection) InitOpaque() resetable {
-	return nil
+	// should be able to initialize the necessary objects and space for them that the inverted index needs:
+	//
+	// Term dictionaries for each field
+	//  field id -> term -> postings list id + 1
+	// Dicts []map[string]uint64
+
+	// // Terms for each field, where terms are sorted ascending
+	// //  field id -> []term
+	// DictKeys [][]string
+
+	// // Fields whose IncludeDocValues is true
+	// //  field id -> bool
+	// IncludeDocValues []bool
+
+	// // postings id -> bitmap of docNums
+	// Postings []*roaring.Bitmap
+
+	// // postings id -> freq/norm's, one for each docNum in postings
+	// FreqNorms        [][]interimFreqNorm
+	// freqNormsBacking []interimFreqNorm
+
+	// // postings id -> locs, one for each freq
+	// Locs        [][]interimLoc
+	// locsBacking []interimLoc
+
+	// numTermsPerPostingsList []int // key is postings list id
+	// numLocsPerPostingsList  []int // key is postings list id
+
+	// builder    *vellum.Builder
+	// builderBuf bytes.Buffer
+
+	// use the opaque for the inverted
+
+	return &invertedIndexOpaque{}
+}
+
+type invertedIndexOpaque struct {
+	results []index.Document
+}
+
+func (i *invertedIndexOpaque) Reset() {
+
+}
+func (i *invertedIndexOpaque) Set(key string, val interface{}) {
+	switch key {
+	case "result":
+		i.results = val.([]index.Document)
+	}
 }
 
 type numericRangeIndexSection struct {
@@ -197,4 +247,7 @@ type numericRangeOpaque struct {
 func (n *numericRangeOpaque) Reset() {
 	n.byField = map[int]nrNodes{}
 	n.fieldAddrs = map[int]int{}
+}
+
+func (n *numericRangeOpaque) Set(key string, val interface{}) {
 }

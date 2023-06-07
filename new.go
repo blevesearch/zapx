@@ -157,6 +157,7 @@ type interim struct {
 
 type resetable interface {
 	Reset()
+	Set(key string, value interface{})
 }
 
 func (s *interim) reset() (err error) {
@@ -255,6 +256,8 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, uint64, error) {
 
 	s.getOrDefineField("_id") // _id field is fieldID 0
 
+	// maybe it makes sense to decide what's the type of sections that are going to
+	// be there for this segment as part of this traversal.
 	for _, result := range s.results {
 		result.VisitComposite(func(field index.CompositeField) {
 			s.getOrDefineField(field.Name())
@@ -266,6 +269,8 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, uint64, error) {
 
 	sort.Strings(s.FieldsInv[1:]) // keep _id as first field
 
+	// population of the fieldsMap and the fieldsInv is non-section specific since its
+	// needed while writing the newFieldsSection stuff to writer.
 	for fieldID, fieldName := range s.FieldsInv {
 		s.FieldsMap[fieldName] = uint16(fieldID + 1)
 	}
@@ -276,6 +281,30 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, uint64, error) {
 		s.IncludeDocValues = make([]bool, len(s.FieldsInv))
 	}
 
+	// i suppose its better to have each section a view to the set of docs that are
+	// part of the batch so that each section utilize the docs to visit fields,
+	// getting section specific data from it and do whatever the heck it wants
+	// with it. based on the type of sections decided up above, we can perhaps
+	// do an InitOpaque() for each of them, set the results and then prepare data
+	// based on this?
+	//
+	// pseudo code:
+	// 	for i, x := range segmentSections {
+	// 	  s.opaque[i] = x.InitOpaque()
+	// }
+	//
+	// for _, opaque := range s.opaque {
+	// 	  opaque.Set("results", s.results)
+	// }
+	//
+	// can InitData be part a process API?
+	// 	for i, x := range segmentSections {
+	// 	  x.InitData()
+	// }
+	//
+	// this very specific to inverted index, better to just invoke this function within
+	// 1/index. the main point of this function is init i believe, so the InitOpaque
+	// should serve the purpose.
 	s.prepareDicts()
 
 	for _, dict := range s.DictKeys {
@@ -292,6 +321,10 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, uint64, error) {
 	var fdvIndexOffset uint64
 	var dictOffsets []uint64
 
+	// the writeDicts is something specific to inverted index stuff.
+	// it writes the postings list, doc values and term dictionary
+	// to the writer. so, these can be made part of the section.Persist()
+	// API.
 	if len(s.results) > 0 {
 		fdvIndexOffset, dictOffsets, err = s.writeDicts()
 		if err != nil {

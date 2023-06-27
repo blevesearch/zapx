@@ -128,6 +128,12 @@ func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	}
 
 	mergeOpaque := map[int]resetable{}
+	args := map[string]interface{}{
+		"chunkMode":  chunkMode,
+		"fieldsSame": fieldsSame,
+		"fieldsMap":  fieldsMap,
+		"numDocs":    numDocs,
+	}
 
 	if numDocs > 0 {
 		storedIndexOffset, newDocNums, err = mergeStoredAndRemap(segments, drops,
@@ -136,15 +142,15 @@ func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 			return nil, 0, 0, 0, 0, nil, nil, nil, 0, err
 		}
 
-		dictLocs, docValueOffset, err = persistMergedRest(segments, drops,
-			fieldsInv, fieldsMap, fieldsSame,
-			newDocNums, numDocs, chunkMode, cr, closeCh)
-		if err != nil {
-			return nil, 0, 0, 0, 0, nil, nil, nil, 0, err
-		}
+		// dictLocs, docValueOffset, err = persistMergedRest(segments, drops, fieldsInv, fieldsMap, fieldsSame, newDocNums, numDocs, chunkMode, cr, closeCh)
+		// if err != nil {
+		// 	return nil, 0, 0, 0, 0, nil, nil, nil, 0, err
+		// }
 
 		// at this point, ask each section implementation to merge itself
-		for _, x := range segmentSections {
+		for i, x := range segmentSections {
+			mergeOpaque[int(i)] = x.InitOpaque(args)
+
 			err = x.Merge(mergeOpaque, segments, drops, fieldsInv, newDocNums, cr, closeCh)
 			if err != nil {
 				return nil, 0, 0, 0, 0, nil, nil, nil, 0, err
@@ -166,7 +172,7 @@ func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		return nil, 0, 0, 0, 0, nil, nil, nil, 0, err
 	}
 
-	return newDocNums, numDocs, storedIndexOffset, fieldsIndexOffset, docValueOffset, dictLocs, fieldsInv, fieldsMap, newFieldsIndexOffset,nil
+	return newDocNums, numDocs, storedIndexOffset, fieldsIndexOffset, docValueOffset, dictLocs, fieldsInv, fieldsMap, newFieldsIndexOffset, nil
 }
 
 // mapFields takes the fieldsInv list and returns a map of fieldName
@@ -192,17 +198,18 @@ func computeNewDocCount(segments []*SegmentBase, drops []*roaring.Bitmap) uint64
 	return newDocCount
 }
 
-func persistMergedRest(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
+func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
 	fieldsInv []string, fieldsMap map[string]uint16, fieldsSame bool,
 	newDocNumsIn [][]uint64, newSegDocCount uint64, chunkMode uint32,
-	w *CountHashWriter, closeCh chan struct{}) ([]uint64, uint64, error) {
+	w *CountHashWriter, closeCh chan struct{}) (map[int]int, uint64, error) {
 	var bufMaxVarintLen64 []byte = make([]byte, binary.MaxVarintLen64)
 	var bufLoc []uint64
 
 	var postings *PostingsList
 	var postItr *PostingsIterator
 
-	rv := make([]uint64, len(fieldsInv))
+	fieldAddrs := make(map[int]int)
+	dictOffsets := make([]uint64, len(fieldsInv))
 	fieldDvLocsStart := make([]uint64, len(fieldsInv))
 	fieldDvLocsEnd := make([]uint64, len(fieldsInv))
 
@@ -403,8 +410,12 @@ func persistMergedRest(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
 			return nil, 0, err
 		}
 
-		rv[fieldID] = dictOffset
+		dictOffsets[fieldID] = dictOffset
 
+		// perhaps rather than populating the slice we can just write the offsets at
+		// the beginning/end of the section. the format followed should be consistent
+		// across process, persist and merge
+		//
 		// get the field doc value offset (start)
 		fieldDvLocsStart[fieldID] = uint64(w.Count())
 
@@ -464,6 +475,25 @@ func persistMergedRest(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
 			fieldDvLocsEnd[fieldID] = fieldNotUninverted
 		}
 
+		fieldStart := w.Count()
+
+		err = binary.Write(w, binary.BigEndian, fieldDvLocsStart[fieldID])
+		if err != nil {
+			return nil, 0, err
+		}
+
+		err = binary.Write(w, binary.BigEndian, fieldDvLocsEnd[fieldID])
+		if err != nil {
+			return nil, 0, err
+		}
+
+		err = binary.Write(w, binary.BigEndian, dictOffsets[fieldID])
+		if err != nil {
+			return nil, 0, err
+		}
+
+		fieldAddrs[fieldID] = fieldStart
+
 		// reset vellum buffer and vellum builder
 		vellumBuf.Reset()
 		err = newVellum.Reset(&vellumBuf)
@@ -474,21 +504,21 @@ func persistMergedRest(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
 
 	fieldDvLocsOffset := uint64(w.Count())
 
-	buf := bufMaxVarintLen64
-	for i := 0; i < len(fieldDvLocsStart); i++ {
-		n := binary.PutUvarint(buf, fieldDvLocsStart[i])
-		_, err := w.Write(buf[:n])
-		if err != nil {
-			return nil, 0, err
-		}
-		n = binary.PutUvarint(buf, fieldDvLocsEnd[i])
-		_, err = w.Write(buf[:n])
-		if err != nil {
-			return nil, 0, err
-		}
-	}
+	// buf := bufMaxVarintLen64
+	// for i := 0; i < len(fieldDvLocsStart); i++ {
+	// 	n := binary.PutUvarint(buf, fieldDvLocsStart[i])
+	// 	_, err := w.Write(buf[:n])
+	// 	if err != nil {
+	// 		return nil, 0, err
+	// 	}
+	// 	n = binary.PutUvarint(buf, fieldDvLocsEnd[i])
+	// 	_, err = w.Write(buf[:n])
+	// 	if err != nil {
+	// 		return nil, 0, err
+	// 	}
+	// }
 
-	return rv, fieldDvLocsOffset, nil
+	return fieldAddrs, fieldDvLocsOffset, nil
 }
 
 func mergeTermFreqNormLocsByCopying(term []byte, postItr *PostingsIterator,

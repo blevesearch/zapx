@@ -289,27 +289,22 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, uint64, error) {
 	// based on this?
 	//
 	// pseudo code:
-	// 	for i, x := range segmentSections {
-	// 	  s.opaque[i] = x.InitOpaque()
-	// }
-	//
-	// for _, opaque := range s.opaque {
-	// 	  opaque.Set("results", s.results)
-	// }
-	//
-	// can InitData be part a process API?
-	// 	for i, x := range segmentSections {
-	// 	  x.InitData()
-	// }
-	//
-	// this very specific to inverted index, better to just invoke this function within
-	// 1/index. the main point of this function is init i believe, so the InitOpaque
-	// should serve the purpose.
-	s.prepareDicts()
-
-	for _, dict := range s.DictKeys {
-		sort.Strings(dict)
+	args := map[string]interface{}{
+		"results":   s.results,
+		"chunkMode": s.chunkMode,
 	}
+	for i, x := range segmentSections {
+		s.opaque[int(i)] = x.InitOpaque(args)
+	}
+
+	// this very specific to inverted index, better to just invoke this function within
+	// 1/index. the main point of this function is init i believe, so the InitData
+	// should serve the purpose.
+	// s.prepareDicts()
+
+	// for _, dict := range s.DictKeys {
+	// 	sort.Strings(dict)
+	// }
 
 	s.processDocuments()
 
@@ -325,18 +320,21 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, uint64, error) {
 	// it writes the postings list, doc values and term dictionary
 	// to the writer. so, these can be made part of the section.Persist()
 	// API.
-	if len(s.results) > 0 {
-		fdvIndexOffset, dictOffsets, err = s.writeDicts()
-		if err != nil {
-			return 0, 0, 0, nil, 0, err
-		}
-	} else {
-		dictOffsets = make([]uint64, len(s.FieldsInv))
-	}
+	// if len(s.results) > 0 {
+	// 	fdvIndexOffset, dictOffsets, err = s.writeDicts()
+	// 	if err != nil {
+	// 		return 0, 0, 0, nil, 0, err
+	// 	}
+	// } else {
+	// 	dictOffsets = make([]uint64, len(s.FieldsInv))
+	// }
 
 	// we can persist other indexes at this point
 	for _, x := range segmentSections {
-		x.Persist(s.opaque, s.w)
+		_, err = x.Persist(s.opaque, s.w)
+		if err != nil {
+			return 0, 0, 0, nil, 0, err
+		}
 	}
 
 	// we can persist a new fields section here
@@ -387,7 +385,6 @@ func (s *interim) prepareDicts() {
 
 		dict := s.Dicts[fieldID]
 		dictKeys := s.DictKeys[fieldID]
-
 		tfs := field.AnalyzedTokenFrequencies()
 		for term, tf := range tfs {
 			pidPlus1, exists := dict[term]
@@ -505,14 +502,14 @@ func (s *interim) processDocument(docNum uint64,
 			section.Process(s.opaque, docNum, field, fieldID)
 		}
 
-		fieldLens[fieldID] += field.AnalyzedLength()
+		// fieldLens[fieldID] += field.AnalyzedLength()
 
-		existingFreqs := fieldTFs[fieldID]
-		if existingFreqs != nil {
-			existingFreqs.MergeAll(field.Name(), field.AnalyzedTokenFrequencies())
-		} else {
-			fieldTFs[fieldID] = field.AnalyzedTokenFrequencies()
-		}
+		// existingFreqs := fieldTFs[fieldID]
+		// if existingFreqs != nil {
+		// 	existingFreqs.MergeAll(field.Name(), field.AnalyzedTokenFrequencies())
+		// } else {
+		// 	fieldTFs[fieldID] = field.AnalyzedTokenFrequencies()
+		// }
 	}
 
 	// walk each composite field
@@ -523,48 +520,55 @@ func (s *interim) processDocument(docNum uint64,
 	// walk each field
 	result.VisitFields(visitField)
 
+	// perhaps calling a ProcessDoc() for each section over here makes sense.
+
 	// now that it's been rolled up into fieldTFs, walk that
-	for fieldID, tfs := range fieldTFs {
-		dict := s.Dicts[fieldID]
-		norm := math.Float32frombits(uint32(fieldLens[fieldID]))
+	// for fieldID, tfs := range fieldTFs {
+	// 	dict := s.Dicts[fieldID]
+	// 	norm := math.Float32frombits(uint32(fieldLens[fieldID]))
 
-		for term, tf := range tfs {
-			pid := dict[term] - 1
-			bs := s.Postings[pid]
-			bs.Add(uint32(docNum))
+	// 	for term, tf := range tfs {
+	// 		pid := dict[term] - 1
+	// 		bs := s.Postings[pid]
+	// 		bs.Add(uint32(docNum))
 
-			s.FreqNorms[pid] = append(s.FreqNorms[pid],
-				interimFreqNorm{
-					freq:    uint64(tf.Frequency()),
-					norm:    norm,
-					numLocs: len(tf.Locations),
-				})
+	// 		s.FreqNorms[pid] = append(s.FreqNorms[pid],
+	// 			interimFreqNorm{
+	// 				freq:    uint64(tf.Frequency()),
+	// 				norm:    norm,
+	// 				numLocs: len(tf.Locations),
+	// 			})
 
-			if len(tf.Locations) > 0 {
-				locs := s.Locs[pid]
+	// 		if len(tf.Locations) > 0 {
+	// 			locs := s.Locs[pid]
 
-				for _, loc := range tf.Locations {
-					var locf = uint16(fieldID)
-					if loc.Field != "" {
-						locf = uint16(s.getOrDefineField(loc.Field))
-					}
-					var arrayposs []uint64
-					if len(loc.ArrayPositions) > 0 {
-						arrayposs = loc.ArrayPositions
-					}
-					locs = append(locs, interimLoc{
-						fieldID:   locf,
-						pos:       uint64(loc.Position),
-						start:     uint64(loc.Start),
-						end:       uint64(loc.End),
-						arrayposs: arrayposs,
-					})
-				}
+	// 			for _, loc := range tf.Locations {
+	// 				var locf = uint16(fieldID)
+	// 				if loc.Field != "" {
+	// 					locf = uint16(s.getOrDefineField(loc.Field))
+	// 				}
+	// 				var arrayposs []uint64
+	// 				if len(loc.ArrayPositions) > 0 {
+	// 					arrayposs = loc.ArrayPositions
+	// 				}
+	// 				locs = append(locs, interimLoc{
+	// 					fieldID:   locf,
+	// 					pos:       uint64(loc.Position),
+	// 					start:     uint64(loc.Start),
+	// 					end:       uint64(loc.End),
+	// 					arrayposs: arrayposs,
+	// 				})
+	// 			}
 
-				s.Locs[pid] = locs
-			}
-		}
+	// 			s.Locs[pid] = locs
+	// 		}
+	// 	}
+	// }
+
+	for _, section := range segmentSections {
+		section.Process(s.opaque, docNum, nil, ^uint16(0))
 	}
+
 }
 
 func (s *interim) getBytesWritten() uint64 {

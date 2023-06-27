@@ -316,6 +316,11 @@ func (s *SegmentBase) loadFieldNew(fieldID uint16, addr uint64,
 		fieldSectionAddr := binary.BigEndian.Uint64(s.mem[pos : pos+8])
 		pos += 8
 		fieldSectionMap[fieldSectionType] = fieldSectionAddr
+
+		if fieldSectionType == sectionInvertedIndex {
+			// populate the dictLocs.
+			s.dictLocs[fieldID] = binary.BigEndian.Uint64(s.mem[fieldSectionAddr : fieldSectionAddr+8])
+		}
 	}
 
 	return nil
@@ -656,33 +661,30 @@ func (s *Segment) DictAddr(field string) (uint64, error) {
 }
 
 func (s *SegmentBase) loadDvReaders() error {
-	if s.docValueOffset == fieldNotUninverted || s.numDocs == 0 {
+
+	// evaluate -> s.docValueOffset == fieldNotUninverted
+	if s.numDocs == 0 {
 		return nil
 	}
 
-	var read uint64
-	for fieldID, field := range s.fieldsInv {
-		var fieldLocStart, fieldLocEnd uint64
-		var n int
-		fieldLocStart, n = binary.Uvarint(s.mem[s.docValueOffset+read : s.docValueOffset+read+binary.MaxVarintLen64])
-		if n <= 0 {
-			return fmt.Errorf("loadDvReaders: failed to read the docvalue offset start for field %d", fieldID)
-		}
-		read += uint64(n)
-		fieldLocEnd, n = binary.Uvarint(s.mem[s.docValueOffset+read : s.docValueOffset+read+binary.MaxVarintLen64])
-		if n <= 0 {
-			return fmt.Errorf("loadDvReaders: failed to read the docvalue offset end for field %d", fieldID)
-		}
-		read += uint64(n)
+	for fieldID, section := range s.fieldsSectionsMap {
+		fieldAddrStart := section[sectionInvertedIndex]
 
-		s.incrementBytesRead(read)
-		fieldDvReader, err := s.loadFieldDocValueReader(field, fieldLocStart, fieldLocEnd)
-		if err != nil {
-			return err
-		}
-		if fieldDvReader != nil {
-			s.fieldDvReaders[uint16(fieldID)] = fieldDvReader
-			s.fieldDvNames = append(s.fieldDvNames, field)
+		if fieldAddrStart > 0 {
+			// fixed encoding as of now, need to uvarint this
+			fieldDocValueStart := fieldAddrStart + 8
+			fieldDocValueEnd := fieldAddrStart + 8 + 8
+
+			fieldLocStart := binary.BigEndian.Uint64(s.mem[fieldDocValueStart : fieldDocValueStart+8])
+			fieldLocEnd := binary.BigEndian.Uint64(s.mem[fieldDocValueEnd : fieldDocValueEnd+8])
+			fieldDvReader, err := s.loadFieldDocValueReader(s.fieldsInv[fieldID], fieldLocStart, fieldLocEnd)
+			if err != nil {
+				return err
+			}
+			if fieldDvReader != nil {
+				s.fieldDvReaders[uint16(fieldID)] = fieldDvReader
+				s.fieldDvNames = append(s.fieldDvNames, s.fieldsInv[fieldID])
+			}
 		}
 	}
 

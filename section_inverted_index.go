@@ -3,7 +3,6 @@ package zap
 import (
 	"bytes"
 	"encoding/binary"
-	"log"
 	"math"
 	"sort"
 
@@ -23,7 +22,6 @@ func (i *invertedIndexSection) Process(opaque map[int]resetable, docNum uint64, 
 }
 
 func (i *invertedIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
-
 	invIndexOpaque := i.getInvertedIndexOpaque(opaque)
 	_, _ = invIndexOpaque.writeDicts(w)
 	return 0, nil
@@ -314,11 +312,6 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		fieldStart := w.Count()
 
 		// todo: uvarint these offsets
-		err = binary.Write(w, binary.BigEndian, dictOffsets[fieldID])
-		if err != nil {
-			return nil, 0, err
-		}
-
 		err = binary.Write(w, binary.BigEndian, fieldDvLocsStart[fieldID])
 		if err != nil {
 			return nil, 0, err
@@ -329,6 +322,10 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			return nil, 0, err
 		}
 
+		err = binary.Write(w, binary.BigEndian, dictOffsets[fieldID])
+		if err != nil {
+			return nil, 0, err
+		}
 		fieldAddrs[fieldID] = fieldStart
 
 		// reset vellum buffer and vellum builder
@@ -573,11 +570,6 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 		fieldStart := w.Count()
 
 		// todo: uvarint these offsets
-		err = binary.Write(w, binary.BigEndian, dictOffsets[fieldID])
-		if err != nil {
-			return nil, err
-		}
-
 		err = binary.Write(w, binary.BigEndian, fdvOffsetsStart[fieldID])
 		if err != nil {
 			return nil, err
@@ -588,13 +580,18 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 			return nil, err
 		}
 
+		err = binary.Write(w, binary.BigEndian, dictOffsets[fieldID])
+		if err != nil {
+			return nil, err
+		}
+
 		io.fieldAddrs[fieldID] = fieldStart
 		// must record/update the addrForField info for this field over here?
 	}
 
-	fdvIndexOffset := uint64(w.Count())
+	// fdvIndexOffset := uint64(w.Count())
 
-	log.Printf("fdvIndexOffset: %d", fdvIndexOffset)
+	// log.Printf("fdvIndexOffset: %d", fdvIndexOffset)
 
 	return dictOffsets, nil
 }
@@ -709,6 +706,9 @@ func (i *invertedIndexOpaque) prepareDicts() {
 		totTFs += len(tfs)
 
 		i.DictKeys[fieldID] = dictKeys
+		if field.Options().IncludeDocValues() {
+			i.IncludeDocValues[fieldID] = true
+		}
 	}
 
 	for _, result := range i.results {
@@ -734,6 +734,12 @@ func (i *invertedIndexOpaque) prepareDicts() {
 			}
 		}
 		i.Postings = postings
+	}
+
+	if cap(i.IncludeDocValues) >= len(i.FieldsInv) {
+		i.IncludeDocValues = i.IncludeDocValues[:len(i.FieldsInv)]
+	} else {
+		i.IncludeDocValues = make([]bool, len(i.FieldsInv))
 	}
 
 	if cap(i.FreqNorms) >= numPostingsLists {
@@ -864,13 +870,57 @@ type invertedIndexOpaque struct {
 
 	fieldAddrs map[int]int
 
-	// merge related stuff?
 	fieldsSame bool
 	numDocs    uint64
 }
 
-func (i *invertedIndexOpaque) Reset() {
+func (io *invertedIndexOpaque) Reset() (err error) {
 	// cleanup stuff over here
+	io.results = nil
+	io.chunkMode = 0
+	io.FieldsMap = nil
+	io.FieldsInv = nil
+	for i := range io.Dicts {
+		io.Dicts[i] = nil
+	}
+	io.Dicts = io.Dicts[:0]
+	for i := range io.DictKeys {
+		io.DictKeys[i] = io.DictKeys[i][:0]
+	}
+	io.DictKeys = io.DictKeys[:0]
+	for i := range io.IncludeDocValues {
+		io.IncludeDocValues[i] = false
+	}
+	io.IncludeDocValues = io.IncludeDocValues[:0]
+	for _, idn := range io.Postings {
+		idn.Clear()
+	}
+	io.Postings = io.Postings[:0]
+	io.FreqNorms = io.FreqNorms[:0]
+	for i := range io.freqNormsBacking {
+		io.freqNormsBacking[i] = interimFreqNorm{}
+	}
+	io.freqNormsBacking = io.freqNormsBacking[:0]
+	io.Locs = io.Locs[:0]
+	for i := range io.locsBacking {
+		io.locsBacking[i] = interimLoc{}
+	}
+	io.locsBacking = io.locsBacking[:0]
+	io.numTermsPerPostingsList = io.numTermsPerPostingsList[:0]
+	io.numLocsPerPostingsList = io.numLocsPerPostingsList[:0]
+	io.builderBuf.Reset()
+	if io.builder != nil {
+		err = io.builder.Reset(&io.builderBuf)
+	}
+
+	io.reusableFieldLens = io.reusableFieldLens[:0]
+	io.reusableFieldTFs = io.reusableFieldTFs[:0]
+
+	io.tmp0 = io.tmp0[:0]
+	io.fieldsSame = false
+	io.numDocs = 0
+
+	return err
 }
 func (i *invertedIndexOpaque) Set(key string, val interface{}) {
 	switch key {

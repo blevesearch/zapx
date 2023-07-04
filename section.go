@@ -18,6 +18,11 @@ type section interface {
 	InitOpaque(args map[string]interface{}) resetable
 }
 
+type resetable interface {
+	Reset() error
+	Set(key string, value interface{})
+}
+
 const (
 	sectionInvertedIndex = iota
 	sectionNumericRangeIndex

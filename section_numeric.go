@@ -190,9 +190,11 @@ type numericRangeOpaque struct {
 	fieldAddrs map[int]int
 }
 
-func (n *numericRangeOpaque) Reset() {
+func (n *numericRangeOpaque) Reset() error {
 	n.byField = map[int]nrNodes{}
 	n.fieldAddrs = map[int]int{}
+
+	return nil
 }
 
 func (n *numericRangeOpaque) Set(key string, val interface{}) {

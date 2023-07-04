@@ -21,10 +21,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/RoaringBitmap/roaring"
 	index "github.com/blevesearch/bleve_index_api"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
-	"github.com/blevesearch/vellum"
 	"github.com/golang/snappy"
 )
 
@@ -109,35 +107,6 @@ type interim struct {
 	//  field id -> name
 	FieldsInv []string
 
-	// Term dictionaries for each field
-	//  field id -> term -> postings list id + 1
-	Dicts []map[string]uint64
-
-	// Terms for each field, where terms are sorted ascending
-	//  field id -> []term
-	DictKeys [][]string
-
-	// Fields whose IncludeDocValues is true
-	//  field id -> bool
-	IncludeDocValues []bool
-
-	// postings id -> bitmap of docNums
-	Postings []*roaring.Bitmap
-
-	// postings id -> freq/norm's, one for each docNum in postings
-	FreqNorms        [][]interimFreqNorm
-	freqNormsBacking []interimFreqNorm
-
-	// postings id -> locs, one for each freq
-	Locs        [][]interimLoc
-	locsBacking []interimLoc
-
-	numTermsPerPostingsList []int // key is postings list id
-	numLocsPerPostingsList  []int // key is postings list id
-
-	builder    *vellum.Builder
-	builderBuf bytes.Buffer
-
 	metaBuf bytes.Buffer
 
 	tmp0 []byte
@@ -154,49 +123,12 @@ type interim struct {
 	opaque map[int]resetable
 }
 
-type resetable interface {
-	Reset()
-	Set(key string, value interface{})
-}
-
 func (s *interim) reset() (err error) {
 	s.results = nil
 	s.chunkMode = 0
 	s.w = nil
 	s.FieldsMap = nil
 	s.FieldsInv = nil
-	for i := range s.Dicts {
-		s.Dicts[i] = nil
-	}
-	s.Dicts = s.Dicts[:0]
-	for i := range s.DictKeys {
-		s.DictKeys[i] = s.DictKeys[i][:0]
-	}
-	s.DictKeys = s.DictKeys[:0]
-	for i := range s.IncludeDocValues {
-		s.IncludeDocValues[i] = false
-	}
-	s.IncludeDocValues = s.IncludeDocValues[:0]
-	for _, idn := range s.Postings {
-		idn.Clear()
-	}
-	s.Postings = s.Postings[:0]
-	s.FreqNorms = s.FreqNorms[:0]
-	for i := range s.freqNormsBacking {
-		s.freqNormsBacking[i] = interimFreqNorm{}
-	}
-	s.freqNormsBacking = s.freqNormsBacking[:0]
-	s.Locs = s.Locs[:0]
-	for i := range s.locsBacking {
-		s.locsBacking[i] = interimLoc{}
-	}
-	s.locsBacking = s.locsBacking[:0]
-	s.numTermsPerPostingsList = s.numTermsPerPostingsList[:0]
-	s.numLocsPerPostingsList = s.numLocsPerPostingsList[:0]
-	s.builderBuf.Reset()
-	if s.builder != nil {
-		err = s.builder.Reset(&s.builderBuf)
-	}
 	s.metaBuf.Reset()
 	s.tmp0 = s.tmp0[:0]
 	s.tmp1 = s.tmp1[:0]
@@ -211,7 +143,7 @@ func (s *interim) reset() (err error) {
 
 	if s.opaque != nil {
 		for _, v := range s.opaque {
-			v.Reset()
+			err = v.Reset()
 		}
 	} else {
 		s.opaque = map[int]resetable{}
@@ -274,12 +206,6 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, uint64, error) {
 		s.FieldsMap[fieldName] = uint16(fieldID + 1)
 	}
 
-	if cap(s.IncludeDocValues) >= len(s.FieldsInv) {
-		s.IncludeDocValues = s.IncludeDocValues[:len(s.FieldsInv)]
-	} else {
-		s.IncludeDocValues = make([]bool, len(s.FieldsInv))
-	}
-
 	// i suppose its better to have each section a view to the set of docs that are
 	// part of the batch so that each section utilize the docs to visit fields,
 	// getting section specific data from it and do whatever the heck it wants
@@ -336,16 +262,6 @@ func (s *interim) getOrDefineField(fieldName string) int {
 		fieldIDPlus1 = uint16(len(s.FieldsInv) + 1)
 		s.FieldsMap[fieldName] = fieldIDPlus1
 		s.FieldsInv = append(s.FieldsInv, fieldName)
-
-		s.Dicts = append(s.Dicts, make(map[string]uint64))
-
-		n := len(s.DictKeys)
-		if n < cap(s.DictKeys) {
-			s.DictKeys = s.DictKeys[:n+1]
-			s.DictKeys[n] = s.DictKeys[n][:0]
-		} else {
-			s.DictKeys = append(s.DictKeys, []string(nil))
-		}
 	}
 
 	return int(fieldIDPlus1 - 1)
@@ -374,19 +290,10 @@ func (s *interim) processDocument(docNum uint64,
 
 		fieldID := uint16(s.getOrDefineField(field.Name()))
 
-		// section specific processing
+		// section specific processing of the field
 		for _, section := range segmentSections {
 			section.Process(s.opaque, docNum, field, fieldID)
 		}
-
-		// fieldLens[fieldID] += field.AnalyzedLength()
-
-		// existingFreqs := fieldTFs[fieldID]
-		// if existingFreqs != nil {
-		// 	existingFreqs.MergeAll(field.Name(), field.AnalyzedTokenFrequencies())
-		// } else {
-		// 	fieldTFs[fieldID] = field.AnalyzedTokenFrequencies()
-		// }
 	}
 
 	// walk each composite field
@@ -397,51 +304,7 @@ func (s *interim) processDocument(docNum uint64,
 	// walk each field
 	result.VisitFields(visitField)
 
-	// perhaps calling a ProcessDoc() for each section over here makes sense.
-
-	// now that it's been rolled up into fieldTFs, walk that
-	// for fieldID, tfs := range fieldTFs {
-	// 	dict := s.Dicts[fieldID]
-	// 	norm := math.Float32frombits(uint32(fieldLens[fieldID]))
-
-	// 	for term, tf := range tfs {
-	// 		pid := dict[term] - 1
-	// 		bs := s.Postings[pid]
-	// 		bs.Add(uint32(docNum))
-
-	// 		s.FreqNorms[pid] = append(s.FreqNorms[pid],
-	// 			interimFreqNorm{
-	// 				freq:    uint64(tf.Frequency()),
-	// 				norm:    norm,
-	// 				numLocs: len(tf.Locations),
-	// 			})
-
-	// 		if len(tf.Locations) > 0 {
-	// 			locs := s.Locs[pid]
-
-	// 			for _, loc := range tf.Locations {
-	// 				var locf = uint16(fieldID)
-	// 				if loc.Field != "" {
-	// 					locf = uint16(s.getOrDefineField(loc.Field))
-	// 				}
-	// 				var arrayposs []uint64
-	// 				if len(loc.ArrayPositions) > 0 {
-	// 					arrayposs = loc.ArrayPositions
-	// 				}
-	// 				locs = append(locs, interimLoc{
-	// 					fieldID:   locf,
-	// 					pos:       uint64(loc.Position),
-	// 					start:     uint64(loc.Start),
-	// 					end:       uint64(loc.End),
-	// 					arrayposs: arrayposs,
-	// 				})
-	// 			}
-
-	// 			s.Locs[pid] = locs
-	// 		}
-	// 	}
-	// }
-
+	// finish up processing this doc
 	for _, section := range segmentSections {
 		section.Process(s.opaque, docNum, nil, ^uint16(0))
 	}
@@ -490,9 +353,9 @@ func (s *interim) writeStoredFields() (
 				docStoredFields[fieldID] = isf
 			}
 
-			if field.Options().IncludeDocValues() {
-				s.IncludeDocValues[fieldID] = true
-			}
+			// if field.Options().IncludeDocValues() {
+			// 	s.IncludeDocValues[fieldID] = true
+			// }
 
 			err := ValidateDocFields(field)
 			if err != nil && validationErr == nil {

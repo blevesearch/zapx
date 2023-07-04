@@ -318,8 +318,8 @@ func (s *SegmentBase) loadFieldNew(fieldID uint16, addr uint64,
 		fieldSectionMap[fieldSectionType] = fieldSectionAddr
 
 		if fieldSectionType == sectionInvertedIndex {
-			// populate the dictLocs.
-			s.dictLocs[fieldID] = binary.BigEndian.Uint64(s.mem[fieldSectionAddr : fieldSectionAddr+8])
+			// populate the dictLocs. fixed encoding as of now.
+			s.dictLocs[fieldID] = binary.BigEndian.Uint64(s.mem[fieldSectionAddr+8+8 : fieldSectionAddr+8+8+8])
 		}
 	}
 
@@ -672,8 +672,8 @@ func (s *SegmentBase) loadDvReaders() error {
 
 		if fieldAddrStart > 0 {
 			// fixed encoding as of now, need to uvarint this
-			fieldDocValueStart := fieldAddrStart + 8
-			fieldDocValueEnd := fieldAddrStart + 8 + 8
+			fieldDocValueStart := fieldAddrStart
+			fieldDocValueEnd := fieldAddrStart + 8
 
 			fieldLocStart := binary.BigEndian.Uint64(s.mem[fieldDocValueStart : fieldDocValueStart+8])
 			fieldLocEnd := binary.BigEndian.Uint64(s.mem[fieldDocValueEnd : fieldDocValueEnd+8])

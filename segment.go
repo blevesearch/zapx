@@ -77,12 +77,6 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 		return nil, err
 	}
 
-	err = rv.loadFields()
-	if err != nil {
-		_ = rv.Close()
-		return nil, err
-	}
-
 	err = rv.loadDvReaders()
 	if err != nil {
 		_ = rv.Close()
@@ -304,6 +298,11 @@ func (s *SegmentBase) loadFieldNew(fieldID uint16, addr uint64,
 	pos := addr
 	fieldNameLen, sz := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(sz)
+
+	fieldName := string(s.mem[pos : pos+fieldNameLen])
+	s.fieldsInv = append(s.fieldsInv, fieldName)
+	s.fieldsMap[fieldName] = uint16(fieldID + 1)
+
 	pos += fieldNameLen
 
 	fieldNumSections, sz := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])
@@ -319,44 +318,10 @@ func (s *SegmentBase) loadFieldNew(fieldID uint16, addr uint64,
 
 		if fieldSectionType == sectionInvertedIndex {
 			// populate the dictLocs. fixed encoding as of now.
-			s.dictLocs[fieldID] = binary.BigEndian.Uint64(s.mem[fieldSectionAddr+8+8 : fieldSectionAddr+8+8+8])
+			s.dictLocs = append(s.dictLocs, binary.BigEndian.Uint64(s.mem[fieldSectionAddr+8+8:fieldSectionAddr+8+8+8]))
 		}
 	}
 
-	return nil
-}
-
-func (s *SegmentBase) loadFields() error {
-	// NOTE for now we assume the fields index immediately precedes
-	// the footer, and if this changes, need to adjust accordingly (or
-	// store explicit length), where s.mem was sliced from s.mm in Open().
-	fieldsIndexEnd := uint64(len(s.mem))
-
-	// iterate through fields index
-	var fieldID uint64
-	for s.fieldsIndexOffset+(8*fieldID) < fieldsIndexEnd {
-
-		addr := binary.BigEndian.Uint64(s.mem[s.fieldsIndexOffset+(8*fieldID) : s.fieldsIndexOffset+(8*fieldID)+8])
-
-		// accounting the address of the dictLoc being read from file
-		s.incrementBytesRead(8)
-
-		dictLoc, read := binary.Uvarint(s.mem[addr:fieldsIndexEnd])
-		n := uint64(read)
-		s.dictLocs = append(s.dictLocs, dictLoc)
-
-		var nameLen uint64
-		nameLen, read = binary.Uvarint(s.mem[addr+n : fieldsIndexEnd])
-		n += uint64(read)
-
-		name := string(s.mem[addr+n : addr+n+nameLen])
-
-		s.incrementBytesRead(n + nameLen)
-		s.fieldsInv = append(s.fieldsInv, name)
-		s.fieldsMap[name] = uint16(fieldID + 1)
-
-		fieldID++
-	}
 	return nil
 }
 

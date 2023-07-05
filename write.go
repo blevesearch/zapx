@@ -16,8 +16,9 @@ package zap
 
 import (
 	"encoding/binary"
-	"github.com/RoaringBitmap/roaring"
 	"io"
+
+	"github.com/RoaringBitmap/roaring"
 )
 
 // writes out the length of the roaring bitmap in bytes as varint

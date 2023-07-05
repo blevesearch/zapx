@@ -603,9 +603,9 @@ func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum
 	}
 
 	if fieldID == ^uint16(0) {
-		for fieldID, tfs := range io.reusableFieldTFs {
-			dict := io.Dicts[fieldID]
-			norm := math.Float32frombits(uint32(io.reusableFieldLens[fieldID]))
+		for fid, tfs := range io.reusableFieldTFs {
+			dict := io.Dicts[fid]
+			norm := math.Float32frombits(uint32(io.reusableFieldLens[fid]))
 
 			for term, tf := range tfs {
 				pid := dict[term] - 1
@@ -623,7 +623,7 @@ func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum
 					locs := io.Locs[pid]
 
 					for _, loc := range tf.Locations {
-						var locf = uint16(fieldID)
+						var locf = uint16(fid)
 						if loc.Field != "" {
 							locf = uint16(io.getOrDefineField(loc.Field))
 						}
@@ -665,6 +665,7 @@ func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum
 	if existingFreqs != nil {
 		existingFreqs.MergeAll(field.Name(), field.AnalyzedTokenFrequencies())
 	} else {
+		// log.Printf("analyzed token freqs %v", field.AnalyzedTokenFrequencies())
 		io.reusableFieldTFs[fieldID] = field.AnalyzedTokenFrequencies()
 	}
 }
@@ -674,6 +675,24 @@ func (i *invertedIndexOpaque) prepareDicts() {
 
 	var totTFs int
 	var totLocs int
+	i.FieldsMap = map[string]uint16{}
+
+	i.getOrDefineField("_id") // _id field is fieldID 0
+
+	for _, result := range i.results {
+		result.VisitComposite(func(field index.CompositeField) {
+			i.getOrDefineField(field.Name())
+		})
+		result.VisitFields(func(field index.Field) {
+			i.getOrDefineField(field.Name())
+		})
+	}
+
+	sort.Strings(i.FieldsInv[1:]) // keep _id as first field
+
+	for fieldID, fieldName := range i.FieldsInv {
+		i.FieldsMap[fieldName] = uint16(fieldID + 1)
+	}
 
 	visitField := func(field index.Field) {
 		fieldID := uint16(i.getOrDefineField(field.Name()))
@@ -711,6 +730,14 @@ func (i *invertedIndexOpaque) prepareDicts() {
 		}
 	}
 
+	if i.IncludeDocValues == nil {
+		if cap(i.IncludeDocValues) >= len(i.FieldsInv) {
+			i.IncludeDocValues = i.IncludeDocValues[:len(i.FieldsInv)]
+		} else {
+			i.IncludeDocValues = make([]bool, len(i.FieldsInv))
+		}
+	}
+
 	for _, result := range i.results {
 		// walk each composite field
 		result.VisitComposite(func(field index.CompositeField) {
@@ -734,12 +761,6 @@ func (i *invertedIndexOpaque) prepareDicts() {
 			}
 		}
 		i.Postings = postings
-	}
-
-	if cap(i.IncludeDocValues) >= len(i.FieldsInv) {
-		i.IncludeDocValues = i.IncludeDocValues[:len(i.FieldsInv)]
-	} else {
-		i.IncludeDocValues = make([]bool, len(i.FieldsInv))
 	}
 
 	if cap(i.FreqNorms) >= numPostingsLists {
@@ -924,7 +945,7 @@ func (io *invertedIndexOpaque) Reset() (err error) {
 }
 func (i *invertedIndexOpaque) Set(key string, val interface{}) {
 	switch key {
-	case "result":
+	case "results":
 		i.results = val.([]index.Document)
 	case "chunkMode":
 		i.chunkMode = val.(uint32)

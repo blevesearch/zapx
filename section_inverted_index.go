@@ -17,7 +17,6 @@ type invertedIndexSection struct {
 
 func (i *invertedIndexSection) Process(opaque map[int]resetable, docNum uint64, field index.Field, fieldID uint16) {
 	invIndexOpaque := i.getInvertedIndexOpaque(opaque)
-	// no need to handle the ^uint16(0) case here, its handled in opaque?
 	invIndexOpaque.process(field, fieldID, docNum)
 }
 
@@ -246,11 +245,6 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 
 		dictOffsets[fieldID] = dictOffset
 
-		// perhaps rather than populating the slice we can just write the offsets at
-		// the beginning/end of the section. the format followed should be consistent
-		// across process, persist and merge
-		//
-		// get the field doc value offset (start)
 		fieldDvLocsStart[fieldID] = uint64(w.Count())
 
 		// update the field doc values
@@ -477,7 +471,6 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 
 			tfEncoder.Close()
 			locEncoder.Close()
-			// io.incrementBytesWritten(locEncoder.getBytesWritten())
 
 			postingsOffset, err :=
 				writePostings(postingsBS, tfEncoder, locEncoder, nil, w, buf)
@@ -519,8 +512,6 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 			return nil, err
 		}
 
-		// io.incrementBytesWritten(uint64(len(vellumData)))
-
 		// reset vellum for reuse
 		io.builderBuf.Reset()
 
@@ -550,8 +541,6 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 			if err != nil {
 				return nil, err
 			}
-
-			// io.incrementBytesWritten(fdvEncoder.getBytesWritten())
 
 			fdvOffsetsStart[fieldID] = uint64(w.Count())
 
@@ -586,12 +575,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 		}
 
 		io.fieldAddrs[fieldID] = fieldStart
-		// must record/update the addrForField info for this field over here?
 	}
-
-	// fdvIndexOffset := uint64(w.Count())
-
-	// log.Printf("fdvIndexOffset: %d", fdvIndexOffset)
 
 	return dictOffsets, nil
 }
@@ -665,7 +649,6 @@ func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum
 	if existingFreqs != nil {
 		existingFreqs.MergeAll(field.Name(), field.AnalyzedTokenFrequencies())
 	} else {
-		// log.Printf("analyzed token freqs %v", field.AnalyzedTokenFrequencies())
 		io.reusableFieldTFs[fieldID] = field.AnalyzedTokenFrequencies()
 	}
 }

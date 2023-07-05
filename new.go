@@ -117,8 +117,6 @@ type interim struct {
 
 	// atomic access to this variable
 	bytesWritten uint64
-	// hacked in for numeric range, fit this into abstraction?
-	numericRangeData nrNodes
 
 	opaque map[int]resetable
 }
@@ -138,8 +136,6 @@ func (s *interim) reset() (err error) {
 	// reset the bytes written stat count
 	// to avoid leaking of bytesWritten across reuse cycles.
 	s.setBytesWritten(0)
-	// reset numeric range
-	s.numericRangeData = s.numericRangeData[:0]
 
 	if s.opaque != nil {
 		for _, v := range s.opaque {
@@ -187,8 +183,6 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, uint64, error) {
 
 	s.getOrDefineField("_id") // _id field is fieldID 0
 
-	// maybe it makes sense to decide what's the type of sections that are going to
-	// be there for this segment as part of this traversal.
 	for _, result := range s.results {
 		result.VisitComposite(func(field index.CompositeField) {
 			s.getOrDefineField(field.Name())
@@ -200,20 +194,10 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, uint64, error) {
 
 	sort.Strings(s.FieldsInv[1:]) // keep _id as first field
 
-	// population of the fieldsMap and the fieldsInv is non-section specific since its
-	// needed while writing the newFieldsSection stuff to writer.
 	for fieldID, fieldName := range s.FieldsInv {
 		s.FieldsMap[fieldName] = uint16(fieldID + 1)
 	}
 
-	// i suppose its better to have each section a view to the set of docs that are
-	// part of the batch so that each section utilize the docs to visit fields,
-	// getting section specific data from it and do whatever the heck it wants
-	// with it. based on the type of sections decided up above, we can perhaps
-	// do an InitOpaque() for each of them, set the results and then prepare data
-	// based on this?
-	//
-	// pseudo code:
 	args := map[string]interface{}{
 		"results":   s.results,
 		"chunkMode": s.chunkMode,
@@ -347,10 +331,6 @@ func (s *interim) writeStoredFields() (
 				isf.arrayposs = append(isf.arrayposs, field.ArrayPositions())
 				docStoredFields[fieldID] = isf
 			}
-
-			// if field.Options().IncludeDocValues() {
-			// 	s.IncludeDocValues[fieldID] = true
-			// }
 
 			err := ValidateDocFields(field)
 			if err != nil && validationErr == nil {

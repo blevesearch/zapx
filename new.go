@@ -248,12 +248,7 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, uint64, error) {
 		return 0, 0, 0, nil, 0, err
 	}
 
-	fieldsIndexOffset, err := persistFields(s.FieldsInv, s.w, dictOffsets)
-	if err != nil {
-		return 0, 0, 0, nil, 0, err
-	}
-
-	return storedIndexOffset, fieldsIndexOffset, fdvIndexOffset, dictOffsets, newFieldsIndexOffset, nil
+	return storedIndexOffset, newFieldsIndexOffset, fdvIndexOffset, dictOffsets, newFieldsIndexOffset, nil
 }
 
 func (s *interim) getOrDefineField(fieldName string) int {

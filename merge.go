@@ -161,12 +161,7 @@ func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		return nil, 0, 0, 0, 0, nil, nil, nil, 0, err
 	}
 
-	fieldsIndexOffset, err = persistFields(fieldsInv, cr, dictLocs)
-	if err != nil {
-		return nil, 0, 0, 0, 0, nil, nil, nil, 0, err
-	}
-
-	return newDocNums, numDocs, storedIndexOffset, fieldsIndexOffset, docValueOffset, dictLocs, fieldsInv, fieldsMap, newFieldsIndexOffset, nil
+	return newDocNums, numDocs, storedIndexOffset, newFieldsIndexOffset, docValueOffset, dictLocs, fieldsInv, fieldsMap, newFieldsIndexOffset, nil
 }
 
 // mapFields takes the fieldsInv list and returns a map of fieldName

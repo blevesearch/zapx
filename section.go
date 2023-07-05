@@ -29,6 +29,5 @@ const (
 )
 
 var segmentSections = map[uint16]section{
-	sectionInvertedIndex:     &invertedIndexSection{},
-	sectionNumericRangeIndex: &numericRangeIndexSection{},
+	sectionInvertedIndex: &invertedIndexSection{},
 }

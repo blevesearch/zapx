@@ -71,12 +71,21 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 		return nil, err
 	}
 
+	// loadFields() must be kept because of backward compatibility
+
 	err = rv.loadFieldsNew()
 	if err != nil {
 		_ = rv.Close()
 		return nil, err
 	}
 
+	// let's say you bind the doc values loading to the Segment struct
+	// and not the SegmentBase. This way you have access to the version
+	// and based on that you can load the doc values in different ways.
+	// I think interfaces wouldn't be great here is because that's
+	// a big change in terms of segment interfaces. you literally have to make the
+	// segment aware of getting the doc value offsets and then load them.
+	//
 	err = rv.loadDvReaders()
 	if err != nil {
 		_ = rv.Close()
@@ -209,6 +218,10 @@ func (s *Segment) loadConfig() error {
 	docValueOffset := chunkOffset - 8
 	s.docValueOffset = binary.BigEndian.Uint64(s.mm[docValueOffset : docValueOffset+8])
 
+	// perhaps it makes sense to initialize the newFieldsIndexOffset based on the version.
+	// This is because the footer itself is changing in the new version and the older
+	// ones won't have this offset and doing an unguarded offset determination will
+	// result in panics.
 	newFieldsIndexOffset := docValueOffset - 8
 	s.newFieldsIndexOffset = binary.BigEndian.Uint64(s.mm[newFieldsIndexOffset : newFieldsIndexOffset+8])
 
@@ -265,8 +278,45 @@ func (s *SegmentBase) ResetBytesRead(val uint64) {}
 func (s *SegmentBase) incrementBytesRead(val uint64) {
 	atomic.AddUint64(&s.bytesRead, val)
 }
+
+func (s *SegmentBase) loadFields() error {
+	// NOTE for now we assume the fields index immediately precedes
+	// the footer, and if this changes, need to adjust accordingly (or
+	// store explicit length), where s.mem was sliced from s.mm in Open().
+	fieldsIndexEnd := uint64(len(s.mem))
+
+	// iterate through fields index
+	var fieldID uint64
+	for s.fieldsIndexOffset+(8*fieldID) < fieldsIndexEnd {
+		addr := binary.BigEndian.Uint64(s.mem[s.fieldsIndexOffset+(8*fieldID) : s.fieldsIndexOffset+(8*fieldID)+8])
+
+		// accounting the address of the dictLoc being read from file
+		s.incrementBytesRead(8)
+
+		dictLoc, read := binary.Uvarint(s.mem[addr:fieldsIndexEnd])
+		n := uint64(read)
+		s.dictLocs = append(s.dictLocs, dictLoc)
+
+		var nameLen uint64
+		nameLen, read = binary.Uvarint(s.mem[addr+n : fieldsIndexEnd])
+		n += uint64(read)
+
+		name := string(s.mem[addr+n : addr+n+nameLen])
+
+		s.incrementBytesRead(n + nameLen)
+		s.fieldsInv = append(s.fieldsInv, name)
+		s.fieldsMap[name] = uint16(fieldID + 1)
+
+		fieldID++
+	}
+	return nil
+}
+
 func (s *SegmentBase) loadFieldsNew() error {
 	pos := s.newFieldsIndexOffset
+
+	// newFieldsIndexOffset if its invalid, then this func should be
+	// no-op or do we just invoke the loadFields() func? evaluate.
 
 	// read the number of fields
 	numFields, sz := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])
@@ -632,6 +682,22 @@ func (s *SegmentBase) loadDvReaders() error {
 		return nil
 	}
 
+	// the loading of dv readers should be backward compatible. so, basically
+	// the v15 and the new versions should update a common data structure so that
+	// the dv readers can be loaded in a common way.
+
+	// the main to keep in mind here is that the format in which dvs are stored
+	// is totally different in the older and newer versions. for the loadDvReaders
+	// to be version agnostic, the notion of offsets should be abstracted away via
+	// a method for example, which is aware of what's the segment version and gives the
+	// right offsets.
+	// furthermore what we are going ahead with right now is a sections based approach.
+	// perhaps its a good idea to populate the sections specific stuff when we are loading the
+	// older formats so that the merge of the two formats is seamless.
+	// another point to note here is that each section can have dv values stored within it.
+	// so the way in which the dv readers are stored and interacted with should be such that
+	// adding new sections which stored dv values should be backward compatible and the code changes
+	// should be minimal in future.
 	for fieldID, section := range s.fieldsSectionsMap {
 		fieldAddrStart := section[sectionInvertedIndex]
 

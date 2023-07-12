@@ -71,21 +71,12 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 		return nil, err
 	}
 
-	// loadFields() must be kept because of backward compatibility
-
 	err = rv.loadFieldsNew()
 	if err != nil {
 		_ = rv.Close()
 		return nil, err
 	}
 
-	// let's say you bind the doc values loading to the Segment struct
-	// and not the SegmentBase. This way you have access to the version
-	// and based on that you can load the doc values in different ways.
-	// I think interfaces wouldn't be great here is because that's
-	// a big change in terms of segment interfaces. you literally have to make the
-	// segment aware of getting the doc value offsets and then load them.
-	//
 	err = rv.loadDvReaders()
 	if err != nil {
 		_ = rv.Close()
@@ -98,21 +89,21 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 // SegmentBase is a memory only, read-only implementation of the
 // segment.Segment interface, using zap's data representation.
 type SegmentBase struct {
-	mem                  []byte
-	memCRC               uint32
-	chunkMode            uint32
-	fieldsMap            map[string]uint16   // fieldName -> fieldID+1
-	fieldsInv            []string            // fieldID -> fieldName
-	fieldsSectionsMap    []map[uint16]uint64 // fieldID -> section -> address
-	numDocs              uint64
-	storedIndexOffset    uint64
-	fieldsIndexOffset    uint64
-	newFieldsIndexOffset uint64
-	docValueOffset       uint64
-	dictLocs             []uint64
-	fieldDvReaders       map[uint16]*docValueReader // naive chunk cache per field
-	fieldDvNames         []string                   // field names cached in fieldDvReaders
-	size                 uint64
+	mem                 []byte
+	memCRC              uint32
+	chunkMode           uint32
+	fieldsMap           map[string]uint16   // fieldName -> fieldID+1
+	fieldsInv           []string            // fieldID -> fieldName
+	fieldsSectionsMap   []map[uint16]uint64 // fieldID -> section -> address
+	numDocs             uint64
+	storedIndexOffset   uint64
+	fieldsIndexOffset   uint64
+	sectionsIndexOffset uint64
+	docValueOffset      uint64
+	dictLocs            []uint64
+	fieldDvReaders      map[uint16]*docValueReader // naive chunk cache per field
+	fieldDvNames        []string                   // field names cached in fieldDvReaders
+	size                uint64
 
 	// atomic access to these variables
 	bytesRead    uint64
@@ -218,14 +209,12 @@ func (s *Segment) loadConfig() error {
 	docValueOffset := chunkOffset - 8
 	s.docValueOffset = binary.BigEndian.Uint64(s.mm[docValueOffset : docValueOffset+8])
 
-	// perhaps it makes sense to initialize the newFieldsIndexOffset based on the version.
-	// This is because the footer itself is changing in the new version and the older
-	// ones won't have this offset and doing an unguarded offset determination will
-	// result in panics.
-	newFieldsIndexOffset := docValueOffset - 8
-	s.newFieldsIndexOffset = binary.BigEndian.Uint64(s.mm[newFieldsIndexOffset : newFieldsIndexOffset+8])
+	fieldsIndexOffset := docValueOffset - 8
+	// for version 16, parse the sectionsIndexOffset
+	if s.version == Version {
+		s.sectionsIndexOffset = binary.BigEndian.Uint64(s.mm[fieldsIndexOffset : fieldsIndexOffset+8])
+	}
 
-	fieldsIndexOffset := newFieldsIndexOffset - 8
 	s.fieldsIndexOffset = binary.BigEndian.Uint64(s.mm[fieldsIndexOffset : fieldsIndexOffset+8])
 
 	storedIndexOffset := fieldsIndexOffset - 8
@@ -313,10 +302,12 @@ func (s *SegmentBase) loadFields() error {
 }
 
 func (s *SegmentBase) loadFieldsNew() error {
-	pos := s.newFieldsIndexOffset
+	pos := s.sectionsIndexOffset
 
-	// newFieldsIndexOffset if its invalid, then this func should be
-	// no-op or do we just invoke the loadFields() func? evaluate.
+	if pos == 0 {
+		// this is the case only for older file formats
+		return s.loadFields()
+	}
 
 	// read the number of fields
 	numFields, sz := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])
@@ -675,6 +666,87 @@ func (s *Segment) DictAddr(field string) (uint64, error) {
 	return s.dictLocs[fieldIDPlus1-1], nil
 }
 
+func (s *Segment) getDvStartEndOffsets(fieldID int, segID uint16) (uint64, uint64, uint64, error) {
+	// Version is gonna be 16 btw
+	if s.version < Version {
+		// older file formats to parse the docValueIndex
+		if segID != sectionInvertedIndex || s.docValueOffset == fieldNotUninverted {
+			// older file formats have docValues corresponding only to inverted index
+			// ignore the rest.
+			return 0, 0, 0, nil
+		}
+
+		var fieldLocStart, fieldLocEnd, read uint64
+		var n int
+		fieldLocStart, n = binary.Uvarint(s.mem[s.docValueOffset+read : s.docValueOffset+read+binary.MaxVarintLen64])
+		if n <= 0 {
+			return 0, 0, 0, fmt.Errorf("loadDvReaders: failed to read the docvalue offset start for field %d", fieldID)
+		}
+		read += uint64(n)
+		fieldLocEnd, n = binary.Uvarint(s.mem[s.docValueOffset+read : s.docValueOffset+read+binary.MaxVarintLen64])
+		if n <= 0 {
+			return 0, 0, 0, fmt.Errorf("loadDvReaders: failed to read the docvalue offset end for field %d", fieldID)
+		}
+		read += uint64(n)
+
+		return fieldLocStart, fieldLocEnd, read, nil
+	}
+
+	var fieldLocStart uint64 = fieldNotUninverted
+	fieldLocEnd := fieldLocStart
+	sectionMap := s.fieldsSectionsMap[fieldID]
+	fieldAddrStart := sectionMap[segID]
+	if fieldAddrStart > 0 {
+		// fixed encoding as of now, need to uvarint this
+		fieldDocValueStart := fieldAddrStart
+		fieldDocValueEnd := fieldAddrStart + 8
+
+		fieldLocStart = binary.BigEndian.Uint64(s.mem[fieldDocValueStart : fieldDocValueStart+8])
+		fieldLocEnd = binary.BigEndian.Uint64(s.mem[fieldDocValueEnd : fieldDocValueEnd+8])
+		// bytes read increment to be done here
+	}
+	return fieldLocStart, fieldLocEnd, 0, nil
+}
+
+func (s *Segment) loadDvReader(fieldID int, segID uint16) error {
+	start, end, _, err := s.getDvStartEndOffsets(fieldID, segID)
+	if err != nil {
+		return err
+	}
+	fieldDvReader, err := s.loadFieldDocValueReader(s.fieldsInv[fieldID], start, end)
+	if err != nil {
+		return err
+	}
+	if fieldDvReader != nil {
+		// fix the structure of fieldDvReaders
+		// currently it populates the inverted index doc values
+		s.fieldDvReaders[uint16(fieldID)] = fieldDvReader
+		s.fieldDvNames = append(s.fieldDvNames, s.fieldsInv[fieldID])
+	}
+	return nil
+}
+
+// Segment is a file segment, and loading the dv readers from that segment
+// must account for the version while loading since the formats are different
+// in the older and the Version version.
+func (s *Segment) loadDvReaders() error {
+	// for every field
+	if s.numDocs == 0 {
+		return nil
+	}
+	for fieldID := range s.fieldsInv {
+		// for every section
+		for segID := range segmentSections {
+			s.loadDvReader(fieldID, segID)
+		}
+	}
+
+	return nil
+}
+
+// since segmentBase is an in-memory segment, it can be called only
+// for v16 file formats as part of InitSegmentBase() while introducing
+// a segment into the system.
 func (s *SegmentBase) loadDvReaders() error {
 
 	// evaluate -> s.docValueOffset == fieldNotUninverted
@@ -682,22 +754,6 @@ func (s *SegmentBase) loadDvReaders() error {
 		return nil
 	}
 
-	// the loading of dv readers should be backward compatible. so, basically
-	// the v15 and the new versions should update a common data structure so that
-	// the dv readers can be loaded in a common way.
-
-	// the main to keep in mind here is that the format in which dvs are stored
-	// is totally different in the older and newer versions. for the loadDvReaders
-	// to be version agnostic, the notion of offsets should be abstracted away via
-	// a method for example, which is aware of what's the segment version and gives the
-	// right offsets.
-	// furthermore what we are going ahead with right now is a sections based approach.
-	// perhaps its a good idea to populate the sections specific stuff when we are loading the
-	// older formats so that the merge of the two formats is seamless.
-	// another point to note here is that each section can have dv values stored within it.
-	// so the way in which the dv readers are stored and interacted with should be such that
-	// adding new sections which stored dv values should be backward compatible and the code changes
-	// should be minimal in future.
 	for fieldID, section := range s.fieldsSectionsMap {
 		fieldAddrStart := section[sectionInvertedIndex]
 

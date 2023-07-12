@@ -17,6 +17,7 @@ package zap
 import (
 	"bytes"
 	"encoding/binary"
+	"math"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -65,7 +66,7 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 	s.chunkMode = chunkMode
 	s.w = NewCountHashWriter(&br)
 
-	storedIndexOffset, fieldsIndexOffset, fdvIndexOffset, dictOffsets, newFieldsIndexOffset,
+	storedIndexOffset, fieldsIndexOffset, fdvIndexOffset, dictOffsets, sectionsIndexOffset,
 		err := s.convert()
 	if err != nil {
 		return nil, uint64(0), err
@@ -73,7 +74,7 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 
 	sb, err := InitSegmentBase(br.Bytes(), s.w.Sum32(), chunkMode,
 		s.FieldsMap, s.FieldsInv, uint64(len(results)),
-		storedIndexOffset, fieldsIndexOffset, fdvIndexOffset, dictOffsets, newFieldsIndexOffset)
+		storedIndexOffset, fieldsIndexOffset, fdvIndexOffset, dictOffsets, sectionsIndexOffset)
 
 	// get the bytes written before the interim's reset() call
 	// write it to the newly formed segment base.
@@ -227,12 +228,12 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, uint64, error) {
 
 	// we can persist a new fields section here
 	// this new fields section will point to the various indexes available
-	newFieldsIndexOffset, err := persistNewFields(s.FieldsInv, s.w, dictOffsets, s.opaque)
+	sectionsIndexOffset, err := persistNewFields(s.FieldsInv, s.w, dictOffsets, s.opaque)
 	if err != nil {
 		return 0, 0, 0, nil, 0, err
 	}
 
-	return storedIndexOffset, newFieldsIndexOffset, fdvIndexOffset, dictOffsets, newFieldsIndexOffset, nil
+	return storedIndexOffset, sectionsIndexOffset, fdvIndexOffset, dictOffsets, sectionsIndexOffset, nil
 }
 
 func (s *interim) getOrDefineField(fieldName string) int {
@@ -283,9 +284,13 @@ func (s *interim) processDocument(docNum uint64,
 	// walk each field
 	result.VisitFields(visitField)
 
-	// finish up processing this doc
+	// given that as part of visiting each field, there may some kind of totalling
+	// or accumulation that can be updated, it becomes necessary to commit or
+	// put that totalling/accumulation into effect. However, for certain section
+	// types this particular step need not be valid, in which case it would be a
+	// no-op in the implmentation of the section's process API.
 	for _, section := range segmentSections {
-		section.Process(s.opaque, docNum, nil, ^uint16(0))
+		section.Process(s.opaque, docNum, nil, math.MaxUint16)
 	}
 
 }

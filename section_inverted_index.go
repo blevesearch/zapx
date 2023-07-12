@@ -586,7 +586,9 @@ func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum
 		io.init = true
 	}
 
-	if fieldID == ^uint16(0) {
+	// if the fieldID is MaxUint16, it's mainly indicated that the caller has
+	// finished invoking the process() for every field on that doc.
+	if fieldID == math.MaxUint16 {
 		for fid, tfs := range io.reusableFieldTFs {
 			dict := io.Dicts[fid]
 			norm := math.Float32frombits(uint32(io.reusableFieldLens[fid]))

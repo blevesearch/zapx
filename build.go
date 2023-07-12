@@ -98,7 +98,7 @@ func persistSegmentBaseToWriter(sb *SegmentBase, w io.Writer) (int, error) {
 		return 0, err
 	}
 
-	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.fieldsIndexOffset, sb.newFieldsIndexOffset,
+	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.fieldsIndexOffset, sb.sectionsIndexOffset,
 		sb.docValueOffset, sb.chunkMode, sb.memCRC, br)
 	if err != nil {
 		return 0, err
@@ -160,21 +160,21 @@ func persistStoredFieldValues(fieldID int,
 func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32,
 	fieldsMap map[string]uint16, fieldsInv []string, numDocs uint64,
 	storedIndexOffset uint64, fieldsIndexOffset uint64, docValueOffset uint64,
-	dictLocs []uint64, newFieldsIndexOffset uint64) (*SegmentBase, error) {
+	dictLocs []uint64, sectionsIndexOffset uint64) (*SegmentBase, error) {
 	sb := &SegmentBase{
-		mem:               mem,
-		memCRC:            memCRC,
-		chunkMode:         chunkMode,
-		fieldsMap:         fieldsMap,
-		fieldsInv:         fieldsInv,
-		numDocs:           numDocs,
-		storedIndexOffset: storedIndexOffset,
-		fieldsIndexOffset: fieldsIndexOffset,
-		newFieldsIndexOffset: newFieldsIndexOffset,
-		docValueOffset:    docValueOffset,
-		dictLocs:          dictLocs,
-		fieldDvReaders:    make(map[uint16]*docValueReader),
-		fieldFSTs:         make(map[uint16]*vellum.FST),
+		mem:                 mem,
+		memCRC:              memCRC,
+		chunkMode:           chunkMode,
+		fieldsMap:           fieldsMap,
+		fieldsInv:           fieldsInv,
+		numDocs:             numDocs,
+		storedIndexOffset:   storedIndexOffset,
+		fieldsIndexOffset:   fieldsIndexOffset,
+		sectionsIndexOffset: sectionsIndexOffset,
+		docValueOffset:      docValueOffset,
+		dictLocs:            dictLocs,
+		fieldDvReaders:      make(map[uint16]*docValueReader),
+		fieldFSTs:           make(map[uint16]*vellum.FST),
 	}
 	sb.updateSize()
 

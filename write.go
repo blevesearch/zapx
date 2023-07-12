@@ -138,7 +138,7 @@ func persistFields(fieldsInv []string, w *CountHashWriter, dictLocs []uint64) (u
 // crc + ver + chunk + field offset + stored offset + num docs + docValueOffset
 const FooterSize = 4 + 4 + 4 + 8 + 8 + 8 + 8 + 8
 
-func persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, newFieldsIndexOffset, docValueOffset uint64,
+func persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, sectionsIndexOffset, docValueOffset uint64,
 	chunkMode uint32, crcBeforeFooter uint32, writerIn io.Writer) error {
 	w := NewCountHashWriter(writerIn)
 	w.crc = crcBeforeFooter
@@ -160,7 +160,7 @@ func persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, newFieldsIndex
 	}
 
 	// write out the new field index location (to be removed later, as this can eventually replace the old)
-	err = binary.Write(w, binary.BigEndian, newFieldsIndexOffset)
+	err = binary.Write(w, binary.BigEndian, sectionsIndexOffset)
 	if err != nil {
 		return err
 	}

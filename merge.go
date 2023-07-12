@@ -73,14 +73,14 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 	// wrap it for counting (tracking offsets)
 	cr := NewCountHashWriterWithStatsReporter(br, s)
 
-	newDocNums, numDocs, storedIndexOffset, fieldsIndexOffset, docValueOffset, _, _, _, newFieldsIndexOffset, err :=
+	newDocNums, numDocs, storedIndexOffset, fieldsIndexOffset, docValueOffset, _, _, _, sectionsIndexOffset, err :=
 		MergeToWriter(segmentBases, drops, chunkMode, cr, closeCh)
 	if err != nil {
 		cleanup()
 		return nil, 0, err
 	}
 
-	err = persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, newFieldsIndexOffset,
+	err = persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, sectionsIndexOffset,
 		docValueOffset, chunkMode, cr.Sum32(), cr)
 	if err != nil {
 		cleanup()
@@ -112,7 +112,7 @@ func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	chunkMode uint32, cr *CountHashWriter, closeCh chan struct{}) (
 	newDocNums [][]uint64,
 	numDocs, storedIndexOffset, fieldsIndexOffset, docValueOffset uint64,
-	dictLocs []uint64, fieldsInv []string, fieldsMap map[string]uint16, newFieldsIndexOffset uint64,
+	dictLocs []uint64, fieldsInv []string, fieldsMap map[string]uint16, sectionsIndexOffset uint64,
 	err error) {
 	docValueOffset = uint64(fieldNotUninverted)
 
@@ -156,12 +156,12 @@ func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 
 	// we can persist a new fields section here
 	// this new fields section will point to the various indexes available
-	newFieldsIndexOffset, err = persistNewFields(fieldsInv, cr, dictLocs, mergeOpaque)
+	sectionsIndexOffset, err = persistNewFields(fieldsInv, cr, dictLocs, mergeOpaque)
 	if err != nil {
 		return nil, 0, 0, 0, 0, nil, nil, nil, 0, err
 	}
 
-	return newDocNums, numDocs, storedIndexOffset, newFieldsIndexOffset, docValueOffset, dictLocs, fieldsInv, fieldsMap, newFieldsIndexOffset, nil
+	return newDocNums, numDocs, storedIndexOffset, sectionsIndexOffset, docValueOffset, dictLocs, fieldsInv, fieldsMap, sectionsIndexOffset, nil
 }
 
 // mapFields takes the fieldsInv list and returns a map of fieldName

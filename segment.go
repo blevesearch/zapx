@@ -213,6 +213,7 @@ func (s *Segment) loadConfig() error {
 	// for version 16, parse the sectionsIndexOffset
 	if s.version == Version {
 		s.sectionsIndexOffset = binary.BigEndian.Uint64(s.mm[fieldsIndexOffset : fieldsIndexOffset+8])
+		fieldsIndexOffset = fieldsIndexOffset - 8
 	}
 
 	s.fieldsIndexOffset = binary.BigEndian.Uint64(s.mm[fieldsIndexOffset : fieldsIndexOffset+8])
@@ -356,11 +357,6 @@ func (s *SegmentBase) loadFieldNew(fieldID uint16, addr uint64,
 		fieldSectionAddr := binary.BigEndian.Uint64(s.mem[pos : pos+8])
 		pos += 8
 		fieldSectionMap[fieldSectionType] = fieldSectionAddr
-
-		if fieldSectionType == sectionInvertedIndex {
-			// populate the dictLocs. fixed encoding as of now.
-			s.dictLocs = append(s.dictLocs, binary.BigEndian.Uint64(s.mem[fieldSectionAddr+8+8:fieldSectionAddr+8+8+8]))
-		}
 	}
 
 	return nil
@@ -667,7 +663,8 @@ func (s *Segment) DictAddr(field string) (uint64, error) {
 }
 
 func (s *Segment) getDvStartEndOffsets(fieldID int, segID uint16) (uint64, uint64, uint64, error) {
-	// Version is gonna be 16 btw
+	// Version is gonna be 16
+	var n int
 	if s.version < Version {
 		// older file formats to parse the docValueIndex
 		if segID != sectionInvertedIndex || s.docValueOffset == fieldNotUninverted {
@@ -677,7 +674,6 @@ func (s *Segment) getDvStartEndOffsets(fieldID int, segID uint16) (uint64, uint6
 		}
 
 		var fieldLocStart, fieldLocEnd, read uint64
-		var n int
 		fieldLocStart, n = binary.Uvarint(s.mem[s.docValueOffset+read : s.docValueOffset+read+binary.MaxVarintLen64])
 		if n <= 0 {
 			return 0, 0, 0, fmt.Errorf("loadDvReaders: failed to read the docvalue offset start for field %d", fieldID)
@@ -696,15 +692,33 @@ func (s *Segment) getDvStartEndOffsets(fieldID int, segID uint16) (uint64, uint6
 	fieldLocEnd := fieldLocStart
 	sectionMap := s.fieldsSectionsMap[fieldID]
 	fieldAddrStart := sectionMap[segID]
+	n = 0
+
 	if fieldAddrStart > 0 {
 		// fixed encoding as of now, need to uvarint this
-		fieldDocValueStart := fieldAddrStart
-		fieldDocValueEnd := fieldAddrStart + 8
+		var read uint64
+		fieldLocStart, n = binary.Uvarint(s.mem[fieldAddrStart+read : fieldAddrStart+read+binary.MaxVarintLen64])
+		if n <= 0 {
+			return 0, 0, 0, fmt.Errorf("loadDvReaders: failed to read the docvalue offset start for field %d", fieldID)
+		}
+		read += uint64(n)
 
-		fieldLocStart = binary.BigEndian.Uint64(s.mem[fieldDocValueStart : fieldDocValueStart+8])
-		fieldLocEnd = binary.BigEndian.Uint64(s.mem[fieldDocValueEnd : fieldDocValueEnd+8])
+		fieldLocEnd, n = binary.Uvarint(s.mem[fieldAddrStart+read : fieldAddrStart+read+binary.MaxVarintLen64])
+		if n <= 0 {
+			return 0, 0, 0, fmt.Errorf("loadDvReaders: failed to read the docvalue offset end for field %d", fieldID)
+		}
+		read += uint64(n)
 		// bytes read increment to be done here
+
+		if segID == sectionInvertedIndex {
+			dictLoc, n := binary.Uvarint(s.mem[fieldAddrStart+read : fieldAddrStart+read+binary.MaxVarintLen64])
+			if n <= 0 {
+				return 0, 0, 0, fmt.Errorf("loadDvReaders: failed to read the dictLoc offset for field %d", fieldID)
+			}
+			s.dictLocs = append(s.dictLocs, dictLoc)
+		}
 	}
+
 	return fieldLocStart, fieldLocEnd, 0, nil
 }
 
@@ -759,11 +773,25 @@ func (s *SegmentBase) loadDvReaders() error {
 
 		if fieldAddrStart > 0 {
 			// fixed encoding as of now, need to uvarint this
-			fieldDocValueStart := fieldAddrStart
-			fieldDocValueEnd := fieldAddrStart + 8
+			var n uint64
 
-			fieldLocStart := binary.BigEndian.Uint64(s.mem[fieldDocValueStart : fieldDocValueStart+8])
-			fieldLocEnd := binary.BigEndian.Uint64(s.mem[fieldDocValueEnd : fieldDocValueEnd+8])
+			fieldLocStart, read := binary.Uvarint(s.mem[fieldAddrStart+n : fieldAddrStart+n+binary.MaxVarintLen64])
+			if read <= 0 {
+				return fmt.Errorf("loadDvReaders: failed to read the docvalue offset start for field %v", s.fieldsInv[fieldID])
+			}
+			n += uint64(read)
+			fieldLocEnd, read := binary.Uvarint(s.mem[fieldAddrStart+n : fieldAddrStart+n+binary.MaxVarintLen64])
+			if read <= 0 {
+				return fmt.Errorf("loadDvReaders: failed to read the docvalue offset end for field %v", s.fieldsInv[fieldID])
+			}
+			n += uint64(read)
+
+			dictLoc, read := binary.Uvarint(s.mem[fieldAddrStart+n : fieldAddrStart+n+binary.MaxVarintLen64])
+			if read <= 0 {
+				return fmt.Errorf("loadDvReaders: failed to read the dict offset for field %v", s.fieldsInv[fieldID])
+			}
+			s.dictLocs = append(s.dictLocs, dictLoc)
+
 			fieldDvReader, err := s.loadFieldDocValueReader(s.fieldsInv[fieldID], fieldLocStart, fieldLocEnd)
 			if err != nil {
 				return err

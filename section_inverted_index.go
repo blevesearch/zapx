@@ -305,21 +305,24 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 
 		fieldStart := w.Count()
 
-		// todo: uvarint these offsets
-		err = binary.Write(w, binary.BigEndian, fieldDvLocsStart[fieldID])
+		n = binary.PutUvarint(bufMaxVarintLen64, fieldDvLocsStart[fieldID])
+		_, err = w.Write(bufMaxVarintLen64[:n])
 		if err != nil {
 			return nil, 0, err
 		}
 
-		err = binary.Write(w, binary.BigEndian, fieldDvLocsEnd[fieldID])
+		n = binary.PutUvarint(bufMaxVarintLen64, fieldDvLocsEnd[fieldID])
+		_, err = w.Write(bufMaxVarintLen64[:n])
 		if err != nil {
 			return nil, 0, err
 		}
 
-		err = binary.Write(w, binary.BigEndian, dictOffsets[fieldID])
+		n = binary.PutUvarint(bufMaxVarintLen64, dictOffsets[fieldID])
+		_, err = w.Write(bufMaxVarintLen64[:n])
 		if err != nil {
 			return nil, 0, err
 		}
+
 		fieldAddrs[fieldID] = fieldStart
 
 		// reset vellum buffer and vellum builder
@@ -559,17 +562,21 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 		fieldStart := w.Count()
 
 		// todo: uvarint these offsets
-		err = binary.Write(w, binary.BigEndian, fdvOffsetsStart[fieldID])
+
+		n = binary.PutUvarint(buf, fdvOffsetsStart[fieldID])
+		_, err = w.Write(buf[:n])
 		if err != nil {
 			return nil, err
 		}
 
-		err = binary.Write(w, binary.BigEndian, fdvOffsetsEnd[fieldID])
+		n = binary.PutUvarint(buf, fdvOffsetsEnd[fieldID])
+		_, err = w.Write(buf[:n])
 		if err != nil {
 			return nil, err
 		}
 
-		err = binary.Write(w, binary.BigEndian, dictOffsets[fieldID])
+		n = binary.PutUvarint(buf, dictOffsets[fieldID])
+		_, err = w.Write(buf[:n])
 		if err != nil {
 			return nil, err
 		}

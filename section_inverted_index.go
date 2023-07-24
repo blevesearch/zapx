@@ -264,7 +264,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			}
 
 			fieldIDPlus1 := uint16(segment.fieldsMap[fieldName])
-			if dvIter, exists := segment.fieldDvReaders[fieldIDPlus1-1]; exists &&
+			if dvIter, exists := segment.fieldDvReaders[sectionInvertedIndex][fieldIDPlus1-1]; exists &&
 				dvIter != nil {
 				fdvReadersAvailable = true
 				dvIterClone = dvIter.cloneInto(dvIterClone)

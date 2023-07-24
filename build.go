@@ -173,7 +173,6 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32,
 		sectionsIndexOffset: sectionsIndexOffset,
 		docValueOffset:      docValueOffset,
 		dictLocs:            dictLocs,
-		fieldDvReaders:      make(map[uint16]*docValueReader),
 		fieldFSTs:           make(map[uint16]*vellum.FST),
 	}
 	sb.updateSize()

@@ -3,6 +3,7 @@ package zap
 // keep a build tag for this file.
 
 import (
+	"encoding/binary"
 	"math"
 
 	"github.com/RoaringBitmap/roaring"
@@ -36,8 +37,17 @@ func (v *vectorIndexSection) AddrForField(opaque map[int]resetable, fieldID int)
 	return -1
 }
 
+// keep in mind with respect to update and delete opeartions with resepct to vectors/
+// leverage bitmaps stored
 func (v *vectorIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase, drops []*roaring.Bitmap, fieldsInv []string,
 	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
+
+	// flat indexes support the reconstruct API which helps in reconstructing
+	// a vector from the provided vectorID. for ivf, there needs to be an explicit
+	// enabling of this reconstruction by initialising a direct map (using APIs ofc)
+
+	// removing of vectors from an index is supported, need to give like an IDSelector
+	// which is basically the set of IDs of vectors to be removed.
 
 	return nil
 }
@@ -50,17 +60,25 @@ func (v *vectorIndexOpaque) grabBuf(size int) []byte {
 func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint64, err error) {
 	// for every fieldID, contents to store over here are:
 	//    1. the serialized representation of the dense vector index.
-	//    2. its constituent vectorIDs -> docID mapping. perhaps a bitmap is enough.
+	//    2. its constituent vectorID -> {docID} mapping. perhaps a bitmap is enough.
 
+	tempBuf := vo.grabBuf(binary.MaxVarintLen64)
 	for _, content := range vo.vecFieldMap {
 
 		var vecs []float32
-		for _, vec := range content.vecs {
-			vecs = append(vecs, vec...)
+		var ids []int64
+		docIDsMap := make(map[uint64]*roaring.Bitmap)
+
+		for _, vecInfo := range content.vecs {
+			vecs = append(vecs, vecInfo.vec...)
+			ids = append(ids, int64(vecInfo.vecID))
+			docIDsMap[vecInfo.vecID] = vecInfo.docIDs
 		}
 
-		// create an index
-		index, err := faiss.IndexFactory(int(content.dim), "Flat", faiss.MetricL2)
+		// create an index, its always a flat for now, because each batch size
+		// won't have too many vectors (in order for >100K). todo: will need to revisit
+		// this logic - creating based on configured batch size in scorch.
+		index, err := faiss.IndexFactory(int(content.dim), "Flat,IDMap2", faiss.MetricL2)
 		if err != nil {
 			return 0, err
 		}
@@ -71,7 +89,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		}
 
 		// todo: this must be add_with_ids
-		index.Add(vecs)
+		index.AddWithIDs(vecs, ids)
 		if err != nil {
 			return 0, err
 		}
@@ -83,8 +101,33 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		}
 		// record the fieldStart value for this section.
 		// write the vecID -> docID mapping
-		w.Write(buf)
+		// write the index bytes and its length
+		n := binary.PutUvarint(tempBuf, uint64(len(buf)))
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return 0, err
+		}
 
+		// write the vector index data
+		_, err = w.Write(buf)
+		if err != nil {
+			return 0, err
+		}
+
+		// fixme: this can cause a write amplification. need to improve this.
+		for vecID, docIDs := range docIDsMap {
+			// write the vecID
+			_, err := writeUvarints(w, vecID)
+			if err != nil {
+				return 0, err
+			}
+
+			// write the docIDs
+			_, err = writeRoaringWithLen(docIDs, w, tempBuf)
+			if err != nil {
+				return 0, err
+			}
+		}
 	}
 	return 0, nil
 }
@@ -103,7 +146,6 @@ func (vo *vectorIndexOpaque) process(field index.DenseVectorField, fieldID uint1
 
 	vec, dim, metric := field.DenseVector()
 	if vec != nil {
-
 		// NOTE: currently, indexing only unique vectors.
 		vecHash := hashCode(vec)
 		if _, ok := vo.vecIDMap[vecHash]; !ok {
@@ -115,22 +157,27 @@ func (vo *vectorIndexOpaque) process(field index.DenseVectorField, fieldID uint1
 		// add the docID to the bitmap
 		vo.vecIDMap[vecHash].docIDs.Add(uint32(docNum))
 
-		vecKey := vo.vecIDMap[vecHash].vecID
-		if index, ok := vo.vecFieldMap[fieldID]; !ok {
+		if _, ok := vo.vecFieldMap[fieldID]; !ok {
+			vecKey := vo.vecIDMap[vecHash].vecID
 			vo.vecFieldMap[fieldID] = indexContent{
-				vecs: map[uint64][]float32{
-					vecKey: vec,
+				vecs: map[uint32]vecInfo{
+					vecHash: {
+						vecID: vecKey,
+						vec:   vec,
+					},
 				},
 				dim:    uint16(dim),
 				metric: metric,
 			}
 		} else {
-			index.vecs[vecKey] = vec
+			// duplicate vector ignored for now.
+			// the docIDs its present in are already added to the bitmap.
 		}
 	}
 }
 
 // todo: better hash function?
+// keep the perf aspects in mind with respect to the hash function.
 func hashCode(a []float32) uint32 {
 	var rv uint32
 	for _, v := range a {
@@ -151,11 +198,6 @@ func (v *vectorIndexSection) getvectorIndexOpaque(opaque map[int]resetable) *vec
 	return opaque[sectionVectorIndex].(*vectorIndexOpaque)
 }
 
-// revisit this function's purpose etc.
-func (v *vectorIndexOpaque) getOrDefineField(fieldName string) int {
-	return -1
-}
-
 func (v *vectorIndexSection) InitOpaque(args map[string]interface{}) resetable {
 	rv := &vectorIndexOpaque{}
 	for k, v := range args {
@@ -166,19 +208,21 @@ func (v *vectorIndexSection) InitOpaque(args map[string]interface{}) resetable {
 }
 
 type indexContent struct {
-	vecs   map[uint64][]float32
+	vecs   map[uint32]vecInfo
 	dim    uint16
 	metric string
 }
 
 type vecInfo struct {
 	vecID  uint64
+	vec    []float32
 	docIDs *roaring.Bitmap
 }
 
 type vectorIndexOpaque struct {
-	results []index.Document
-	init    bool
+	init bool
+
+	fieldAddrs map[int]int
 
 	vecIDMap    map[uint32]vecInfo
 	vecFieldMap map[uint16]indexContent

@@ -2,6 +2,7 @@ package zap
 
 import (
 	"encoding/binary"
+	"math"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -24,6 +25,12 @@ func (vp *VecPosting) Score() float32 {
 
 // =============================================================================
 
+// the vector postings list is supposed to store the docNum and its similarity
+// score as a vector postings entry in it.
+// The way in which is it stored is using a roaring64 bitmap.
+// the docNum is stored in high 32 and the lower 32 bits contains the score value.
+// the score is actually a float32 value and in order to store it as a uint32 in
+// the bitmap, we use the IEEE 754 floating point format.
 type VecPostingsList struct {
 	except   *roaring64.Bitmap
 	postings *roaring64.Bitmap
@@ -180,7 +187,7 @@ func (i *VecPostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.VecPostin
 
 	i.next = VecPosting{} // clear the struct
 	rv := &i.next
-	rv.score = float32(code & 0x0000ffff)
+	rv.score = math.Float32frombits(uint32(code & 0x7fffffff))
 	rv.docNum = code >> 31
 
 	return nil, nil
@@ -271,7 +278,7 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 						// ignore the deleted doc
 						continue
 					}
-					code = uint64(docID<<31) | uint64(scores[i])
+					code = uint64(docID<<31) | uint64(math.Float32bits(scores[i]))
 					rv.postings.Add(uint64(code))
 				}
 			}

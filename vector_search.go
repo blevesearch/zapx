@@ -15,12 +15,16 @@ type VecPosting struct {
 	score  float32
 }
 
-func (vp *VecPosting) DocNum() uint64 {
+func (vp *VecPosting) Number() uint64 {
 	return vp.docNum
 }
 
 func (vp *VecPosting) Score() float32 {
 	return vp.score
+}
+
+func (vp *VecPosting) Size() int {
+	return 0
 }
 
 // =============================================================================
@@ -70,6 +74,7 @@ func (p *VecPostingsList) iterator(rv *VecPostingsIterator) *VecPostingsIterator
 	if p.postings == nil {
 		return rv
 	}
+	rv.postings = p
 	rv.all = p.postings.Iterator()
 	if p.except != nil {
 		rv.ActualBM = roaring64.AndNot(p.postings, p.except)
@@ -190,7 +195,7 @@ func (i *VecPostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.VecPostin
 	rv.score = math.Float32frombits(uint32(code & 0x7fffffff))
 	rv.docNum = code >> 31
 
-	return nil, nil
+	return rv, nil
 }
 
 func (itr *VecPostingsIterator) Size() int {

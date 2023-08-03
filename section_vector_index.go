@@ -33,8 +33,8 @@ func (v *vectorIndexSection) Persist(opaque map[int]resetable, w *CountHashWrite
 }
 
 func (v *vectorIndexSection) AddrForField(opaque map[int]resetable, fieldID int) int {
-
-	return -1
+	vo := v.getvectorIndexOpaque(opaque)
+	return vo.fieldAddrs[uint16(fieldID)]
 }
 
 // keep in mind with respect to update and delete opeartions with resepct to vectors/
@@ -63,7 +63,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 	//    2. its constituent vectorID -> {docID} mapping. perhaps a bitmap is enough.
 
 	tempBuf := vo.grabBuf(binary.MaxVarintLen64)
-	for _, content := range vo.vecFieldMap {
+	for fieldID, content := range vo.vecFieldMap {
 
 		var vecs []float32
 		var ids []int64
@@ -99,6 +99,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		if err != nil {
 			return 0, err
 		}
+
+		fieldStart := w.Count()
 		// record the fieldStart value for this section.
 		// write the vecID -> docID mapping
 		// write the index bytes and its length
@@ -114,7 +116,15 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			return 0, err
 		}
 
+		// write the number of unique vectors
+		n = binary.PutUvarint(tempBuf, uint64(len(docIDsMap)))
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return 0, err
+		}
+
 		// fixme: this can cause a write amplification. need to improve this.
+		// todo: might need to a reformating to optimize according to mmap needs.
 		for vecID, docIDs := range docIDsMap {
 			// write the vecID
 			_, err := writeUvarints(w, vecID)
@@ -128,6 +138,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 				return 0, err
 			}
 		}
+
+		vo.fieldAddrs[fieldID] = fieldStart
 	}
 	return 0, nil
 }
@@ -178,6 +190,7 @@ func (vo *vectorIndexOpaque) process(field index.DenseVectorField, fieldID uint1
 
 // todo: better hash function?
 // keep the perf aspects in mind with respect to the hash function.
+// random seed based hash golang.
 func hashCode(a []float32) uint32 {
 	var rv uint32
 	for _, v := range a {
@@ -219,10 +232,11 @@ type vecInfo struct {
 	docIDs *roaring.Bitmap
 }
 
+// todo: document the data structures involved in vector section.
 type vectorIndexOpaque struct {
 	init bool
 
-	fieldAddrs map[int]int
+	fieldAddrs map[uint16]int
 
 	vecIDMap    map[uint32]vecInfo
 	vecFieldMap map[uint16]indexContent

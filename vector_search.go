@@ -108,6 +108,8 @@ func (vpl *VecPostingsList) BytesWritten() uint64 {
 
 // =============================================================================
 
+const maskLow32Bits = 0x7fffffff
+
 type VecPostingsIterator struct {
 	postings *VecPostingsList
 	all      roaring64.IntPeekable64
@@ -192,7 +194,7 @@ func (i *VecPostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.VecPostin
 
 	i.next = VecPosting{} // clear the struct
 	rv := &i.next
-	rv.score = math.Float32frombits(uint32(code & 0x7fffffff))
+	rv.score = math.Float32frombits(uint32(code & maskLow32Bits))
 	rv.docNum = code >> 31
 
 	return rv, nil

@@ -54,7 +54,12 @@ func (v *vectorIndexSection) Merge(opaque map[int]resetable, segments []*Segment
 
 // todo: is it possible to merge this resuable stuff with the interim's tmp0?
 func (v *vectorIndexOpaque) grabBuf(size int) []byte {
-	return nil
+	buf := v.tmp0
+	if cap(buf) < size {
+		buf = make([]byte, size)
+		v.tmp0 = buf
+	}
+	return buf[0:size]
 }
 
 func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint64, err error) {
@@ -69,10 +74,10 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		var ids []int64
 		docIDsMap := make(map[uint64]*roaring.Bitmap)
 
-		for _, vecInfo := range content.vecs {
+		for hash, vecInfo := range content.vecs {
 			vecs = append(vecs, vecInfo.vec...)
 			ids = append(ids, int64(vecInfo.vecID))
-			docIDsMap[vecInfo.vecID] = vecInfo.docIDs
+			docIDsMap[vecInfo.vecID] = vo.vecIDMap[hash].docIDs
 		}
 
 		// create an index, its always a flat for now, because each batch size
@@ -101,10 +106,21 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		}
 
 		fieldStart := w.Count()
+		n := binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return 0, err
+		}
+		n = binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return 0, err
+		}
+
 		// record the fieldStart value for this section.
 		// write the vecID -> docID mapping
 		// write the index bytes and its length
-		n := binary.PutUvarint(tempBuf, uint64(len(buf)))
+		n = binary.PutUvarint(tempBuf, uint64(len(buf)))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return 0, err
@@ -196,6 +212,7 @@ func hashCode(a []float32) uint32 {
 	for _, v := range a {
 		rv = rv ^ math.Float32bits(v)
 	}
+
 	return rv
 }
 
@@ -212,7 +229,11 @@ func (v *vectorIndexSection) getvectorIndexOpaque(opaque map[int]resetable) *vec
 }
 
 func (v *vectorIndexSection) InitOpaque(args map[string]interface{}) resetable {
-	rv := &vectorIndexOpaque{}
+	rv := &vectorIndexOpaque{
+		fieldAddrs:  make(map[uint16]int),
+		vecIDMap:    make(map[uint32]vecInfo),
+		vecFieldMap: make(map[uint16]indexContent),
+	}
 	for k, v := range args {
 		rv.Set(k, v)
 	}
@@ -240,6 +261,8 @@ type vectorIndexOpaque struct {
 
 	vecIDMap    map[uint32]vecInfo
 	vecFieldMap map[uint16]indexContent
+
+	tmp0 []byte
 }
 
 func (vo *vectorIndexOpaque) Reset() (err error) {

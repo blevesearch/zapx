@@ -1,6 +1,7 @@
 package zap
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math"
 	"testing"
@@ -143,7 +144,7 @@ func buildMultiDocDataset() []index.Document {
 		newStubFieldVec("stubVec2", []float32{5.6, 2.3, 9.8}, 3, "l2", index.IndexField),
 	})
 
-	doc4 := newVecStubDocument("c", []index.Field{
+	doc4 := newVecStubDocument("d", []index.Field{
 		newStubFieldSplitString("_id", nil, "d", true, false, false),
 		newStubFieldVec("stubVec", []float32{12.0, 42.6, 78.65}, 3, "l2", index.IndexField),
 		newStubFieldVec("stubVec2", []float32{89.1, 312.7, 940.65}, 3, "l2", index.IndexField),
@@ -208,6 +209,35 @@ func newVecStubDocument(id string, fields []index.Field) *stubVecDocument {
 	}
 }
 
+func getSectionContentOffsets(sb *SegmentBase, offset uint64) (
+	docValueStart uint64,
+	docValueEnd uint64,
+	indexBytesLen uint64,
+	indexBytesOffset uint64,
+	numVecs uint64,
+	vecDocIDsMappingOffset uint64,
+) {
+	pos := offset
+	docValueStart, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+
+	docValueEnd, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+
+	indexBytesLen, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+
+	indexBytesOffset = pos
+	pos += indexBytesLen
+
+	numVecs, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+
+	vecDocIDsMappingOffset = pos
+
+	return docValueStart, docValueEnd, indexBytesLen, indexBytesOffset, numVecs, vecDocIDsMappingOffset
+}
+
 func TestVectorSegmentCreation(t *testing.T) {
 	docs := buildMultiDocDataset()
 
@@ -221,5 +251,26 @@ func TestVectorSegmentCreation(t *testing.T) {
 		t.Fatal("not a segment base")
 	}
 	fieldsSectionsMap := vecSegBase.fieldsSectionsMap
-	fmt.Printf("vector section offset: %v %v\n", fieldsSectionsMap[sectionVectorIndex], vecSegBase.fieldsMap)
+	stubVecFieldStartAddr := fieldsSectionsMap[vecSegBase.fieldsMap["stubVec"]-1][sectionVectorIndex]
+	docValueStart, docValueEnd, indexBytesLen, _,
+		numVecs, _ := getSectionContentOffsets(vecSegBase, stubVecFieldStartAddr)
+
+	if docValueStart != fieldNotUninverted {
+		t.Fatal("vector field doesn't support doc values")
+	}
+
+	if docValueEnd != fieldNotUninverted {
+		t.Fatal("vector field doesn't support doc values")
+	}
+
+	// todo: verified this in debug mode, need to calculate this explicitly to make this
+	// test more solid
+	if indexBytesLen != 130 {
+		t.Fatal("expected 130 bytes", indexBytesLen)
+	}
+
+	if numVecs != 2 {
+		t.Fatal("expected 2 vectors", numVecs)
+	}
+	fmt.Printf("numVecs %d indexBytesLen %d\n", numVecs, indexBytesLen)
 }

@@ -198,8 +198,10 @@ func (vo *vectorIndexOpaque) process(field index.DenseVectorField, fieldID uint1
 				metric: metric,
 			}
 		} else {
-			// duplicate vector ignored for now.
-			// the docIDs its present in are already added to the bitmap.
+			vo.vecFieldMap[fieldID].vecs[vecHash] = vecInfo{
+				vecID: uint64(len(vo.vecIDMap)),
+				vec:   vec,
+			}
 		}
 	}
 }

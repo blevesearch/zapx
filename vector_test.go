@@ -8,6 +8,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 	index "github.com/blevesearch/bleve_index_api"
+	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 
 func getStubDocScores(k int) (ids []uint64, scores []float32, err error) {
@@ -242,11 +243,11 @@ func TestVectorSegmentCreation(t *testing.T) {
 	docs := buildMultiDocDataset()
 
 	vecSegPlugin := &ZapPlugin{}
-	vecSeg, _, err := vecSegPlugin.New(docs)
+	seg, _, err := vecSegPlugin.New(docs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	vecSegBase, ok := vecSeg.(*SegmentBase)
+	vecSegBase, ok := seg.(*SegmentBase)
 	if !ok {
 		t.Fatal("not a segment base")
 	}
@@ -272,5 +273,23 @@ func TestVectorSegmentCreation(t *testing.T) {
 	if numVecs != 2 {
 		t.Fatal("expected 2 vectors", numVecs)
 	}
-	fmt.Printf("numVecs %d indexBytesLen %d\n", numVecs, indexBytesLen)
+
+	if vecSeg, ok := seg.(segment.VectorSegment); ok {
+		pl, err := vecSeg.SimilarVectors("stubVec", []float32{50.1, 45.6, 67.8}, 2, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		itr := pl.Iterator(nil)
+
+		for {
+			next, err := itr.Next()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if next == nil {
+				break
+			}
+			fmt.Printf("similar vec %v score %v\n", next.Number(), next.Score())
+		}
+	}
 }

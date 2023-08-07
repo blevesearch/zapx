@@ -237,6 +237,12 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 		if vectorSection > 0 {
 			// not a good idea to cache the vector index perhaps, since it could be quite huge.
 			pos := int(vectorSection)
+			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+
+			_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+
 			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 			indexBytes := sb.mem[pos : pos+int(indexSize)]
@@ -281,11 +287,11 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 				var code uint64
 
 				for _, docID := range docIDs {
-					if except.Contains(docID) {
+					if except != nil && except.Contains(docID) {
 						// ignore the deleted doc
 						continue
 					}
-					code = uint64(docID<<31) | uint64(math.Float32bits(scores[i]))
+					code = uint64(docID)<<31 | uint64(math.Float32bits(scores[i]))
 					rv.postings.Add(uint64(code))
 				}
 			}

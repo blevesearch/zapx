@@ -70,8 +70,16 @@ type stubVecField struct {
 }
 
 // DenseVector is an implementation of the index.DenseVectorField interface.
-func (n *stubVecField) DenseVector() ([]float32, int, string) {
-	return n.value, n.dims, n.similarity
+func (n *stubVecField) DenseVector() []float32 {
+	return n.value
+}
+
+func (n *stubVecField) Similarity() string {
+	return n.similarity
+}
+
+func (n *stubVecField) Dims() int {
+	return n.dims
 }
 
 func (n *stubVecField) Size() int {

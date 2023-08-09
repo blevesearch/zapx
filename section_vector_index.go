@@ -181,7 +181,10 @@ func (vo *vectorIndexOpaque) process(field index.DenseVectorField, fieldID uint1
 
 	//process field
 
-	vec, dim, metric := field.DenseVector()
+	vec := field.DenseVector()
+	dim := field.Dims()
+	metric := field.Similarity()
+
 	if vec != nil {
 		// NOTE: currently, indexing only unique vectors.
 		vecHash := hashCode(vec)

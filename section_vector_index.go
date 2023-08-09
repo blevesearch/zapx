@@ -1,6 +1,7 @@
-package zap
+//go:build densevector
+// +build densevector
 
-// keep a build tag for this file.
+package zap
 
 import (
 	"encoding/binary"
@@ -10,6 +11,10 @@ import (
 	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 )
+
+func init() {
+	segmentSections[sectionVectorIndex] = &vectorIndexSection{}
+}
 
 type vectorIndexSection struct {
 }

@@ -141,6 +141,10 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 
 		// fixme: this can cause a write amplification. need to improve this.
 		// todo: might need to a reformating to optimize according to mmap needs.
+		// reformating idea: storing all the IDs mapping towards the end of the
+		// section would be help avoiding in paging in this data as part of a page
+		// (which is to load a non-cacheable info like index). this could help the
+		// paging costs
 		for vecID, docIDs := range docIDsMap {
 			// write the vecID
 			_, err := writeUvarints(w, vecID)

@@ -36,6 +36,9 @@ func (vp *VecPosting) Size() int {
 // the score is actually a float32 value and in order to store it as a uint32 in
 // the bitmap, we use the IEEE 754 floating point format.
 type VecPostingsList struct {
+	// todo: perhaps we don't even need to store a bitmap if there is only
+	// one similar vector the query, but rather store it as a field value
+	// in the struct
 	except   *roaring64.Bitmap
 	postings *roaring64.Bitmap
 }
@@ -90,8 +93,13 @@ func (vpl *VecPostingsList) Size() int {
 	return 0
 }
 
-func (vpl *VecPostingsList) Count() uint64 {
-	return 0
+func (p *VecPostingsList) Count() uint64 {
+	n := p.postings.GetCardinality()
+	var e uint64
+	if p.except != nil {
+		e = p.postings.AndCardinality(p.except)
+	}
+	return n - e
 }
 
 func (vpl *VecPostingsList) ResetBytesRead(val uint64) {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 	index "github.com/blevesearch/bleve_index_api"
+	"github.com/blevesearch/go-faiss"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 
@@ -122,7 +123,35 @@ func newStubFieldVec(name string, vector []float32, d int, metric string, fieldO
 	}
 }
 
+func stubVecData() [][]float32 {
+	rv := [][]float32{
+		{1.0, 2.0, 3.0},
+		{12.0, 42.6, 78.65},
+		{6.7, 0.876, 9.45},
+		{7.437, 9.994, 0.407},
+		{4.439, 0.307, 1.063},
+		{6.653, 7.752, 0.972},
+	}
+	return rv
+}
+
+func stubVec1Data() [][]float32 {
+	rv := [][]float32{
+		{5.6, 2.3, 9.8},
+		{89.1, 312.7, 940.65},
+		{123.4, 8.98, 0.765},
+		{0.413, 9.054, 3.393},
+		{2.463, 3.388, 2.082},
+		{3.371, 3.473, 6.906},
+	}
+	return rv
+}
+
 func buildMultiDocDataset() []index.Document {
+
+	stubVecs := stubVecData()
+	stubVecs1 := stubVec1Data()
+
 	doc1 := newStubDocument("a", []*stubField{
 		newStubFieldSplitString("_id", nil, "a", true, false, false),
 		newStubFieldSplitString("name", nil, "wow", true, false, true),
@@ -141,14 +170,36 @@ func buildMultiDocDataset() []index.Document {
 
 	doc3 := newVecStubDocument("c", []index.Field{
 		newStubFieldSplitString("_id", nil, "c", true, false, false),
-		newStubFieldVec("stubVec", []float32{1.0, 2.0, 3.0}, 3, "l2", index.IndexField),
-		newStubFieldVec("stubVec2", []float32{5.6, 2.3, 9.8}, 3, "l2", index.IndexField),
+		newStubFieldVec("stubVec", stubVecs[0], 3, "l2", index.IndexField),
+		newStubFieldVec("stubVec2", stubVecs1[0], 3, "l2", index.IndexField),
 	})
 
 	doc4 := newVecStubDocument("d", []index.Field{
 		newStubFieldSplitString("_id", nil, "d", true, false, false),
-		newStubFieldVec("stubVec", []float32{12.0, 42.6, 78.65}, 3, "l2", index.IndexField),
-		newStubFieldVec("stubVec2", []float32{89.1, 312.7, 940.65}, 3, "l2", index.IndexField),
+		newStubFieldVec("stubVec", stubVecs[1], 3, "l2", index.IndexField),
+		newStubFieldVec("stubVec2", stubVecs1[1], 3, "l2", index.IndexField),
+	})
+	doc5 := newVecStubDocument("e", []index.Field{
+		newStubFieldSplitString("_id", nil, "e", true, false, false),
+		newStubFieldVec("stubVec", stubVecs[2], 3, "l2", index.IndexField),
+		newStubFieldVec("stubVec2", stubVecs1[2], 3, "l2", index.IndexField),
+	})
+
+	doc6 := newVecStubDocument("f", []index.Field{
+		newStubFieldSplitString("_id", nil, "f", true, false, false),
+		newStubFieldVec("stubVec", stubVecs[3], 3, "l2", index.IndexField),
+		newStubFieldVec("stubVec2", stubVecs1[3], 3, "l2", index.IndexField),
+	})
+	doc7 := newVecStubDocument("g", []index.Field{
+		newStubFieldSplitString("_id", nil, "g", true, false, false),
+		newStubFieldVec("stubVec", stubVecs[4], 3, "l2", index.IndexField),
+		newStubFieldVec("stubVec2", stubVecs1[4], 3, "l2", index.IndexField),
+	})
+
+	doc8 := newVecStubDocument("h", []index.Field{
+		newStubFieldSplitString("_id", nil, "h", true, false, false),
+		newStubFieldVec("stubVec", stubVecs[5], 3, "l2", index.IndexField),
+		newStubFieldVec("stubVec2", stubVecs1[5], 3, "l2", index.IndexField),
 	})
 
 	results := []index.Document{
@@ -156,6 +207,10 @@ func buildMultiDocDataset() []index.Document {
 		doc2,
 		doc3,
 		doc4,
+		doc5,
+		doc6,
+		doc7,
+		doc8,
 	}
 
 	return results
@@ -239,7 +294,35 @@ func getSectionContentOffsets(sb *SegmentBase, offset uint64) (
 	return docValueStart, docValueEnd, indexBytesLen, indexBytesOffset, numVecs, vecDocIDsMappingOffset
 }
 
-func TestVectorSegmentCreation(t *testing.T) {
+func serializeVecs(dataset [][]float32) []float32 {
+	var vecs []float32
+	for _, vec := range dataset {
+		vecs = append(vecs, vec...)
+	}
+	return vecs
+}
+
+func letsCreateVectorIndexForTesting(dataset [][]float32, dims int, similarity string) (*faiss.IndexImpl, error) {
+	vecs := serializeVecs(dataset)
+
+	idx, err := faiss.IndexFactory(dims, "Flat,IDMap2", faiss.MetricL2)
+	if err != nil {
+		return nil, err
+	}
+
+	idx.Train(vecs)
+
+	ids := make([]int64, len(dataset))
+	for i := 0; i < len(dataset); i++ {
+		ids[i] = int64(i)
+	}
+
+	idx.AddWithIDs(vecs, ids)
+
+	return idx, nil
+}
+
+func TestVectorSegment(t *testing.T) {
 	docs := buildMultiDocDataset()
 
 	vecSegPlugin := &ZapPlugin{}
@@ -264,18 +347,26 @@ func TestVectorSegmentCreation(t *testing.T) {
 		t.Fatal("vector field doesn't support doc values")
 	}
 
-	// todo: verified this in debug mode, need to calculate this explicitly to make this
-	// test more solid
-	if indexBytesLen != 130 {
-		t.Fatal("expected 130 bytes", indexBytesLen)
+	data := stubVecData()
+	vecIndex, err := letsCreateVectorIndexForTesting(data, 3, "l2")
+	if err != nil {
+		t.Fatalf("error creating vector index %v", err)
+	}
+	buf, err := faiss.WriteIndexIntoBuffer(vecIndex)
+	if err != nil {
+		t.Fatalf("error serializing vector index %v", err)
 	}
 
-	if numVecs != 2 {
-		t.Fatal("expected 2 vectors", numVecs)
+	if indexBytesLen != uint64(len(buf)) {
+		t.Fatalf("expected %d bytes got %d bytes", len(buf), indexBytesLen)
+	}
+
+	if numVecs != uint64(vecIndex.Ntotal()) {
+		t.Fatalf("expected %d vecs got %d vecs", vecIndex.Ntotal(), numVecs)
 	}
 
 	if vecSeg, ok := seg.(segment.VectorSegment); ok {
-		pl, err := vecSeg.SimilarVectors("stubVec", []float32{50.1, 45.6, 67.8}, 2, nil)
+		pl, err := vecSeg.SimilarVectors("stubVec", []float32{0.0, 0.0, 0.0}, 3, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

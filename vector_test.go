@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"os"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -334,6 +335,18 @@ func TestVectorSegment(t *testing.T) {
 	if !ok {
 		t.Fatal("not a segment base")
 	}
+
+	path := "./test-seg"
+	err = vecSegBase.Persist(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	segOnDisk, err := vecSegPlugin.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	fieldsSectionsMap := vecSegBase.fieldsSectionsMap
 	stubVecFieldStartAddr := fieldsSectionsMap[vecSegBase.fieldsMap["stubVec"]-1][sectionVectorIndex]
 	docValueStart, docValueEnd, indexBytesLen, _,
@@ -365,7 +378,57 @@ func TestVectorSegment(t *testing.T) {
 		t.Fatalf("expected %d vecs got %d vecs", vecIndex.Ntotal(), numVecs)
 	}
 
-	if vecSeg, ok := seg.(segment.VectorSegment); ok {
+	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
+		pl, err := vecSeg.SimilarVectors("stubVec", []float32{0.0, 0.0, 0.0}, 3, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		itr := pl.Iterator(nil)
+
+		for {
+			next, err := itr.Next()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if next == nil {
+				break
+			}
+			fmt.Printf("similar vec %v score %v\n", next.Number(), next.Score())
+		}
+	}
+}
+
+func TestPersistedVectorSegment(t *testing.T) {
+	docs := buildMultiDocDataset()
+
+	vecSegPlugin := &ZapPlugin{}
+	seg, _, err := vecSegPlugin.New(docs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := "./test-seg"
+	if unPersistedSeg, ok := seg.(segment.UnpersistedSegment); ok {
+		err = unPersistedSeg.Persist(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	segOnDisk, err := vecSegPlugin.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() {
+		cerr := segOnDisk.Close()
+		if cerr != nil {
+			t.Fatalf("error closing segment: %v", cerr)
+		}
+		_ = os.RemoveAll(path)
+	}()
+
+	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
 		pl, err := vecSeg.SimilarVectors("stubVec", []float32{0.0, 0.0, 0.0}, 3, nil)
 		if err != nil {
 			t.Fatal(err)

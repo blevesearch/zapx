@@ -24,7 +24,7 @@ import (
 	"github.com/blevesearch/vellum"
 )
 
-const Version uint32 = 15
+const Version uint32 = 16
 
 const Type string = "zap"
 

@@ -53,9 +53,10 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 
 	rv := &Segment{
 		SegmentBase: SegmentBase{
-			mem:       mm[0 : len(mm)-FooterSize],
-			fieldsMap: make(map[string]uint16),
-			fieldFSTs: make(map[uint16]*vellum.FST),
+			mem:            mm[0 : len(mm)-FooterSize],
+			fieldsMap:      make(map[string]uint16),
+			fieldFSTs:      make(map[uint16]*vellum.FST),
+			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
 		},
 		f:    f,
 		mm:   mm,
@@ -794,8 +795,9 @@ func (s *SegmentBase) loadDvReaders() error {
 				if read <= 0 {
 					return fmt.Errorf("loadDvReaders: failed to read the dict offset for field %v", s.fieldsInv[fieldID])
 				}
-				s.dictLocs = append(s.dictLocs, dictLoc)
-
+				if secID == sectionInvertedIndex {
+					s.dictLocs = append(s.dictLocs, dictLoc)
+				}
 				fieldDvReader, err := s.loadFieldDocValueReader(s.fieldsInv[fieldID], fieldLocStart, fieldLocEnd)
 				if err != nil {
 					return err

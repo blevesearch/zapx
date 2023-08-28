@@ -1,5 +1,5 @@
-//go:build densevector
-// +build densevector
+//go:build vectors
+// +build vectors
 
 package zap
 
@@ -24,7 +24,7 @@ func (v *vectorIndexSection) Process(opaque map[int]resetable, docNum uint64, fi
 		return
 	}
 
-	if vf, ok := field.(index.DenseVectorField); ok {
+	if vf, ok := field.(index.VectorField); ok {
 		vo := v.getvectorIndexOpaque(opaque)
 		vo.process(vf, fieldID, docNum)
 	}
@@ -88,7 +88,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		// create an index, its always a flat for now, because each batch size
 		// won't have too many vectors (in order for >100K). todo: will need to revisit
 		// this logic - creating based on configured batch size in scorch.
-		index, err := faiss.IndexFactory(int(content.dim), "Flat,IDMap2", faiss.MetricL2)
+		index, err := faiss.IndexFactory(int(content.dim), "Flat,IDMap2", faiss.MetricInnerProduct)
 		if err != nil {
 			return 0, err
 		}
@@ -169,7 +169,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 	return 0, nil
 }
 
-func (vo *vectorIndexOpaque) process(field index.DenseVectorField, fieldID uint16, docNum uint64) {
+func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, docNum uint64) {
 	if !vo.init {
 		vo.init = true
 		vo.allocateSpace()
@@ -181,7 +181,7 @@ func (vo *vectorIndexOpaque) process(field index.DenseVectorField, fieldID uint1
 
 	//process field
 
-	vec := field.DenseVector()
+	vec := field.Vector()
 	dim := field.Dims()
 	metric := field.Similarity()
 

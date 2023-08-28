@@ -1,5 +1,5 @@
-//go:build densevector
-// +build densevector
+//go:build vectors
+// +build vectors
 
 package zap
 
@@ -69,8 +69,8 @@ type stubVecField struct {
 	options     index.FieldIndexingOptions
 }
 
-// DenseVector is an implementation of the index.DenseVectorField interface.
-func (n *stubVecField) DenseVector() []float32 {
+// Vector is an implementation of the index.VectorField interface.
+func (n *stubVecField) Vector() []float32 {
 	return n.value
 }
 

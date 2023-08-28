@@ -1,17 +1,31 @@
-//go:build densevector
-// +build densevector
+//go:build vectors
+// +build vectors
 
 package zap
 
 import (
 	"encoding/binary"
 	"math"
+	"reflect"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/blevesearch/go-faiss"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
+
+var reflectStaticSizeVecPostingsList int
+var reflectStaticSizeVecPostingsIterator int
+var reflectStaticSizeVecPosting int
+
+func init() {
+	var pl VecPostingsList
+	reflectStaticSizeVecPostingsList = int(reflect.TypeOf(pl).Size())
+	var pi VecPostingsIterator
+	reflectStaticSizeVecPostingsIterator = int(reflect.TypeOf(pi).Size())
+	var p VecPosting
+	reflectStaticSizeVecPosting = int(reflect.TypeOf(p).Size())
+}
 
 type VecPosting struct {
 	docNum uint64
@@ -27,7 +41,9 @@ func (vp *VecPosting) Score() float32 {
 }
 
 func (vp *VecPosting) Size() int {
-	return 0
+	sizeInBytes := reflectStaticSizePosting
+
+	return sizeInBytes
 }
 
 // =============================================================================
@@ -92,8 +108,14 @@ func (p *VecPostingsList) iterator(rv *VecPostingsIterator) *VecPostingsIterator
 	return rv
 }
 
-func (vpl *VecPostingsList) Size() int {
-	return 0
+func (p *VecPostingsList) Size() int {
+	sizeInBytes := reflectStaticSizeVecPostingsList + SizeOfPtr
+
+	if p.except != nil {
+		sizeInBytes += int(p.except.GetSizeInBytes())
+	}
+
+	return sizeInBytes
 }
 
 func (p *VecPostingsList) Count() uint64 {
@@ -201,8 +223,11 @@ func (i *VecPostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.VecPostin
 	return rv, nil
 }
 
-func (itr *VecPostingsIterator) Size() int {
-	return 0
+func (i *VecPostingsIterator) Size() int {
+	sizeInBytes := reflectStaticSizePostingsIterator + SizeOfPtr +
+		i.next.Size()
+
+	return sizeInBytes
 }
 
 func (vpl *VecPostingsIterator) ResetBytesRead(val uint64) {

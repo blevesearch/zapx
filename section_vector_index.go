@@ -31,7 +31,6 @@ func (v *vectorIndexSection) Process(opaque map[int]resetable, docNum uint64, fi
 }
 
 func (v *vectorIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
-
 	vo := v.getvectorIndexOpaque(opaque)
 	vo.writeVectorIndexes(w)
 	return 0, nil
@@ -46,14 +45,6 @@ func (v *vectorIndexSection) AddrForField(opaque map[int]resetable, fieldID int)
 // leverage bitmaps stored
 func (v *vectorIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase, drops []*roaring.Bitmap, fieldsInv []string,
 	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
-
-	// flat indexes support the reconstruct API which helps in reconstructing
-	// a vector from the provided vectorID. for ivf, there needs to be an explicit
-	// enabling of this reconstruction by initialising a direct map (using APIs ofc)
-
-	// removing of vectors from an index is supported, need to give like an IDSelector
-	// which is basically the set of IDs of vectors to be removed.
-
 	return nil
 }
 
@@ -77,18 +68,16 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 
 		var vecs []float32
 		var ids []int64
-		docIDsMap := make(map[uint64]*roaring.Bitmap)
 
 		for hash, vecInfo := range content.vecs {
 			vecs = append(vecs, vecInfo.vec...)
-			ids = append(ids, int64(vecInfo.vecID))
-			docIDsMap[vecInfo.vecID] = vo.vecIDMap[hash].docIDs
+			ids = append(ids, int64(hash))
 		}
 
 		// create an index, its always a flat for now, because each batch size
 		// won't have too many vectors (in order for >100K). todo: will need to revisit
 		// this logic - creating based on configured batch size in scorch.
-		index, err := faiss.IndexFactory(int(content.dim), "Flat,IDMap2", faiss.MetricInnerProduct)
+		index, err := faiss.IndexFactory(int(content.dim), "IDMap2,Flat", faiss.MetricL2)
 		if err != nil {
 			return 0, err
 		}
@@ -98,7 +87,6 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			return 0, err
 		}
 
-		// todo: this must be add_with_ids
 		index.AddWithIDs(vecs, ids)
 		if err != nil {
 			return 0, err
@@ -138,7 +126,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		}
 
 		// write the number of unique vectors
-		n = binary.PutUvarint(tempBuf, uint64(len(docIDsMap)))
+		n = binary.PutUvarint(tempBuf, uint64(len(content.vecs)))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return 0, err
@@ -150,9 +138,10 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		// section would be help avoiding in paging in this data as part of a page
 		// (which is to load a non-cacheable info like index). this could help the
 		// paging costs
-		for vecID, docIDs := range docIDsMap {
+		for vecID, _ := range content.vecs {
+			docIDs := vo.vecIDMap[vecID].docIDs
 			// write the vecID
-			_, err := writeUvarints(w, vecID)
+			_, err := writeUvarints(w, uint64(vecID))
 			if err != nil {
 				return 0, err
 			}
@@ -190,7 +179,6 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 		vecHash := hashCode(vec)
 		if _, ok := vo.vecIDMap[vecHash]; !ok {
 			vo.vecIDMap[vecHash] = vecInfo{
-				vecID:  uint64(len(vo.vecIDMap)),
 				docIDs: roaring.NewBitmap(),
 			}
 		}
@@ -198,12 +186,10 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 		vo.vecIDMap[vecHash].docIDs.Add(uint32(docNum))
 
 		if _, ok := vo.vecFieldMap[fieldID]; !ok {
-			vecKey := vo.vecIDMap[vecHash].vecID
 			vo.vecFieldMap[fieldID] = indexContent{
 				vecs: map[uint32]vecInfo{
 					vecHash: {
-						vecID: vecKey,
-						vec:   vec,
+						vec: vec,
 					},
 				},
 				dim:    uint16(dim),
@@ -211,8 +197,7 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 			}
 		} else {
 			vo.vecFieldMap[fieldID].vecs[vecHash] = vecInfo{
-				vecID: uint64(len(vo.vecIDMap)),
-				vec:   vec,
+				vec: vec,
 			}
 		}
 	}
@@ -262,7 +247,6 @@ type indexContent struct {
 }
 
 type vecInfo struct {
-	vecID  uint64
 	vec    []float32
 	docIDs *roaring.Bitmap
 }

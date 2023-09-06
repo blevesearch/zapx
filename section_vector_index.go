@@ -5,6 +5,7 @@ package zap
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 
 	"github.com/RoaringBitmap/roaring"
@@ -41,10 +42,180 @@ func (v *vectorIndexSection) AddrForField(opaque map[int]resetable, fieldID int)
 	return vo.fieldAddrs[uint16(fieldID)]
 }
 
+// metadata corresponding to a serialized vector index
+type vecIndexMeta struct {
+	startOffset int
+	indexSize   uint64
+}
+
+func remapDocIDs(oldIDs *roaring.Bitmap, newIDs []uint64) *roaring.Bitmap {
+	newBitmap := roaring.NewBitmap()
+	for _, oldID := range oldIDs.ToArray() {
+		newBitmap.Add(uint32(newIDs[oldID]))
+	}
+	return newBitmap
+}
+
 // keep in mind with respect to update and delete opeartions with resepct to vectors/
 // leverage bitmaps stored
 func (v *vectorIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase, drops []*roaring.Bitmap, fieldsInv []string,
 	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
+	vo := v.getvectorIndexOpaque(opaque)
+
+LOOP:
+	for fieldID, _ := range fieldsInv {
+		// need to add a check wrt field type
+		if isClosed(closeCh) {
+			return fmt.Errorf("merging of vector sections aborted")
+		}
+
+		var indexes []vecIndexMeta
+		vecToDocID := make(map[uint64]*roaring.Bitmap)
+		for segI, sb := range segments {
+
+			pos := int(sb.fieldsSectionsMap[fieldID][sectionVectorIndex])
+			if pos == 0 {
+
+				continue LOOP
+			}
+
+			// loading doc values - adhering to the sections format. never
+			// valid values for vector section
+			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+
+			_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+
+			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+
+			indexes = append(indexes, vecIndexMeta{
+				startOffset: pos,
+				indexSize:   indexSize,
+			})
+			// don't read the index bytes just yet, perhaps?
+			pos += int(indexSize)
+
+			numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+
+			for i := 0; i < int(numVecs); i++ {
+				vecID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+				pos += n
+
+				bitMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+				pos += n
+
+				roaringBytes := sb.mem[pos : pos+int(bitMapLen)]
+				pos += int(bitMapLen)
+
+				bitMap := roaring.NewBitmap()
+				_, err := bitMap.FromBuffer(roaringBytes)
+				if err != nil {
+					return err
+				}
+
+				bitMap = remapDocIDs(bitMap, newDocNumsIn[segI])
+				if vecToDocID[vecID] == nil {
+					if drops[segI] != nil && !drops[segI].IsEmpty() {
+						vecToDocID[vecID] = roaring.AndNot(bitMap, drops[segI])
+					} else {
+						vecToDocID[vecID] = bitMap
+					}
+				} else {
+					vecToDocID[vecID].Or(bitMap)
+				}
+			}
+		}
+		vo.mergeAndWriteVectorIndexes(fieldID, segments, vecToDocID, indexes, w)
+	}
+
+	// return err
+	return nil
+}
+
+// todo: naive implementation. need to keep in mind the perf implications and improve on this.
+// perhaps, parallelized merging can help speed things up over here.
+func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*SegmentBase,
+	vecToDocID map[uint64]*roaring.Bitmap, indexes []vecIndexMeta, w *CountHashWriter) error {
+	if len(vecToDocID) >= 100000 {
+		// merging of more complex index types (for eg ivf family) with reconstruction
+		// method.
+		return fmt.Errorf("to be implemented")
+	}
+
+	var vecIndexes []*faiss.IndexImpl
+	for segI, seg := range sbs {
+		// read the index bytes
+		indexBytes := seg.mem[indexes[segI].startOffset : indexes[segI].startOffset+int(indexes[segI].indexSize)]
+		index, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
+		if err != nil {
+			return err
+		}
+		vecIndexes = append(vecIndexes, index)
+	}
+
+	for i := 1; i < len(vecIndexes); i++ {
+		err := vecIndexes[0].MergeFrom(vecIndexes[i], 0)
+		if err != nil {
+			return err
+		}
+	}
+
+	mergedIndexBytes, err := faiss.WriteIndexIntoBuffer(vecIndexes[0])
+	if err != nil {
+		return err
+	}
+
+	tempBuf := v.grabBuf(binary.MaxVarintLen64)
+	// start writing out the merged info to writer
+	fieldStart := w.Count()
+	n := binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
+	_, err = w.Write(tempBuf[:n])
+	if err != nil {
+		return err
+	}
+	n = binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
+	_, err = w.Write(tempBuf[:n])
+	if err != nil {
+		return err
+	}
+
+	n = binary.PutUvarint(tempBuf, uint64(len(mergedIndexBytes)))
+	_, err = w.Write(tempBuf[:n])
+	if err != nil {
+		return err
+	}
+
+	// write the vector index data
+	_, err = w.Write(mergedIndexBytes)
+	if err != nil {
+		return err
+	}
+
+	// write the number of unique vectors
+	n = binary.PutUvarint(tempBuf, uint64(len(vecToDocID)))
+	_, err = w.Write(tempBuf[:n])
+	if err != nil {
+		return err
+	}
+
+	for vecID, docIDs := range vecToDocID {
+		// write the vecID
+		_, err := writeUvarints(w, uint64(vecID))
+		if err != nil {
+			return err
+		}
+
+		// write the docIDs
+		_, err = writeRoaringWithLen(docIDs, w, tempBuf)
+		if err != nil {
+			return err
+		}
+	}
+
+	v.fieldAddrs[uint16(fieldID)] = fieldStart
 	return nil
 }
 
@@ -77,7 +248,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		// create an index, its always a flat for now, because each batch size
 		// won't have too many vectors (in order for >100K). todo: will need to revisit
 		// this logic - creating based on configured batch size in scorch.
-		index, err := faiss.IndexFactory(int(content.dim), "IDMap2,Flat", faiss.MetricL2)
+		index, err := faiss.IndexFactory(int(content.dim), "IDMap2,Flat", faiss.MetricInnerProduct)
 		if err != nil {
 			return 0, err
 		}

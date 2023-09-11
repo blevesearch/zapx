@@ -53,7 +53,6 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 
 	rv := &Segment{
 		SegmentBase: SegmentBase{
-			mem:            mm[0 : len(mm)-FooterSize],
 			fieldsMap:      make(map[string]uint16),
 			fieldFSTs:      make(map[uint16]*vellum.FST),
 			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
@@ -212,10 +211,17 @@ func (s *Segment) loadConfig() error {
 	s.docValueOffset = binary.BigEndian.Uint64(s.mm[docValueOffset : docValueOffset+8])
 
 	fieldsIndexOffset := docValueOffset - 8
-	// for version 16, parse the sectionsIndexOffset
+
+	// determining the right footer size based on version, this becomes important
+	// while loading the fields portion or the sections portion of the index file.
+	var footerSize int
 	if s.version >= IndexSectionsVersion {
+		// for version 16 and above, parse the sectionsIndexOffset
 		s.sectionsIndexOffset = binary.BigEndian.Uint64(s.mm[fieldsIndexOffset : fieldsIndexOffset+8])
 		fieldsIndexOffset = fieldsIndexOffset - 8
+		footerSize = FooterSize
+	} else {
+		footerSize = FooterSize - 8
 	}
 
 	s.fieldsIndexOffset = binary.BigEndian.Uint64(s.mm[fieldsIndexOffset : fieldsIndexOffset+8])
@@ -229,6 +235,7 @@ func (s *Segment) loadConfig() error {
 	// 8*4 + 4*3 = 44 bytes being accounted from all the offsets
 	// above being read from the file
 	s.incrementBytesRead(44)
+	s.SegmentBase.mem = s.mm[:len(s.mm)-footerSize]
 	return nil
 }
 

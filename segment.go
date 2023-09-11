@@ -201,7 +201,7 @@ func (s *Segment) loadConfig() error {
 
 	verOffset := crcOffset - 4
 	s.version = binary.BigEndian.Uint32(s.mm[verOffset : verOffset+4])
-	if s.version != Version {
+	if Version < IndexSectionsVersion && s.version != Version {
 		return fmt.Errorf("unsupported version %d != %d", s.version, Version)
 	}
 
@@ -213,7 +213,7 @@ func (s *Segment) loadConfig() error {
 
 	fieldsIndexOffset := docValueOffset - 8
 	// for version 16, parse the sectionsIndexOffset
-	if s.version == 16 {
+	if s.version >= IndexSectionsVersion {
 		s.sectionsIndexOffset = binary.BigEndian.Uint64(s.mm[fieldsIndexOffset : fieldsIndexOffset+8])
 		fieldsIndexOffset = fieldsIndexOffset - 8
 	}
@@ -666,35 +666,11 @@ func (s *Segment) DictAddr(field string) (uint64, error) {
 
 func (s *Segment) getDvStartEndOffsets(fieldID int, secID uint16) (uint64, uint64, uint64, error) {
 	// Version is gonna be 16
-	var n int
-	if s.version < 16 {
-		// older file formats to parse the docValueIndex
-		if secID != sectionInvertedIndex || s.docValueOffset == fieldNotUninverted {
-			// older file formats have docValues corresponding only to inverted index
-			// ignore the rest.
-			return 0, 0, 0, nil
-		}
-
-		var fieldLocStart, fieldLocEnd, read uint64
-		fieldLocStart, n = binary.Uvarint(s.mem[s.docValueOffset+read : s.docValueOffset+read+binary.MaxVarintLen64])
-		if n <= 0 {
-			return 0, 0, 0, fmt.Errorf("loadDvReaders: failed to read the docvalue offset start for field %d", fieldID)
-		}
-		read += uint64(n)
-		fieldLocEnd, n = binary.Uvarint(s.mem[s.docValueOffset+read : s.docValueOffset+read+binary.MaxVarintLen64])
-		if n <= 0 {
-			return 0, 0, 0, fmt.Errorf("loadDvReaders: failed to read the docvalue offset end for field %d", fieldID)
-		}
-		read += uint64(n)
-
-		return fieldLocStart, fieldLocEnd, read, nil
-	}
-
 	var fieldLocStart uint64 = fieldNotUninverted
 	fieldLocEnd := fieldLocStart
 	sectionMap := s.fieldsSectionsMap[fieldID]
 	fieldAddrStart := sectionMap[secID]
-	n = 0
+	n := 0
 
 	if fieldAddrStart > 0 {
 		// fixed encoding as of now, need to uvarint this
@@ -729,10 +705,12 @@ func (s *Segment) loadDvReader(fieldID int, secID uint16) error {
 	if err != nil {
 		return err
 	}
+
 	fieldDvReader, err := s.loadFieldDocValueReader(s.fieldsInv[fieldID], start, end)
 	if err != nil {
 		return err
 	}
+
 	if fieldDvReader != nil {
 		if s.fieldDvReaders[secID] == nil {
 			s.fieldDvReaders[secID] = make(map[uint16]*docValueReader)
@@ -745,6 +723,50 @@ func (s *Segment) loadDvReader(fieldID int, secID uint16) error {
 	return nil
 }
 
+func (s *Segment) loadDvReadersLegacy() error {
+	if s.numDocs == 0 {
+		return nil
+	}
+
+	// older file formats to parse the docValueIndex and if that says doc values
+	// aren't there in this segment file, just return nil
+	if s.docValueOffset == fieldNotUninverted {
+		return nil
+	}
+	var read uint64
+	for fieldID := range s.fieldsInv {
+		start, n := binary.Uvarint(s.mem[s.docValueOffset+read : s.docValueOffset+read+binary.MaxVarintLen64])
+		if n <= 0 {
+			return fmt.Errorf("loadDvReaders: failed to read the docvalue offset start for field %d", fieldID)
+		}
+		read += uint64(n)
+		end, n := binary.Uvarint(s.mem[s.docValueOffset+read : s.docValueOffset+read+binary.MaxVarintLen64])
+		if n <= 0 {
+			return fmt.Errorf("loadDvReaders: failed to read the docvalue offset end for field %d", fieldID)
+		}
+		read += uint64(n)
+
+		fieldDvReader, err := s.loadFieldDocValueReader(s.fieldsInv[fieldID], start, end)
+		if err != nil {
+			return err
+		}
+
+		if fieldDvReader != nil {
+			// older file formats have docValues corresponding only to inverted index
+			// ignore the rest.
+			if s.fieldDvReaders[sectionInvertedIndex] == nil {
+				s.fieldDvReaders[sectionInvertedIndex] = make(map[uint16]*docValueReader)
+			}
+			// fix the structure of fieldDvReaders
+			// currently it populates the inverted index doc values
+			s.fieldDvReaders[sectionInvertedIndex][uint16(fieldID)] = fieldDvReader
+			s.fieldDvNames = append(s.fieldDvNames, s.fieldsInv[fieldID])
+		}
+	}
+
+	return nil
+}
+
 // Segment is a file segment, and loading the dv readers from that segment
 // must account for the version while loading since the formats are different
 // in the older and the Version version.
@@ -753,10 +775,15 @@ func (s *Segment) loadDvReaders() error {
 	if s.numDocs == 0 {
 		return nil
 	}
+
+	if s.version < IndexSectionsVersion {
+		return s.loadDvReadersLegacy()
+	}
+
 	for fieldID := range s.fieldsInv {
 		// for every section
-		for segID := range segmentSections {
-			s.loadDvReader(fieldID, segID)
+		for secID := range segmentSections {
+			s.loadDvReader(fieldID, secID)
 		}
 	}
 
@@ -774,7 +801,6 @@ func (s *SegmentBase) loadDvReaders() error {
 	}
 
 	for fieldID, sections := range s.fieldsSectionsMap {
-
 		for secID, fieldAddrStart := range sections {
 			if fieldAddrStart > 0 {
 				// fixed encoding as of now, need to uvarint this

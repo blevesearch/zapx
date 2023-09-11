@@ -151,7 +151,6 @@ func (s *SegmentBase) loadFieldDocValueReader(field string,
 	s.incrementBytesRead(offset)
 	// set the data offset
 	fdvIter.dvDataLoc = fieldDvLocStart
-
 	return fdvIter, nil
 }
 

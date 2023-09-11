@@ -25,7 +25,7 @@ import (
 )
 
 const Version uint32 = 16
-
+const IndexSectionsVersion uint32 = 16
 const Type string = "zap"
 
 const fieldNotUninverted = math.MaxUint64

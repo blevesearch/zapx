@@ -149,15 +149,6 @@ func (s *interim) reset() (err error) {
 	return err
 }
 
-func (s *interim) grabBuf(size int) []byte {
-	buf := s.tmp0
-	if cap(buf) < size {
-		buf = make([]byte, size)
-		s.tmp0 = buf
-	}
-	return buf[0:size]
-}
-
 type interimStoredField struct {
 	vals      [][]byte
 	typs      []byte
@@ -248,26 +239,14 @@ func (s *interim) getOrDefineField(fieldName string) int {
 }
 
 func (s *interim) processDocuments() {
-	numFields := len(s.FieldsInv)
-	reuseFieldLens := make([]int, numFields)
-	reuseFieldTFs := make([]index.TokenFrequencies, numFields)
-
 	for docNum, result := range s.results {
-		for i := 0; i < numFields; i++ { // clear these for reuse
-			reuseFieldLens[i] = 0
-			reuseFieldTFs[i] = nil
-		}
-
-		s.processDocument(uint64(docNum), result,
-			reuseFieldLens, reuseFieldTFs)
+		s.processDocument(uint64(docNum), result)
 	}
 }
 
 func (s *interim) processDocument(docNum uint64,
-	result index.Document,
-	fieldLens []int, fieldTFs []index.TokenFrequencies) {
+	result index.Document) {
 	visitField := func(field index.Field) {
-
 		fieldID := uint16(s.getOrDefineField(field.Name()))
 
 		// section specific processing of the field

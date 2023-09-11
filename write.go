@@ -101,41 +101,8 @@ func persistNewFields(fieldsInv []string, w *CountHashWriter, dictLocs []uint64,
 	return rv, nil
 }
 
-func persistFields(fieldsInv []string, w *CountHashWriter, dictLocs []uint64) (uint64, error) {
-	var rv uint64
-	var fieldsOffsets []uint64
-
-	for fieldID, fieldName := range fieldsInv {
-		// record start of this field
-		fieldsOffsets = append(fieldsOffsets, uint64(w.Count()))
-
-		// write out the dict location and field name length
-		_, err := writeUvarints(w, dictLocs[fieldID], uint64(len(fieldName)))
-		if err != nil {
-			return 0, err
-		}
-
-		// write out the field name
-		_, err = w.Write([]byte(fieldName))
-		if err != nil {
-			return 0, err
-		}
-	}
-
-	// now write out the fields index
-	rv = uint64(w.Count())
-	for fieldID := range fieldsInv {
-		err := binary.Write(w, binary.BigEndian, fieldsOffsets[fieldID])
-		if err != nil {
-			return 0, err
-		}
-	}
-
-	return rv, nil
-}
-
 // FooterSize is the size of the footer record in bytes
-// crc + ver + chunk + field offset + stored offset + num docs + docValueOffset
+// crc + ver + chunk + docValueOffset + sectionsIndexOffset + field offset + stored offset + num docs
 const FooterSize = 4 + 4 + 4 + 8 + 8 + 8 + 8 + 8
 
 func persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, sectionsIndexOffset, docValueOffset uint64,

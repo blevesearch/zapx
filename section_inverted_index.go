@@ -22,8 +22,8 @@ func (i *invertedIndexSection) Process(opaque map[int]resetable, docNum uint64, 
 
 func (i *invertedIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
 	invIndexOpaque := i.getInvertedIndexOpaque(opaque)
-	_, _ = invIndexOpaque.writeDicts(w)
-	return 0, nil
+	_, err = invIndexOpaque.writeDicts(w)
+	return 0, err
 }
 
 func (i *invertedIndexSection) AddrForField(opaque map[int]resetable, fieldID int) int {
@@ -353,7 +353,6 @@ func (i *invertedIndexSection) Merge(opaque map[int]resetable, segments []*Segme
 	return nil
 }
 
-// todo: is it possible to merge this resuable stuff with the interim's tmp0?
 func (i *invertedIndexOpaque) grabBuf(size int) []byte {
 	buf := i.tmp0
 	if cap(buf) < size {
@@ -561,8 +560,6 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 
 		fieldStart := w.Count()
 
-		// todo: uvarint these offsets
-
 		n = binary.PutUvarint(buf, fdvOffsetsStart[fieldID])
 		_, err = w.Write(buf[:n])
 		if err != nil {
@@ -643,13 +640,6 @@ func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum
 			io.reusableFieldTFs[i] = nil
 		}
 		return
-	}
-
-	if len(io.reusableFieldTFs) == 0 {
-		io.reusableFieldTFs = make([]index.TokenFrequencies, len(io.FieldsInv))
-	}
-	if len(io.reusableFieldLens) == 0 {
-		io.reusableFieldLens = make([]int, len(io.FieldsInv))
 	}
 
 	io.reusableFieldLens[fieldID] += field.AnalyzedLength()
@@ -794,6 +784,18 @@ func (i *invertedIndexOpaque) prepareDicts() {
 	for _, dict := range i.DictKeys {
 		sort.Strings(dict)
 	}
+
+	if cap(i.reusableFieldTFs) >= len(i.FieldsInv) {
+		i.reusableFieldTFs = i.reusableFieldTFs[:len(i.FieldsInv)]
+	} else {
+		i.reusableFieldTFs = make([]index.TokenFrequencies, len(i.FieldsInv))
+	}
+
+	if cap(i.reusableFieldLens) >= len(i.FieldsInv) {
+		i.reusableFieldLens = i.reusableFieldLens[:len(i.FieldsInv)]
+	} else {
+		i.reusableFieldLens = make([]int, len(i.FieldsInv))
+	}
 }
 
 func (i *invertedIndexSection) getInvertedIndexOpaque(opaque map[int]resetable) *invertedIndexOpaque {
@@ -803,7 +805,6 @@ func (i *invertedIndexSection) getInvertedIndexOpaque(opaque map[int]resetable) 
 	return opaque[sectionInvertedIndex].(*invertedIndexOpaque)
 }
 
-// revisit this function's purpose etc.
 func (i *invertedIndexOpaque) getOrDefineField(fieldName string) int {
 	fieldIDPlus1, exists := i.FieldsMap[fieldName]
 	if !exists {
@@ -890,6 +891,7 @@ type invertedIndexOpaque struct {
 func (io *invertedIndexOpaque) Reset() (err error) {
 	// cleanup stuff over here
 	io.results = nil
+	io.init = false
 	io.chunkMode = 0
 	io.FieldsMap = nil
 	io.FieldsInv = nil

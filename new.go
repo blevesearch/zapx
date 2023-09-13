@@ -217,6 +217,10 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, uint64, error) {
 		}
 	}
 
+	if len(s.results) == 0 {
+		dictOffsets = make([]uint64, len(s.FieldsInv))
+	}
+
 	// we can persist a new fields section here
 	// this new fields section will point to the various indexes available
 	sectionsIndexOffset, err := persistNewFields(s.FieldsInv, s.w, dictOffsets, s.opaque)

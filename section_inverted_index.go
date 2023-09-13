@@ -338,9 +338,9 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 	return fieldAddrs, fieldDvLocsOffset, nil
 }
 
-func (i *invertedIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase, drops []*roaring.Bitmap, fieldsInv []string,
-	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
-
+func (i *invertedIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
+	drops []*roaring.Bitmap, fieldsInv []string, newDocNumsIn [][]uint64,
+	w *CountHashWriter, closeCh chan struct{}) error {
 	io := i.getInvertedIndexOpaque(opaque)
 	fieldAddrs, _, err := mergeAndPersistInvertedSection(segments, drops, fieldsInv,
 		io.FieldsMap, io.fieldsSame, newDocNumsIn, io.numDocs, io.chunkMode, w, closeCh)
@@ -349,7 +349,6 @@ func (i *invertedIndexSection) Merge(opaque map[int]resetable, segments []*Segme
 	}
 
 	io.fieldAddrs = fieldAddrs
-
 	return nil
 }
 
@@ -363,6 +362,10 @@ func (i *invertedIndexOpaque) grabBuf(size int) []byte {
 }
 
 func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uint64, err error) {
+
+	if io.results == nil || len(io.results) == 0 {
+		return nil, nil
+	}
 
 	dictOffsets = make([]uint64, len(io.FieldsInv))
 
@@ -586,7 +589,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 
 func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum uint64) {
 	if !io.init && io.results != nil {
-		io.prepareDicts()
+		io.allocateSpace()
 		io.init = true
 	}
 
@@ -652,7 +655,7 @@ func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum
 	}
 }
 
-func (i *invertedIndexOpaque) prepareDicts() {
+func (i *invertedIndexOpaque) allocateSpace() {
 	var pidNext int
 
 	var totTFs int
@@ -842,13 +845,19 @@ type invertedIndexOpaque struct {
 
 	chunkMode uint32
 
-	FieldsInv []string
-
-	FieldsMap map[string]uint16
-
 	// indicates whethere the following structs are initialized
 	init bool
 
+	// FieldsMap adds 1 to field id to avoid zero value issues
+	//  name -> field id + 1
+	FieldsMap map[string]uint16
+
+	// FieldsInv is the inverse of FieldsMap
+	//  field id -> name
+	FieldsInv []string
+
+	// Term dictionaries for each field
+	//  field id -> term -> postings list id + 1
 	Dicts []map[string]uint64
 
 	// Terms for each field, where terms are sorted ascending

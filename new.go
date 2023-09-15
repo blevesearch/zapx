@@ -205,7 +205,6 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, uint64, error) {
 		return 0, 0, 0, nil, 0, err
 	}
 
-	var fdvIndexOffset uint64
 	var dictOffsets []uint64
 
 	// we can persist the various sections at this point.
@@ -223,12 +222,12 @@ func (s *interim) convert() (uint64, uint64, uint64, []uint64, uint64, error) {
 
 	// we can persist a new fields section here
 	// this new fields section will point to the various indexes available
-	sectionsIndexOffset, err := persistNewFields(s.FieldsInv, s.w, dictOffsets, s.opaque)
+	sectionsIndexOffset, err := persistFieldsSectionsIndex(s.FieldsInv, s.w, dictOffsets, s.opaque)
 	if err != nil {
 		return 0, 0, 0, nil, 0, err
 	}
 
-	return storedIndexOffset, sectionsIndexOffset, fdvIndexOffset, dictOffsets, sectionsIndexOffset, nil
+	return storedIndexOffset, sectionsIndexOffset, 0, dictOffsets, sectionsIndexOffset, nil
 }
 
 func (s *interim) getOrDefineField(fieldName string) int {
@@ -250,6 +249,9 @@ func (s *interim) processDocuments() {
 
 func (s *interim) processDocument(docNum uint64,
 	result index.Document) {
+	// this callback is essentially going to be invoked on each field,
+	// as part of which preprocessing, cumulation etc. of the doc's data
+	// will take place.
 	visitField := func(field index.Field) {
 		fieldID := uint16(s.getOrDefineField(field.Name()))
 

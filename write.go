@@ -50,7 +50,7 @@ func writeRoaringWithLen(r *roaring.Bitmap, w io.Writer,
 	return tw, nil
 }
 
-func persistNewFields(fieldsInv []string, w *CountHashWriter, dictLocs []uint64, opaque map[int]resetable) (uint64, error) {
+func persistFieldsSectionsIndex(fieldsInv []string, w *CountHashWriter, dictLocs []uint64, opaque map[int]resetable) (uint64, error) {
 	var rv uint64
 	var fieldsOffsets []uint64
 
@@ -77,7 +77,9 @@ func persistNewFields(fieldsInv []string, w *CountHashWriter, dictLocs []uint64,
 			return 0, err
 		}
 
-		// now write pairs of index section ids, and start addresses
+		// now write pairs of index section ids, and start addresses for each field
+		// which has a specific section's data. this serves as the starting point
+		// using which a field's section data can be read and parsed.
 		for segmentSectionType, segmentSectionImpl := range segmentSections {
 			binary.Write(w, binary.BigEndian, segmentSectionType)
 			binary.Write(w, binary.BigEndian, uint64(segmentSectionImpl.AddrForField(opaque, fieldID)))

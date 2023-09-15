@@ -126,6 +126,9 @@ func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		return nil, 0, 0, 0, 0, nil, nil, nil, 0, seg.ErrClosed
 	}
 
+	// the merge opaque is especially important when it comes to tracking the file
+	// offset a field of a particular section is at. This will be used to write the
+	// offsets in the fields section index of the file (the final merged file).
 	mergeOpaque := map[int]resetable{}
 	args := map[string]interface{}{
 		"chunkMode":  chunkMode,
@@ -154,9 +157,9 @@ func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		dictLocs = make([]uint64, len(fieldsInv))
 	}
 
-	// we can persist a new fields section here
-	// this new fields section will point to the various indexes available
-	sectionsIndexOffset, err = persistNewFields(fieldsInv, cr, dictLocs, mergeOpaque)
+	// we can persist the fields section index now, this will point
+	// to the various indexes (each in different section) available for a field.
+	sectionsIndexOffset, err = persistFieldsSectionsIndex(fieldsInv, cr, dictLocs, mergeOpaque)
 	if err != nil {
 		return nil, 0, 0, 0, 0, nil, nil, nil, 0, err
 	}

@@ -159,7 +159,7 @@ func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 
 	// we can persist the fields section index now, this will point
 	// to the various indexes (each in different section) available for a field.
-	sectionsIndexOffset, err = persistFieldsSectionsIndex(fieldsInv, cr, dictLocs, mergeOpaque)
+	sectionsIndexOffset, err = persistFieldsSection(fieldsInv, cr, dictLocs, mergeOpaque)
 	if err != nil {
 		return nil, 0, 0, 0, 0, nil, nil, nil, 0, err
 	}

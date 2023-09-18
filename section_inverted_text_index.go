@@ -12,21 +12,21 @@ import (
 	"github.com/blevesearch/vellum"
 )
 
-type invertedIndexSection struct {
+type invertedTextIndexSection struct {
 }
 
-func (i *invertedIndexSection) Process(opaque map[int]resetable, docNum uint64, field index.Field, fieldID uint16) {
+func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint64, field index.Field, fieldID uint16) {
 	invIndexOpaque := i.getInvertedIndexOpaque(opaque)
 	invIndexOpaque.process(field, fieldID, docNum)
 }
 
-func (i *invertedIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
+func (i *invertedTextIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
 	invIndexOpaque := i.getInvertedIndexOpaque(opaque)
 	_, err = invIndexOpaque.writeDicts(w)
 	return 0, err
 }
 
-func (i *invertedIndexSection) AddrForField(opaque map[int]resetable, fieldID int) int {
+func (i *invertedTextIndexSection) AddrForField(opaque map[int]resetable, fieldID int) int {
 	invIndexOpaque := i.getInvertedIndexOpaque(opaque)
 	return invIndexOpaque.fieldAddrs[fieldID]
 }
@@ -338,7 +338,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 	return fieldAddrs, fieldDvLocsOffset, nil
 }
 
-func (i *invertedIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
+func (i *invertedTextIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
 	drops []*roaring.Bitmap, fieldsInv []string, newDocNumsIn [][]uint64,
 	w *CountHashWriter, closeCh chan struct{}) error {
 	io := i.getInvertedIndexOpaque(opaque)
@@ -801,7 +801,7 @@ func (i *invertedIndexOpaque) allocateSpace() {
 	}
 }
 
-func (i *invertedIndexSection) getInvertedIndexOpaque(opaque map[int]resetable) *invertedIndexOpaque {
+func (i *invertedTextIndexSection) getInvertedIndexOpaque(opaque map[int]resetable) *invertedIndexOpaque {
 	if _, ok := opaque[sectionInvertedIndex]; !ok {
 		opaque[sectionInvertedIndex] = i.InitOpaque(nil)
 	}
@@ -829,7 +829,7 @@ func (i *invertedIndexOpaque) getOrDefineField(fieldName string) int {
 	return int(fieldIDPlus1 - 1)
 }
 
-func (i *invertedIndexSection) InitOpaque(args map[string]interface{}) resetable {
+func (i *invertedTextIndexSection) InitOpaque(args map[string]interface{}) resetable {
 	rv := &invertedIndexOpaque{
 		fieldAddrs: map[int]int{},
 	}

@@ -159,8 +159,8 @@ func persistStoredFieldValues(fieldID int,
 
 func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32,
 	fieldsMap map[string]uint16, fieldsInv []string, numDocs uint64,
-	storedIndexOffset uint64, fieldsIndexOffset uint64, docValueOffset uint64,
-	dictLocs []uint64, sectionsIndexOffset uint64) (*SegmentBase, error) {
+	storedIndexOffset uint64, dictLocs []uint64,
+	sectionsIndexOffset uint64) (*SegmentBase, error) {
 	sb := &SegmentBase{
 		mem:                 mem,
 		memCRC:              memCRC,
@@ -169,17 +169,17 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32,
 		fieldsInv:           fieldsInv,
 		numDocs:             numDocs,
 		storedIndexOffset:   storedIndexOffset,
-		fieldsIndexOffset:   fieldsIndexOffset,
+		fieldsIndexOffset:   sectionsIndexOffset,
 		sectionsIndexOffset: sectionsIndexOffset,
 		fieldDvReaders:      make([]map[uint16]*docValueReader, len(segmentSections)),
-		docValueOffset:      docValueOffset,
+		docValueOffset:      0, // docvalueOffsets identified automicatically by the section
 		dictLocs:            dictLocs,
 		fieldFSTs:           make(map[uint16]*vellum.FST),
 	}
 	sb.updateSize()
 
-	// FIXME load map based on new fields index offset data
-	// (maybe this works now)
+	// load the data/section starting offsets for each field
+	// by via the sectionsIndexOffset as starting point.
 	err := sb.loadFieldsNew()
 	if err != nil {
 		return nil, err

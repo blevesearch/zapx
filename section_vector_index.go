@@ -6,7 +6,6 @@ package zap
 import (
 	"encoding/binary"
 	"fmt"
-	"log"
 	"math"
 
 	"github.com/RoaringBitmap/roaring"
@@ -65,7 +64,6 @@ func remapDocIDs(oldIDs *roaring.Bitmap, newIDs []uint64) *roaring.Bitmap {
 func (v *vectorIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase, drops []*roaring.Bitmap, fieldsInv []string,
 	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
 	vo := v.getvectorIndexOpaque(opaque)
-	log.Printf("invoking merge %v", newDocNumsIn)
 LOOP:
 	for fieldID, _ := range fieldsInv {
 
@@ -328,7 +326,6 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		for vecID, _ := range content.vecs {
 			docIDs := vo.vecIDMap[vecID].docIDs
 			// write the vecID
-			log.Printf("vecID to docIDs mapping %v -> %v", vecID, docIDs.ToArray())
 			_, err := writeUvarints(w, uint64(vecID))
 			if err != nil {
 				return 0, err
@@ -397,7 +394,7 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 func hashCode(a []float32) uint64 {
 	var rv uint64
 	for _, v := range a {
-		rv = uint64(math.Float32bits(v)) ^ (rv)
+		rv = uint64(math.Float32bits(v)) + (31 * rv)
 	}
 
 	return rv

@@ -372,7 +372,7 @@ func (i *invertedIndexOpaque) grabBuf(size int) []byte {
 		buf = make([]byte, size)
 		i.tmp0 = buf
 	}
-	return buf[0:size]
+	return buf[:size]
 }
 
 func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uint64, err error) {
@@ -407,7 +407,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 		if cap(docTermMap) < len(io.results) {
 			docTermMap = make([][]byte, len(io.results))
 		} else {
-			docTermMap = docTermMap[0:len(io.results)]
+			docTermMap = docTermMap[:len(io.results)]
 			for docNum := range docTermMap { // reset the docTermMap
 				docTermMap[docNum] = docTermMap[docNum][:0]
 			}

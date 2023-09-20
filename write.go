@@ -107,6 +107,7 @@ func persistFieldsSection(fieldsInv []string, w *CountHashWriter, dictLocs []uin
 // crc + ver + chunk + docValueOffset + sectionsIndexOffset + field offset + stored offset + num docs
 const FooterSize = 4 + 4 + 4 + 8 + 8 + 8 + 8 + 8
 
+// in the index sections format, the fieldsIndexOffset points to the sectionsIndexOffset
 func persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, sectionsIndexOffset, docValueOffset uint64,
 	chunkMode uint32, crcBeforeFooter uint32, writerIn io.Writer) error {
 	w := NewCountHashWriter(writerIn)

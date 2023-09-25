@@ -11,6 +11,7 @@ require (
 	github.com/blevesearch/vellum v1.0.10
 	github.com/golang/snappy v0.0.1
 	github.com/spf13/cobra v1.4.0
+	golang.org/x/exp v0.0.0-20231006140011-7918f672742d
 )
 
 require (
@@ -18,7 +19,7 @@ require (
 	github.com/inconshreveable/mousetrap v1.0.0 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
-	golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a // indirect
+	golang.org/x/sys v0.13.0 // indirect
 )
 
 replace github.com/blevesearch/bleve_index_api => ../bleve_index_api

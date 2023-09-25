@@ -529,7 +529,6 @@ func (s *SegmentBase) visitStoredFields(vdc *visitDocumentCtx, num uint64,
 					arrayPos[i] = ap
 				}
 			}
-
 			value := uncompressed[offset : offset+l]
 			keepGoing = visitor(s.fieldsInv[field], byte(typ), value, arrayPos)
 		}

@@ -11,6 +11,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
+	"golang.org/x/exp/maps"
 )
 
 func init() {
@@ -46,6 +47,7 @@ func (v *vectorIndexSection) AddrForField(opaque map[int]resetable, fieldID int)
 type vecIndexMeta struct {
 	startOffset int
 	indexSize   uint64
+	vecIds      []int64
 }
 
 func remapDocIDs(oldIDs *roaring.Bitmap, newIDs []uint64) *roaring.Bitmap {
@@ -68,7 +70,7 @@ LOOP:
 	for fieldID, _ := range fieldsInv {
 
 		var indexes []vecIndexMeta
-		vecToDocID := make(map[uint64]*roaring.Bitmap)
+		vecToDocID := make(map[int64]*roaring.Bitmap)
 
 		// todo: would parallely fetching the following stuff from segments
 		// be beneficial in terms of perf?
@@ -101,6 +103,7 @@ LOOP:
 
 			numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
+			indexes[len(indexes)-1].vecIds = make([]int64, 0, numVecs)
 
 			for i := 0; i < int(numVecs); i++ {
 				vecID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
@@ -119,15 +122,17 @@ LOOP:
 				}
 
 				bitMap = remapDocIDs(bitMap, newDocNumsIn[segI])
-				if vecToDocID[vecID] == nil {
+				if vecToDocID[int64(vecID)] == nil {
 					if drops[segI] != nil && !drops[segI].IsEmpty() {
-						vecToDocID[vecID] = roaring.AndNot(bitMap, drops[segI])
+						vecToDocID[int64(vecID)] = roaring.AndNot(bitMap, drops[segI])
 					} else {
-						vecToDocID[vecID] = bitMap
+						vecToDocID[int64(vecID)] = bitMap
 					}
 				} else {
-					vecToDocID[vecID].Or(bitMap)
+					vecToDocID[int64(vecID)].Or(bitMap)
 				}
+
+				indexes[len(indexes)-1].vecIds = append(indexes[len(indexes)-1].vecIds, int64(vecID))
 			}
 		}
 		err := vo.mergeAndWriteVectorIndexes(fieldID, segments, vecToDocID, indexes, w, closeCh)
@@ -139,7 +144,7 @@ LOOP:
 	return nil
 }
 
-func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[uint64]*roaring.Bitmap,
+func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bitmap,
 	serializedIndex []byte, w *CountHashWriter) (int, error) {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 	fieldStart := w.Count()
@@ -193,12 +198,7 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[uint64]*roaring.Bi
 // todo: naive implementation. need to keep in mind the perf implications and improve on this.
 // perhaps, parallelized merging can help speed things up over here.
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*SegmentBase,
-	vecToDocID map[uint64]*roaring.Bitmap, indexes []vecIndexMeta, w *CountHashWriter, closeCh chan struct{}) error {
-	if len(vecToDocID) >= 100000 {
-		// merging of more complex index types (for eg ivf family) with reconstruction
-		// method.
-		return fmt.Errorf("to be implemented")
-	}
+	vecToDocID map[int64]*roaring.Bitmap, indexes []vecIndexMeta, w *CountHashWriter, closeCh chan struct{}) error {
 
 	var vecIndexes []*faiss.IndexImpl
 	for segI, seg := range sbs {
@@ -210,6 +210,64 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		}
 		vecIndexes = append(vecIndexes, index)
 	}
+
+	if len(vecToDocID) > 10000 {
+		// merging of more complex index types (for eg ivf family) with reconstruction
+		// method.
+		var indexData []float32
+		for i := 0; i < len(vecIndexes); i++ {
+			if isClosed(closeCh) {
+				return fmt.Errorf("merging of vector sections aborted")
+			}
+			// todo: parallelize reconstruction
+			recons, err := vecIndexes[i].ReconstructBatch(int64(len(indexes[i].vecIds)), indexes[i].vecIds)
+			if err != nil {
+				return err
+			}
+			indexData = append(indexData, recons...)
+		}
+
+		// safe to assume that all the indexes are of the same config values, given
+		// that they are extracted from the field mapping info.
+		dims := vecIndexes[0].D()
+		metric := vecIndexes[0].MetricType()
+		finalVecIDs := maps.Keys(vecToDocID)
+
+		index, err := faiss.IndexFactory(dims, "IDMap2,IVF100,SQ8", metric)
+		if err != nil {
+			return err
+		}
+
+		index = index.AsIVF()
+		err = index.MakeDirectMap(2)
+		if err != nil {
+			return err
+		}
+		err = index.Train(indexData)
+		if err != nil {
+			return err
+		}
+
+		index.AddWithIDs(indexData, finalVecIDs)
+		if err != nil {
+			return err
+		}
+
+		mergedIndexBytes, err := faiss.WriteIndexIntoBuffer(index)
+		if err != nil {
+			return err
+		}
+
+		fieldStart, err := v.flushVectorSection(vecToDocID, mergedIndexBytes, w)
+		if err != nil {
+			return err
+		}
+		v.fieldAddrs[uint16(fieldID)] = fieldStart
+
+		return nil
+	}
+
+	// todo: ivf -> flat index when there were huge number of vector deletes for this field
 
 	for i := 1; i < len(vecIndexes); i++ {
 		if isClosed(closeCh) {

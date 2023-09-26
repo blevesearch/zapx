@@ -23,7 +23,7 @@ type section interface {
 	// process is essentially parsing of a specific field's content in a specific
 	// document. any tracking of processed data *specific to this section* should
 	// be done in opaque which will be passed to the Persist() API.
-	Process(opaque map[int]resetable, docNum uint64, f index.Field, fieldID uint16)
+	Process(opaque map[int]resetable, docNum uint32, f index.Field, fieldID uint16)
 
 	// flush the processed data in the opaque to the writer.
 	Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error)

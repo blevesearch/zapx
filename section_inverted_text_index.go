@@ -29,7 +29,7 @@ import (
 type invertedTextIndexSection struct {
 }
 
-func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint64, field index.Field, fieldID uint16) {
+func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint32, field index.Field, fieldID uint16) {
 	invIndexOpaque := i.getInvertedIndexOpaque(opaque)
 	invIndexOpaque.process(field, fieldID, docNum)
 }
@@ -601,7 +601,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 	return dictOffsets, nil
 }
 
-func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum uint64) {
+func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum uint32) {
 	if !io.init && io.results != nil {
 		io.allocateSpace()
 		io.init = true

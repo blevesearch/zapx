@@ -242,11 +242,11 @@ func (s *interim) getOrDefineField(fieldName string) int {
 
 func (s *interim) processDocuments() {
 	for docNum, result := range s.results {
-		s.processDocument(uint64(docNum), result)
+		s.processDocument(uint32(docNum), result)
 	}
 }
 
-func (s *interim) processDocument(docNum uint64,
+func (s *interim) processDocument(docNum uint32,
 	result index.Document) {
 	// this callback is essentially going to be invoked on each field,
 	// as part of which preprocessing, cumulation etc. of the doc's data

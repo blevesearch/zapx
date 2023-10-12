@@ -30,9 +30,6 @@ type invertedTextIndexSection struct {
 }
 
 func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint64, field index.Field, fieldID uint16) {
-	if _, ok := field.(index.VectorField); ok {
-		return // skip vector fields
-	}
 	invIndexOpaque := i.getInvertedIndexOpaque(opaque)
 	invIndexOpaque.process(field, fieldID, docNum)
 }

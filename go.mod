@@ -24,6 +24,6 @@ require (
 
 replace github.com/blevesearch/bleve_index_api => ../bleve_index_api
 
-replace github.com/blevesearch/go-faiss => /Users/thejasbhat/fts/vector_search/go-faiss
+replace github.com/blevesearch/go-faiss => ../go-faiss
 
 replace github.com/blevesearch/scorch_segment_api/v2 => ../scorch_segment_api

@@ -17,6 +17,7 @@ package zap
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
+	index "github.com/blevesearch/bleve_index_api"
 	mmap "github.com/blevesearch/mmap-go"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 	"github.com/blevesearch/vellum"
@@ -53,9 +55,10 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 
 	rv := &Segment{
 		SegmentBase: SegmentBase{
-			fieldsMap:      make(map[string]uint16),
-			fieldFSTs:      make(map[uint16]*vellum.FST),
-			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
+			fieldsMap:            make(map[string]uint16),
+			fieldFSTs:            make(map[uint16]*vellum.FST),
+			fieldDvReaders:       make([]map[uint16]*docValueReader, len(segmentSections)),
+			fieldSynonymMetadata: make(map[uint16]*index.SynonymMetadata),
 		},
 		f:    f,
 		mm:   mm,
@@ -100,6 +103,7 @@ type SegmentBase struct {
 	sectionsIndexOffset uint64
 	docValueOffset      uint64
 	dictLocs            []uint64
+	synLocs             []uint64
 	fieldDvReaders      []map[uint16]*docValueReader // naive chunk cache per field; section->field->reader
 	fieldDvNames        []string                     // field names cached in fieldDvReaders
 	size                uint64
@@ -108,8 +112,9 @@ type SegmentBase struct {
 	bytesRead    uint64
 	bytesWritten uint64
 
-	m         sync.Mutex
-	fieldFSTs map[uint16]*vellum.FST
+	m                    sync.Mutex
+	fieldFSTs            map[uint16]*vellum.FST
+	fieldSynonymMetadata map[uint16]*index.SynonymMetadata
 }
 
 func (sb *SegmentBase) Size() int {
@@ -130,6 +135,7 @@ func (sb *SegmentBase) updateSize() {
 		sizeInBytes += len(entry) + SizeOfString
 	}
 	sizeInBytes += len(sb.dictLocs) * SizeOfUint64
+	sizeInBytes += len(sb.synLocs) * SizeOfUint64
 
 	// fieldDvReaders
 	for _, secDvReaders := range sb.fieldDvReaders {
@@ -382,6 +388,22 @@ func (s *SegmentBase) loadFieldNew(fieldID uint16, addr uint64,
 			dictLoc, _ := binary.Uvarint(s.mem[fieldSectionAddr : fieldSectionAddr+binary.MaxVarintLen64])
 
 			s.dictLocs = append(s.dictLocs, dictLoc)
+		} else if fieldSectionType == sectionSynonym {
+			// for the fields which don't have the synonym section, the offset is
+			// 0 and during query time, because there is no valid synonym metadata we
+			// will just have to follow a no-op path.
+			if fieldSectionAddr == 0 {
+				s.synLocs = append(s.synLocs, 0)
+				continue
+			}
+			// skip the doc values
+			_, n := binary.Uvarint(s.mem[fieldSectionAddr : fieldSectionAddr+binary.MaxVarintLen64])
+			fieldSectionAddr += uint64(n)
+			_, n = binary.Uvarint(s.mem[fieldSectionAddr : fieldSectionAddr+binary.MaxVarintLen64])
+			fieldSectionAddr += uint64(n)
+			synLoc, _ := binary.Uvarint(s.mem[fieldSectionAddr : fieldSectionAddr+binary.MaxVarintLen64])
+
+			s.synLocs = append(s.synLocs, synLoc)
 		}
 	}
 
@@ -436,6 +458,46 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 		}
 	}
 
+	return rv, nil
+}
+
+// SynonymMetadata returns the term dictionary for the specified metadata key
+func (sb *SegmentBase) SynonymMetadata(field string) (*index.SynonymMetadata, error) {
+	metadata, err := sb.synonymMetadata(field)
+	return metadata, err
+}
+
+func (sb *SegmentBase) synonymMetadata(field string) (*index.SynonymMetadata, error) {
+	fieldIDPlus1 := sb.fieldsMap[field]
+	var rv *index.SynonymMetadata
+	if fieldIDPlus1 > 0 {
+		fieldID := fieldIDPlus1 - 1
+		synStart := sb.synLocs[fieldID]
+		if synStart == 0 {
+			// section does not have metadata with key = "field"
+			return nil, nil
+		}
+		var ok bool
+		sb.m.Lock()
+		if rv, ok = sb.fieldSynonymMetadata[fieldID]; !ok {
+			rv = &index.SynonymMetadata{}
+			metadataLen, read := binary.Uvarint(sb.mem[synStart : synStart+binary.MaxVarintLen64])
+			if metadataLen == 0 {
+				sb.m.Unlock()
+				return nil, fmt.Errorf("empty metadataLen for field: %v", field)
+			}
+			metadataBytes := sb.mem[synStart+uint64(read) : synStart+uint64(read)+metadataLen]
+			err := json.Unmarshal(metadataBytes, rv)
+			if err != nil {
+				sb.m.Unlock()
+				return nil, fmt.Errorf("synonym metadata field %s unmarshal err: %v", field, err)
+			}
+
+			sb.fieldSynonymMetadata[fieldID] = rv
+		}
+		sb.m.Unlock()
+	}
+	// returns nil, nil if the key is not present in the segment.
 	return rv, nil
 }
 

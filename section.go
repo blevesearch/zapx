@@ -53,8 +53,10 @@ type resetable interface {
 
 const (
 	sectionInvertedIndex = iota
+	sectionSynonym
 )
 
 var segmentSections = map[uint16]section{
 	sectionInvertedIndex: &invertedTextIndexSection{},
+	sectionSynonym:       &synonymSection{},
 }

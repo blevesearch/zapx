@@ -21,6 +21,7 @@ import (
 	"math"
 	"os"
 
+	index "github.com/blevesearch/bleve_index_api"
 	"github.com/blevesearch/vellum"
 )
 
@@ -162,19 +163,20 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32,
 	storedIndexOffset uint64, dictLocs []uint64,
 	sectionsIndexOffset uint64) (*SegmentBase, error) {
 	sb := &SegmentBase{
-		mem:                 mem,
-		memCRC:              memCRC,
-		chunkMode:           chunkMode,
-		fieldsMap:           fieldsMap,
-		fieldsInv:           fieldsInv,
-		numDocs:             numDocs,
-		storedIndexOffset:   storedIndexOffset,
-		fieldsIndexOffset:   sectionsIndexOffset,
-		sectionsIndexOffset: sectionsIndexOffset,
-		fieldDvReaders:      make([]map[uint16]*docValueReader, len(segmentSections)),
-		docValueOffset:      0, // docvalueOffsets identified automicatically by the section
-		dictLocs:            dictLocs,
-		fieldFSTs:           make(map[uint16]*vellum.FST),
+		mem:                  mem,
+		memCRC:               memCRC,
+		chunkMode:            chunkMode,
+		fieldsMap:            fieldsMap,
+		fieldsInv:            fieldsInv,
+		numDocs:              numDocs,
+		storedIndexOffset:    storedIndexOffset,
+		fieldsIndexOffset:    sectionsIndexOffset,
+		sectionsIndexOffset:  sectionsIndexOffset,
+		fieldDvReaders:       make([]map[uint16]*docValueReader, len(segmentSections)),
+		docValueOffset:       0, // docvalueOffsets identified automicatically by the section
+		dictLocs:             dictLocs,
+		fieldFSTs:            make(map[uint16]*vellum.FST),
+		fieldSynonymMetadata: make(map[uint16]*index.SynonymMetadata),
 	}
 	sb.updateSize()
 

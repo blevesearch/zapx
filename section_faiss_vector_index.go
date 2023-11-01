@@ -14,14 +14,10 @@ import (
 	"golang.org/x/exp/maps"
 )
 
-func init() {
-	segmentSections[sectionFaissVectorIndex] = &vectorIndexSection{}
+type faissVectorIndexSection struct {
 }
 
-type vectorIndexSection struct {
-}
-
-func (v *vectorIndexSection) Process(opaque map[int]resetable, docNum uint64, field index.Field, fieldID uint16) {
+func (v *faissVectorIndexSection) Process(opaque map[int]resetable, docNum uint64, field index.Field, fieldID uint16) {
 	if fieldID == math.MaxUint16 {
 		return
 	}
@@ -32,13 +28,13 @@ func (v *vectorIndexSection) Process(opaque map[int]resetable, docNum uint64, fi
 	}
 }
 
-func (v *vectorIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
+func (v *faissVectorIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
 	vo := v.getvectorIndexOpaque(opaque)
 	vo.writeVectorIndexes(w)
 	return 0, nil
 }
 
-func (v *vectorIndexSection) AddrForField(opaque map[int]resetable, fieldID int) int {
+func (v *faissVectorIndexSection) AddrForField(opaque map[int]resetable, fieldID int) int {
 	vo := v.getvectorIndexOpaque(opaque)
 	return vo.fieldAddrs[uint16(fieldID)]
 }
@@ -63,7 +59,7 @@ func remapDocIDs(oldIDs *roaring.Bitmap, newIDs []uint64) *roaring.Bitmap {
 
 // keep in mind with respect to update and delete opeartions with resepct to vectors/
 // leverage bitmaps stored
-func (v *vectorIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase, drops []*roaring.Bitmap, fieldsInv []string,
+func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase, drops []*roaring.Bitmap, fieldsInv []string,
 	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
 	vo := v.getvectorIndexOpaque(opaque)
 LOOP:
@@ -468,14 +464,14 @@ func (v *vectorIndexOpaque) allocateSpace() {
 	// basically to avoid too many heap allocs and also reuse things
 }
 
-func (v *vectorIndexSection) getvectorIndexOpaque(opaque map[int]resetable) *vectorIndexOpaque {
+func (v *faissVectorIndexSection) getvectorIndexOpaque(opaque map[int]resetable) *vectorIndexOpaque {
 	if _, ok := opaque[sectionFaissVectorIndex]; !ok {
 		opaque[sectionFaissVectorIndex] = v.InitOpaque(nil)
 	}
 	return opaque[sectionFaissVectorIndex].(*vectorIndexOpaque)
 }
 
-func (v *vectorIndexSection) InitOpaque(args map[string]interface{}) resetable {
+func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) resetable {
 	rv := &vectorIndexOpaque{
 		fieldAddrs:  make(map[uint16]int),
 		vecIDMap:    make(map[uint64]vecInfo),

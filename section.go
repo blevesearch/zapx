@@ -58,4 +58,5 @@ const (
 
 var segmentSections = map[uint16]section{
 	sectionInvertedTextIndex: &invertedTextIndexSection{},
+	sectionFaissVectorIndex:  &faissVectorIndexSection{},
 }

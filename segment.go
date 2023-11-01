@@ -366,7 +366,7 @@ func (s *SegmentBase) loadFieldNew(fieldID uint16, addr uint64,
 		fieldSectionAddr := binary.BigEndian.Uint64(s.mem[pos : pos+8])
 		pos += 8
 		fieldSectionMap[fieldSectionType] = fieldSectionAddr
-		if fieldSectionType == sectionInvertedIndex {
+		if fieldSectionType == sectionInvertedTextIndex {
 			// for the fields which don't have the inverted index, the offset is
 			// 0 and during query time, because there is no valid dictionary we
 			// will just have follow a no-op path.
@@ -765,12 +765,12 @@ func (s *Segment) loadDvReadersLegacy() error {
 		if fieldDvReader != nil {
 			// older file formats have docValues corresponding only to inverted index
 			// ignore the rest.
-			if s.fieldDvReaders[sectionInvertedIndex] == nil {
-				s.fieldDvReaders[sectionInvertedIndex] = make(map[uint16]*docValueReader)
+			if s.fieldDvReaders[sectionInvertedTextIndex] == nil {
+				s.fieldDvReaders[sectionInvertedTextIndex] = make(map[uint16]*docValueReader)
 			}
 			// fix the structure of fieldDvReaders
 			// currently it populates the inverted index doc values
-			s.fieldDvReaders[sectionInvertedIndex][uint16(fieldID)] = fieldDvReader
+			s.fieldDvReaders[sectionInvertedTextIndex][uint16(fieldID)] = fieldDvReader
 			s.fieldDvNames = append(s.fieldDvNames, s.fieldsInv[fieldID])
 		}
 	}
@@ -832,7 +832,7 @@ func (s *SegmentBase) loadDvReaders() error {
 					return fmt.Errorf("loadDvReaders: failed to read the dataLoc "+
 						"offset for sectionID %v field %v", secID, s.fieldsInv[fieldID])
 				}
-				if secID == sectionInvertedIndex {
+				if secID == sectionInvertedTextIndex {
 					s.dictLocs = append(s.dictLocs, dataLoc)
 				}
 				fieldDvReader, err := s.loadFieldDocValueReader(s.fieldsInv[fieldID], fieldLocStart, fieldLocEnd)

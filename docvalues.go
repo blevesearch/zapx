@@ -309,7 +309,7 @@ func (s *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
 				continue
 			}
 			fieldID := fieldIDPlus1 - 1
-			if dvIter, exists := s.fieldDvReaders[sectionInvertedIndex][fieldID]; exists &&
+			if dvIter, exists := s.fieldDvReaders[sectionInvertedTextIndex][fieldID]; exists &&
 				dvIter != nil {
 				dvs.dvrs[fieldID] = dvIter.cloneInto(dvs.dvrs[fieldID])
 			}

@@ -52,10 +52,10 @@ type resetable interface {
 }
 
 const (
-	sectionInvertedIndex = iota
+	sectionInvertedTextIndex = iota
 	sectionVectorIndex
 )
 
 var segmentSections = map[uint16]section{
-	sectionInvertedIndex: &invertedTextIndexSection{},
+	sectionInvertedTextIndex: &invertedTextIndexSection{},
 }

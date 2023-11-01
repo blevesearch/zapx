@@ -1,4 +1,4 @@
-module github.com/blevesearch/zapx/v15
+module github.com/blevesearch/zapx/v16
 
 go 1.20
 

@@ -26,6 +26,10 @@ import (
 	"github.com/blevesearch/vellum"
 )
 
+func init() {
+	registerSegmentSection(sectionInvertedTextIndex, &invertedTextIndexSection{})
+}
+
 type invertedTextIndexSection struct {
 }
 

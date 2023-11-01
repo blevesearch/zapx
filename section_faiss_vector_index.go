@@ -28,6 +28,10 @@ import (
 	"golang.org/x/exp/maps"
 )
 
+func init() {
+	registerSegmentSection(sectionFaissVectorIndex, &faissVectorIndexSection{})
+}
+
 type faissVectorIndexSection struct {
 }
 

@@ -238,16 +238,12 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			return err
 		}
 
-		index, err = index.GetSubIndex()
+		index, err = index.GetIVFSubIndex()
 		if err != nil {
 			return err
 		}
 
-		index, err = index.AsIVF()
-		if err != nil {
-			return err
-		}
-		err = index.MakeDirectMap(2)
+		err = index.SetDirectMap(2)
 		if err != nil {
 			return err
 		}

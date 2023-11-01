@@ -15,7 +15,7 @@ import (
 )
 
 func init() {
-	segmentSections[sectionVectorIndex] = &vectorIndexSection{}
+	segmentSections[sectionFaissVectorIndex] = &vectorIndexSection{}
 }
 
 type vectorIndexSection struct {
@@ -78,7 +78,7 @@ LOOP:
 			if isClosed(closeCh) {
 				return fmt.Errorf("merging of vector sections aborted")
 			}
-			pos := int(sb.fieldsSectionsMap[fieldID][sectionVectorIndex])
+			pos := int(sb.fieldsSectionsMap[fieldID][sectionFaissVectorIndex])
 			if pos == 0 {
 				continue LOOP
 			}
@@ -469,10 +469,10 @@ func (v *vectorIndexOpaque) allocateSpace() {
 }
 
 func (v *vectorIndexSection) getvectorIndexOpaque(opaque map[int]resetable) *vectorIndexOpaque {
-	if _, ok := opaque[sectionVectorIndex]; !ok {
-		opaque[sectionVectorIndex] = v.InitOpaque(nil)
+	if _, ok := opaque[sectionFaissVectorIndex]; !ok {
+		opaque[sectionFaissVectorIndex] = v.InitOpaque(nil)
 	}
-	return opaque[sectionVectorIndex].(*vectorIndexOpaque)
+	return opaque[sectionFaissVectorIndex].(*vectorIndexOpaque)
 }
 
 func (v *vectorIndexSection) InitOpaque(args map[string]interface{}) resetable {

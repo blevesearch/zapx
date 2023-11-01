@@ -53,7 +53,7 @@ type resetable interface {
 
 const (
 	sectionInvertedTextIndex = iota
-	sectionVectorIndex
+	sectionFaissVectorIndex
 )
 
 var segmentSections = map[uint16]section{

@@ -64,12 +64,14 @@ const (
 
 var (
 	segmentSectionsMutex sync.Mutex
-	// writes to segmentSections within inits ONLY within lock,
+	// writes to segmentSections within init()s ONLY within lock,
 	// reads will not require lock access
 	segmentSections = make(map[uint16]section)
 )
 
+// Method to be invoked within init()s ONLY.
 func registerSegmentSection(key uint16, val section) {
 	segmentSectionsMutex.Lock()
 	segmentSections[key] = val
+	segmentSectionsMutex.Unlock()
 }

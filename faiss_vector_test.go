@@ -12,7 +12,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 	index "github.com/blevesearch/bleve_index_api"
-	"github.com/blevesearch/go-faiss"
+	faiss "github.com/blevesearch/go-faiss"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 

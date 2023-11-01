@@ -1,6 +1,6 @@
 module github.com/blevesearch/zapx/v15
 
-go 1.19
+go 1.20
 
 require (
 	github.com/RoaringBitmap/roaring v1.2.3

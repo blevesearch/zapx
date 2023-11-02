@@ -15,6 +15,8 @@
 package zap
 
 import (
+	"sync"
+
 	"github.com/RoaringBitmap/roaring"
 	index "github.com/blevesearch/bleve_index_api"
 )
@@ -51,10 +53,25 @@ type resetable interface {
 	Set(key string, value interface{})
 }
 
+// -----------------------------------------------------------------------------
+
 const (
-	sectionInvertedIndex = iota
+	sectionInvertedTextIndex = iota
+	sectionFaissVectorIndex
 )
 
-var segmentSections = map[uint16]section{
-	sectionInvertedIndex: &invertedTextIndexSection{},
+// -----------------------------------------------------------------------------
+
+var (
+	segmentSectionsMutex sync.Mutex
+	// writes to segmentSections within init()s ONLY within lock,
+	// reads will not require lock access
+	segmentSections = make(map[uint16]section)
+)
+
+// Method to be invoked within init()s ONLY.
+func registerSegmentSection(key uint16, val section) {
+	segmentSectionsMutex.Lock()
+	segmentSections[key] = val
+	segmentSectionsMutex.Unlock()
 }

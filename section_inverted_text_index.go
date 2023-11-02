@@ -26,6 +26,10 @@ import (
 	"github.com/blevesearch/vellum"
 )
 
+func init() {
+	registerSegmentSection(sectionInvertedTextIndex, &invertedTextIndexSection{})
+}
+
 type invertedTextIndexSection struct {
 }
 
@@ -278,7 +282,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			}
 
 			fieldIDPlus1 := uint16(segment.fieldsMap[fieldName])
-			if dvIter, exists := segment.fieldDvReaders[sectionInvertedIndex][fieldIDPlus1-1]; exists &&
+			if dvIter, exists := segment.fieldDvReaders[sectionInvertedTextIndex][fieldIDPlus1-1]; exists &&
 				dvIter != nil {
 				fdvReadersAvailable = true
 				dvIterClone = dvIter.cloneInto(dvIterClone)
@@ -816,10 +820,10 @@ func (i *invertedIndexOpaque) allocateSpace() {
 }
 
 func (i *invertedTextIndexSection) getInvertedIndexOpaque(opaque map[int]resetable) *invertedIndexOpaque {
-	if _, ok := opaque[sectionInvertedIndex]; !ok {
-		opaque[sectionInvertedIndex] = i.InitOpaque(nil)
+	if _, ok := opaque[sectionInvertedTextIndex]; !ok {
+		opaque[sectionInvertedTextIndex] = i.InitOpaque(nil)
 	}
-	return opaque[sectionInvertedIndex].(*invertedIndexOpaque)
+	return opaque[sectionInvertedTextIndex].(*invertedIndexOpaque)
 }
 
 func (i *invertedIndexOpaque) getOrDefineField(fieldName string) int {

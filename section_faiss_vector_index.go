@@ -80,8 +80,9 @@ func remapDocIDs(oldIDs *roaring.Bitmap, newIDs []uint64) *roaring.Bitmap {
 func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase, drops []*roaring.Bitmap, fieldsInv []string,
 	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
 	vo := v.getvectorIndexOpaque(opaque)
+
 LOOP:
-	for fieldID, _ := range fieldsInv {
+	for fieldID, fieldName := range fieldsInv {
 
 		var indexes []vecIndexMeta
 		vecToDocID := make(map[int64]*roaring.Bitmap)
@@ -92,7 +93,14 @@ LOOP:
 			if isClosed(closeCh) {
 				return fmt.Errorf("merging of vector sections aborted")
 			}
-			pos := int(sb.fieldsSectionsMap[fieldID][sectionFaissVectorIndex])
+			if _, ok := sb.fieldsMap[fieldName]; !ok {
+				continue
+			}
+
+			// check if the section address is a valid one for "fieldName" in the
+			// segment sb. the local fieldID (fetched by the fieldsMap of the sb)
+			// is to be used while consulting the fieldsSectionsMap
+			pos := int(sb.fieldsSectionsMap[sb.fieldsMap[fieldName]-1][sectionFaissVectorIndex])
 			if pos == 0 {
 				continue LOOP
 			}

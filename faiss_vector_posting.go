@@ -68,6 +68,12 @@ func (vp *VecPosting) Size() int {
 // the docNum is stored in high 32 and the lower 32 bits contains the score value.
 // the score is actually a float32 value and in order to store it as a uint32 in
 // the bitmap, we use the IEEE 754 floating point format.
+//
+// each entry in the roaring64 bitmap of the vector postings list is a 64 bit
+// number which looks like this:
+// MSB                         LSB
+// |64 63 62 ... 32| 31 30 ... 0|
+// |    <docNum>   |   <score>  |
 type VecPostingsList struct {
 	// todo: perhaps we don't even need to store a bitmap if there is only
 	// one similar vector the query, but rather store it as a field value
@@ -81,12 +87,7 @@ var emptyVecPostingsList = &VecPostingsList{}
 
 func (vpl *VecPostingsList) Iterator(prealloc segment.VecPostingsIterator) segment.VecPostingsIterator {
 
-	// includeFreq, includeNorm, includeLocations are not used.
-	// just reusing the PostingsList interface, perhaps might be a bit of cleanup
-	// over there.
-
 	// tbd: do we check the cardinality of postings and scores?
-
 	var preallocPI *VecPostingsIterator
 	pi, ok := prealloc.(*VecPostingsIterator)
 	if ok && pi != nil {
@@ -100,7 +101,6 @@ func (vpl *VecPostingsList) Iterator(prealloc segment.VecPostingsIterator) segme
 }
 
 func (p *VecPostingsList) iterator(rv *VecPostingsIterator) *VecPostingsIterator {
-
 	if rv == nil {
 		rv = &VecPostingsIterator{}
 	} else {
@@ -213,16 +213,18 @@ func (i *VecPostingsIterator) nextCodeAtOrAfter(atOrAfter uint64) (uint64, bool,
 	return uint64(n), true, nil
 }
 
-func (itr *VecPostingsIterator) Next() (segment.VecPosting, error) {
-	return itr.nextAtOrAfter(0)
+// a transformation function which stores both the score and the docNum as a single
+// entry which is a uint64 number.
+func getVectorCode(docNum uint32, score float32) uint64 {
+	return uint64(docNum)<<31 | uint64(math.Float32bits(score))
 }
 
-func (itr *VecPostingsIterator) Advance(docNum uint64) (segment.VecPosting, error) {
-	return itr.nextAtOrAfter(docNum)
-}
-
-// Next returns the next posting on the postings list, or nil at the end
+// Next returns the next posting on the vector postings list, or nil at the end
 func (i *VecPostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.VecPosting, error) {
+	// transform the docNum provided to the vector code format and use that to
+	// get the next entry. the comparison still happens docNum wise since after
+	// the transformation, the docNum occupies the upper 32 bits just an entry in
+	// the postings list
 	atOrAfter = getVectorCode(uint32(atOrAfter), 0)
 	code, exists, err := i.nextCodeAtOrAfter(atOrAfter)
 	if err != nil || !exists {
@@ -235,6 +237,14 @@ func (i *VecPostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.VecPostin
 	rv.docNum = code >> 31
 
 	return rv, nil
+}
+
+func (itr *VecPostingsIterator) Next() (segment.VecPosting, error) {
+	return itr.nextAtOrAfter(0)
+}
+
+func (itr *VecPostingsIterator) Advance(docNum uint64) (segment.VecPosting, error) {
+	return itr.nextAtOrAfter(docNum)
 }
 
 func (i *VecPostingsIterator) Size() int {
@@ -256,10 +266,6 @@ func (vpl *VecPostingsIterator) BytesWritten() uint64 {
 	return 0
 }
 
-func getVectorCode(docNum uint32, score float32) uint64 {
-	return uint64(docNum)<<31 | uint64(math.Float32bits(score))
-}
-
 func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, except *roaring.Bitmap) (segment.VecPostingsList, error) {
 
 	// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
@@ -268,7 +274,6 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 	// 4. VecPostings would just have the docNum and the score. Every call of Next()
 	//    and Advance just returns the next VecPostings. The caller would do a vp.Number()
 	//    and the Score() to get the corresponding values
-
 	rv := &VecPostingsList{
 		except:   nil, // todo: handle the except bitmap within postings iterator.
 		postings: roaring64.New(),
@@ -278,6 +283,7 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 	fieldIDPlus1 := sb.fieldsMap[field]
 	if fieldIDPlus1 > 0 {
 		vectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][sectionFaissVectorIndex]
+		// check if the field has a vector section in the segment.
 		if vectorSection > 0 {
 			pos := int(vectorSection)
 
@@ -295,10 +301,10 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 			indexBytes := sb.mem[pos : pos+int(indexSize)]
 			pos += int(indexSize)
 
+			// read the number vectors indexed for this field and load the vector to docID mapping.
+			// todo: cache the vecID to docIDs mapping for a fieldID
 			numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
-
-			// read the vec IDs. todo: cache the vecID to docIDs mapping for a fieldID
 			for i := 0; i < int(numVecs); i++ {
 				vecID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 				pos += n
@@ -328,6 +334,8 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 				return nil, err
 			}
 
+			// for every similar vector returned by the Search() API, add the corresponding
+			// docID and the score to the newly created vecPostingsList
 			for i := 0; i < len(ids); i++ {
 				vecID := ids[i]
 				docIDs := vecDocIDMap[vecID]

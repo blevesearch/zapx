@@ -112,7 +112,7 @@ LOOP:
 				startOffset: pos,
 				indexSize:   indexSize,
 			})
-			// don't read the index bytes just yet, perhaps?
+
 			pos += int(indexSize)
 
 			numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
@@ -135,8 +135,13 @@ LOOP:
 					return err
 				}
 
+				// remap the docIDs from the old segment to the new document nos.
+				// provided.
 				bitMap = remapDocIDs(bitMap, newDocNumsIn[segI])
 				if vecToDocID[int64(vecID)] == nil {
+					// if there are some tombstone entries in the docIDs, marked
+					// in the drops[ith-segment] bitmap, don't include them in the
+					// final bitmap.
 					if drops[segI] != nil && !drops[segI].IsEmpty() {
 						vecToDocID[int64(vecID)] = roaring.AndNot(bitMap, drops[segI])
 					} else {
@@ -161,7 +166,10 @@ LOOP:
 func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bitmap,
 	serializedIndex []byte, w *CountHashWriter) (int, error) {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
+
 	fieldStart := w.Count()
+	// marking the fact that for vector index, doc values isn't valid by
+	// storing fieldNotUniverted values.
 	n := binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
 	_, err := w.Write(tempBuf[:n])
 	if err != nil {
@@ -216,7 +224,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 
 	var vecIndexes []*faiss.IndexImpl
 	for segI, seg := range sbs {
-		// read the index bytes
+		// read the index bytes. todo: parallelize this
 		indexBytes := seg.mem[indexes[segI].startOffset : indexes[segI].startOffset+int(indexes[segI].indexSize)]
 		index, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
 		if err != nil {
@@ -225,6 +233,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		vecIndexes = append(vecIndexes, index)
 	}
 
+	// todo: perhaps making this threshold a config value would be better?
 	if len(vecToDocID) > 10000 {
 		// merging of more complex index types (for eg ivf family) with reconstruction
 		// method.
@@ -247,6 +256,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		metric := vecIndexes[0].MetricType()
 		finalVecIDs := maps.Keys(vecToDocID)
 
+		// todo: perhaps the index type can be chosen from a config and tuned accordingly.
 		index, err := faiss.IndexFactory(dims, "IDMap2,IVF100,SQ8", metric)
 		if err != nil {
 			return err
@@ -257,11 +267,18 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			return err
 		}
 
+		// the direct map maintained in the IVF index is essential for the
+		// reconstruction of vectors based on vector IDs in the future merges.
+		// the AddWithIDs API also needs a direct map to be set before using.
 		err = index.SetDirectMap(2)
 		if err != nil {
 			return err
 		}
 
+		// train the vector index, essentially performs k-means clustering to partition
+		// the data space of indexData such that during the search time, we probe
+		// only a subset of vectors -> non-exhaustive search. could be a time
+		// consuming step when the indexData is large.
 		err = index.Train(indexData)
 		if err != nil {
 			return err
@@ -361,6 +378,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		}
 
 		fieldStart := w.Count()
+		// writing out two offset values to indicate that the current field's
+		// vector section doesn't have valid doc value content within it.
 		n := binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
@@ -447,6 +466,8 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 		// add the docID to the bitmap
 		vo.vecIDMap[vecHash].docIDs.Add(uint32(docNum))
 
+		// tracking the unique vectors for every field which will be used later
+		// to construct the vector index.
 		if _, ok := vo.vecFieldMap[fieldID]; !ok {
 			vo.vecFieldMap[fieldID] = indexContent{
 				vecs: map[uint64]vecInfo{

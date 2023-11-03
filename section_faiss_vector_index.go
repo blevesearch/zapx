@@ -35,7 +35,7 @@ func init() {
 type faissVectorIndexSection struct {
 }
 
-func (v *faissVectorIndexSection) Process(opaque map[int]resetable, docNum uint64, field index.Field, fieldID uint16) {
+func (v *faissVectorIndexSection) Process(opaque map[int]resetable, docNum uint32, field index.Field, fieldID uint16) {
 	if fieldID == math.MaxUint16 {
 		return
 	}
@@ -447,7 +447,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 	return 0, nil
 }
 
-func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, docNum uint64) {
+func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, docNum uint32) {
 	if !vo.init {
 		vo.init = true
 		vo.allocateSpace()
@@ -472,7 +472,7 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 			}
 		}
 		// add the docID to the bitmap
-		vo.vecIDMap[vecHash].docIDs.Add(uint32(docNum))
+		vo.vecIDMap[vecHash].docIDs.Add(docNum)
 
 		// tracking the unique vectors for every field which will be used later
 		// to construct the vector index.

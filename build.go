@@ -24,8 +24,8 @@ import (
 	"github.com/blevesearch/vellum"
 )
 
-const Version uint32 = 15
-
+const Version uint32 = 16
+const IndexSectionsVersion uint32 = 16
 const Type string = "zap"
 
 const fieldNotUninverted = math.MaxUint64
@@ -98,7 +98,7 @@ func persistSegmentBaseToWriter(sb *SegmentBase, w io.Writer) (int, error) {
 		return 0, err
 	}
 
-	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.fieldsIndexOffset,
+	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.fieldsIndexOffset, sb.sectionsIndexOffset,
 		sb.docValueOffset, sb.chunkMode, sb.memCRC, br)
 	if err != nil {
 		return 0, err
@@ -159,25 +159,33 @@ func persistStoredFieldValues(fieldID int,
 
 func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32,
 	fieldsMap map[string]uint16, fieldsInv []string, numDocs uint64,
-	storedIndexOffset uint64, fieldsIndexOffset uint64, docValueOffset uint64,
-	dictLocs []uint64) (*SegmentBase, error) {
+	storedIndexOffset uint64, dictLocs []uint64,
+	sectionsIndexOffset uint64) (*SegmentBase, error) {
 	sb := &SegmentBase{
-		mem:               mem,
-		memCRC:            memCRC,
-		chunkMode:         chunkMode,
-		fieldsMap:         fieldsMap,
-		fieldsInv:         fieldsInv,
-		numDocs:           numDocs,
-		storedIndexOffset: storedIndexOffset,
-		fieldsIndexOffset: fieldsIndexOffset,
-		docValueOffset:    docValueOffset,
-		dictLocs:          dictLocs,
-		fieldDvReaders:    make(map[uint16]*docValueReader),
-		fieldFSTs:         make(map[uint16]*vellum.FST),
+		mem:                 mem,
+		memCRC:              memCRC,
+		chunkMode:           chunkMode,
+		fieldsMap:           fieldsMap,
+		fieldsInv:           fieldsInv,
+		numDocs:             numDocs,
+		storedIndexOffset:   storedIndexOffset,
+		fieldsIndexOffset:   sectionsIndexOffset,
+		sectionsIndexOffset: sectionsIndexOffset,
+		fieldDvReaders:      make([]map[uint16]*docValueReader, len(segmentSections)),
+		docValueOffset:      0, // docvalueOffsets identified automicatically by the section
+		dictLocs:            dictLocs,
+		fieldFSTs:           make(map[uint16]*vellum.FST),
 	}
 	sb.updateSize()
 
-	err := sb.loadDvReaders()
+	// load the data/section starting offsets for each field
+	// by via the sectionsIndexOffset as starting point.
+	err := sb.loadFieldsNew()
+	if err != nil {
+		return nil, err
+	}
+
+	err = sb.loadDvReaders()
 	if err != nil {
 		return nil, err
 	}

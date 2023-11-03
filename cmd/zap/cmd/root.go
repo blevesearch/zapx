@@ -24,6 +24,11 @@ import (
 
 var segment *zap.Segment
 
+const (
+	sectionInvertedTextIndex = iota
+	sectionFaissVectorIndex
+)
+
 // RootCmd represents the base command when called without any subcommands
 var RootCmd = &cobra.Command{
 	Use:   "zap",

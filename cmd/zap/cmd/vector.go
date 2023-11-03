@@ -27,11 +27,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const (
-	sectionInvertedTextIndex = iota
-	sectionFaissVectorIndex
-)
-
 // storedCmd represents the stored command
 // no big changes here as well.
 var vectorCmd = &cobra.Command{

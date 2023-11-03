@@ -33,6 +33,8 @@ var docvalueCmd = &cobra.Command{
 	Use:   "docvalue [path] <field> optional <docNum> optional",
 	Short: "docvalue prints the docvalue details by field, and docNum",
 	Long:  `The docvalue command lets you explore the docValues in order of field and by doc number.`,
+	// preserve this function and write a new one for the sections type of docValue offset loading and etc.
+	// little bit more change over here perhaps.
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) < 1 {
 			return fmt.Errorf("must specify index file path")

@@ -21,6 +21,7 @@ import (
 )
 
 // footerCmd represents the footer command
+// - support the sectionsIndexOffset over here?
 var footerCmd = &cobra.Command{
 	Use:   "footer [path]",
 	Short: "prints the contents of the zap footer",

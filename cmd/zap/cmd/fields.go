@@ -18,7 +18,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	zap "github.com/blevesearch/zapx/v15"
+	zap "github.com/blevesearch/zapx/v16"
 	"github.com/spf13/cobra"
 )
 

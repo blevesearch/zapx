@@ -53,10 +53,9 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 
 	rv := &Segment{
 		SegmentBase: SegmentBase{
-			mem:            mm[0 : len(mm)-FooterSize],
 			fieldsMap:      make(map[string]uint16),
-			fieldDvReaders: make(map[uint16]*docValueReader),
 			fieldFSTs:      make(map[uint16]*vellum.FST),
+			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
 		},
 		f:    f,
 		mm:   mm,
@@ -71,7 +70,7 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 		return nil, err
 	}
 
-	err = rv.loadFields()
+	err = rv.loadFieldsNew()
 	if err != nil {
 		_ = rv.Close()
 		return nil, err
@@ -89,19 +88,21 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 // SegmentBase is a memory only, read-only implementation of the
 // segment.Segment interface, using zap's data representation.
 type SegmentBase struct {
-	mem               []byte
-	memCRC            uint32
-	chunkMode         uint32
-	fieldsMap         map[string]uint16 // fieldName -> fieldID+1
-	fieldsInv         []string          // fieldID -> fieldName
-	numDocs           uint64
-	storedIndexOffset uint64
-	fieldsIndexOffset uint64
-	docValueOffset    uint64
-	dictLocs          []uint64
-	fieldDvReaders    map[uint16]*docValueReader // naive chunk cache per field
-	fieldDvNames      []string                   // field names cached in fieldDvReaders
-	size              uint64
+	mem                 []byte
+	memCRC              uint32
+	chunkMode           uint32
+	fieldsMap           map[string]uint16   // fieldName -> fieldID+1
+	fieldsInv           []string            // fieldID -> fieldName
+	fieldsSectionsMap   []map[uint16]uint64 // fieldID -> section -> address
+	numDocs             uint64
+	storedIndexOffset   uint64
+	fieldsIndexOffset   uint64
+	sectionsIndexOffset uint64
+	docValueOffset      uint64
+	dictLocs            []uint64
+	fieldDvReaders      []map[uint16]*docValueReader // naive chunk cache per field; section->field->reader
+	fieldDvNames        []string                     // field names cached in fieldDvReaders
+	size                uint64
 
 	// atomic access to these variables
 	bytesRead    uint64
@@ -131,10 +132,12 @@ func (sb *SegmentBase) updateSize() {
 	sizeInBytes += len(sb.dictLocs) * SizeOfUint64
 
 	// fieldDvReaders
-	for _, v := range sb.fieldDvReaders {
-		sizeInBytes += SizeOfUint16 + SizeOfPtr
-		if v != nil {
-			sizeInBytes += v.size()
+	for _, secDvReaders := range sb.fieldDvReaders {
+		for _, v := range secDvReaders {
+			sizeInBytes += SizeOfUint16 + SizeOfPtr
+			if v != nil {
+				sizeInBytes += v.size()
+			}
 		}
 	}
 
@@ -197,7 +200,7 @@ func (s *Segment) loadConfig() error {
 
 	verOffset := crcOffset - 4
 	s.version = binary.BigEndian.Uint32(s.mm[verOffset : verOffset+4])
-	if s.version != Version {
+	if Version < IndexSectionsVersion && s.version != Version {
 		return fmt.Errorf("unsupported version %d != %d", s.version, Version)
 	}
 
@@ -208,6 +211,19 @@ func (s *Segment) loadConfig() error {
 	s.docValueOffset = binary.BigEndian.Uint64(s.mm[docValueOffset : docValueOffset+8])
 
 	fieldsIndexOffset := docValueOffset - 8
+
+	// determining the right footer size based on version, this becomes important
+	// while loading the fields portion or the sections portion of the index file.
+	var footerSize int
+	if s.version >= IndexSectionsVersion {
+		// for version 16 and above, parse the sectionsIndexOffset
+		s.sectionsIndexOffset = binary.BigEndian.Uint64(s.mm[fieldsIndexOffset : fieldsIndexOffset+8])
+		fieldsIndexOffset = fieldsIndexOffset - 8
+		footerSize = FooterSize
+	} else {
+		footerSize = FooterSize - 8
+	}
+
 	s.fieldsIndexOffset = binary.BigEndian.Uint64(s.mm[fieldsIndexOffset : fieldsIndexOffset+8])
 
 	storedIndexOffset := fieldsIndexOffset - 8
@@ -219,6 +235,7 @@ func (s *Segment) loadConfig() error {
 	// 8*4 + 4*3 = 44 bytes being accounted from all the offsets
 	// above being read from the file
 	s.incrementBytesRead(44)
+	s.SegmentBase.mem = s.mm[:len(s.mm)-footerSize]
 	return nil
 }
 
@@ -291,6 +308,83 @@ func (s *SegmentBase) loadFields() error {
 
 		fieldID++
 	}
+	return nil
+}
+
+func (s *SegmentBase) loadFieldsNew() error {
+	pos := s.sectionsIndexOffset
+
+	if pos == 0 {
+		// this is the case only for older file formats
+		return s.loadFields()
+	}
+
+	// read the number of fields
+	numFields, sz := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(sz)
+
+	var fieldID uint64
+
+	for fieldID < numFields {
+		addr := binary.BigEndian.Uint64(s.mem[pos : pos+8])
+
+		fieldSectionMap := make(map[uint16]uint64)
+
+		err := s.loadFieldNew(uint16(fieldID), addr, fieldSectionMap)
+		if err != nil {
+			return err
+		}
+
+		s.fieldsSectionsMap = append(s.fieldsSectionsMap, fieldSectionMap)
+
+		fieldID++
+		pos += 8
+	}
+
+	return nil
+}
+
+func (s *SegmentBase) loadFieldNew(fieldID uint16, addr uint64,
+	fieldSectionMap map[uint16]uint64) error {
+	pos := addr
+	fieldNameLen, sz := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(sz)
+
+	fieldName := string(s.mem[pos : pos+fieldNameLen])
+	s.fieldsInv = append(s.fieldsInv, fieldName)
+	s.fieldsMap[fieldName] = uint16(fieldID + 1)
+
+	pos += fieldNameLen
+
+	fieldNumSections, sz := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(sz)
+
+	for sectionIdx := uint64(0); sectionIdx < fieldNumSections; sectionIdx++ {
+		// read section id
+		fieldSectionType := binary.BigEndian.Uint16(s.mem[pos : pos+2])
+		pos += 2
+		fieldSectionAddr := binary.BigEndian.Uint64(s.mem[pos : pos+8])
+		pos += 8
+		fieldSectionMap[fieldSectionType] = fieldSectionAddr
+		if fieldSectionType == sectionInvertedTextIndex {
+			// for the fields which don't have the inverted index, the offset is
+			// 0 and during query time, because there is no valid dictionary we
+			// will just have follow a no-op path.
+			if fieldSectionAddr == 0 {
+				s.dictLocs = append(s.dictLocs, 0)
+				continue
+			}
+			// skip the doc values
+			_, n := binary.Uvarint(s.mem[fieldSectionAddr : fieldSectionAddr+binary.MaxVarintLen64])
+			fieldSectionAddr += uint64(n)
+			_, n = binary.Uvarint(s.mem[fieldSectionAddr : fieldSectionAddr+binary.MaxVarintLen64])
+			fieldSectionAddr += uint64(n)
+			dictLoc, _ := binary.Uvarint(s.mem[fieldSectionAddr : fieldSectionAddr+binary.MaxVarintLen64])
+
+			s.dictLocs = append(s.dictLocs, dictLoc)
+		}
+	}
+
 	return nil
 }
 
@@ -435,7 +529,6 @@ func (s *SegmentBase) visitStoredFields(vdc *visitDocumentCtx, num uint64,
 					arrayPos[i] = ap
 				}
 			}
-
 			value := uncompressed[offset : offset+l]
 			keepGoing = visitor(s.fieldsInv[field], byte(typ), value, arrayPos)
 		}
@@ -594,34 +687,166 @@ func (s *Segment) DictAddr(field string) (uint64, error) {
 	return s.dictLocs[fieldIDPlus1-1], nil
 }
 
-func (s *SegmentBase) loadDvReaders() error {
-	if s.docValueOffset == fieldNotUninverted || s.numDocs == 0 {
-		return nil
+func (s *Segment) getSectionDvOffsets(fieldID int, secID uint16) (uint64, uint64, uint64, error) {
+	// Version is gonna be 16
+	var fieldLocStart uint64 = fieldNotUninverted
+	fieldLocEnd := fieldLocStart
+	sectionMap := s.fieldsSectionsMap[fieldID]
+	fieldAddrStart := sectionMap[secID]
+	n := 0
+
+	if fieldAddrStart > 0 {
+		// fixed encoding as of now, need to uvarint this
+		var read uint64
+		fieldLocStart, n = binary.Uvarint(s.mem[fieldAddrStart+read : fieldAddrStart+read+binary.MaxVarintLen64])
+		if n <= 0 {
+			return 0, 0, 0, fmt.Errorf("loadDvReaders: failed to read the docvalue offset start for field %d", fieldID)
+		}
+		read += uint64(n)
+
+		fieldLocEnd, n = binary.Uvarint(s.mem[fieldAddrStart+read : fieldAddrStart+read+binary.MaxVarintLen64])
+		if n <= 0 {
+			return 0, 0, 0, fmt.Errorf("loadDvReaders: failed to read the docvalue offset end for field %d", fieldID)
+		}
+		read += uint64(n)
+		// bytes read increment to be done here
 	}
 
+	return fieldLocStart, fieldLocEnd, 0, nil
+}
+
+func (s *Segment) loadDvReader(fieldID int, secID uint16) error {
+	start, end, _, err := s.getSectionDvOffsets(fieldID, secID)
+	if err != nil {
+		return err
+	}
+
+	fieldDvReader, err := s.loadFieldDocValueReader(s.fieldsInv[fieldID], start, end)
+	if err != nil {
+		return err
+	}
+
+	if fieldDvReader != nil {
+		if s.fieldDvReaders[secID] == nil {
+			s.fieldDvReaders[secID] = make(map[uint16]*docValueReader)
+		}
+		// fix the structure of fieldDvReaders
+		// currently it populates the inverted index doc values
+		s.fieldDvReaders[secID][uint16(fieldID)] = fieldDvReader
+		s.fieldDvNames = append(s.fieldDvNames, s.fieldsInv[fieldID])
+	}
+	return nil
+}
+
+func (s *Segment) loadDvReadersLegacy() error {
+	// older file formats to parse the docValueIndex and if that says doc values
+	// aren't there in this segment file, just return nil
+	if s.docValueOffset == fieldNotUninverted {
+		return nil
+	}
 	var read uint64
-	for fieldID, field := range s.fieldsInv {
-		var fieldLocStart, fieldLocEnd uint64
-		var n int
-		fieldLocStart, n = binary.Uvarint(s.mem[s.docValueOffset+read : s.docValueOffset+read+binary.MaxVarintLen64])
+	for fieldID := range s.fieldsInv {
+		start, n := binary.Uvarint(s.mem[s.docValueOffset+read : s.docValueOffset+read+binary.MaxVarintLen64])
 		if n <= 0 {
 			return fmt.Errorf("loadDvReaders: failed to read the docvalue offset start for field %d", fieldID)
 		}
 		read += uint64(n)
-		fieldLocEnd, n = binary.Uvarint(s.mem[s.docValueOffset+read : s.docValueOffset+read+binary.MaxVarintLen64])
+		end, n := binary.Uvarint(s.mem[s.docValueOffset+read : s.docValueOffset+read+binary.MaxVarintLen64])
 		if n <= 0 {
 			return fmt.Errorf("loadDvReaders: failed to read the docvalue offset end for field %d", fieldID)
 		}
 		read += uint64(n)
 
-		s.incrementBytesRead(read)
-		fieldDvReader, err := s.loadFieldDocValueReader(field, fieldLocStart, fieldLocEnd)
+		fieldDvReader, err := s.loadFieldDocValueReader(s.fieldsInv[fieldID], start, end)
 		if err != nil {
 			return err
 		}
+
 		if fieldDvReader != nil {
-			s.fieldDvReaders[uint16(fieldID)] = fieldDvReader
-			s.fieldDvNames = append(s.fieldDvNames, field)
+			// older file formats have docValues corresponding only to inverted index
+			// ignore the rest.
+			if s.fieldDvReaders[sectionInvertedTextIndex] == nil {
+				s.fieldDvReaders[sectionInvertedTextIndex] = make(map[uint16]*docValueReader)
+			}
+			// fix the structure of fieldDvReaders
+			// currently it populates the inverted index doc values
+			s.fieldDvReaders[sectionInvertedTextIndex][uint16(fieldID)] = fieldDvReader
+			s.fieldDvNames = append(s.fieldDvNames, s.fieldsInv[fieldID])
+		}
+	}
+
+	return nil
+}
+
+// Segment is a file segment, and loading the dv readers from that segment
+// must account for the version while loading since the formats are different
+// in the older and the Version version.
+func (s *Segment) loadDvReaders() error {
+	if s.numDocs == 0 {
+		return nil
+	}
+
+	if s.version < IndexSectionsVersion {
+		return s.loadDvReadersLegacy()
+	}
+
+	// for every section of every field, load the doc values and register
+	// the readers.
+	for fieldID := range s.fieldsInv {
+		for secID := range segmentSections {
+			s.loadDvReader(fieldID, secID)
+		}
+	}
+
+	return nil
+}
+
+// since segmentBase is an in-memory segment, it can be called only
+// for v16 file formats as part of InitSegmentBase() while introducing
+// a segment into the system.
+func (s *SegmentBase) loadDvReaders() error {
+
+	// evaluate -> s.docValueOffset == fieldNotUninverted
+	if s.numDocs == 0 {
+		return nil
+	}
+
+	for fieldID, sections := range s.fieldsSectionsMap {
+		for secID, secOffset := range sections {
+			if secOffset > 0 {
+				// fixed encoding as of now, need to uvarint this
+				pos := secOffset
+				fieldLocStart, read := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])
+				if read <= 0 {
+					return fmt.Errorf("loadDvReaders: failed to read the docvalue offset start for field %v", s.fieldsInv[fieldID])
+				}
+				pos += uint64(read)
+				fieldLocEnd, read := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])
+				if read <= 0 {
+					return fmt.Errorf("loadDvReaders: failed to read the docvalue offset end for field %v", s.fieldsInv[fieldID])
+				}
+				pos += uint64(read)
+
+				dataLoc, read := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])
+				if read <= 0 {
+					return fmt.Errorf("loadDvReaders: failed to read the dataLoc "+
+						"offset for sectionID %v field %v", secID, s.fieldsInv[fieldID])
+				}
+				if secID == sectionInvertedTextIndex {
+					s.dictLocs = append(s.dictLocs, dataLoc)
+				}
+				fieldDvReader, err := s.loadFieldDocValueReader(s.fieldsInv[fieldID], fieldLocStart, fieldLocEnd)
+				if err != nil {
+					return err
+				}
+				if fieldDvReader != nil {
+					if s.fieldDvReaders[secID] == nil {
+						s.fieldDvReaders[secID] = make(map[uint16]*docValueReader)
+					}
+					s.fieldDvReaders[secID][uint16(fieldID)] = fieldDvReader
+					s.fieldDvNames = append(s.fieldDvNames, s.fieldsInv[fieldID])
+				}
+			}
 		}
 	}
 

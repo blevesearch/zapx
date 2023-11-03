@@ -50,7 +50,7 @@ func writeRoaringWithLen(r *roaring.Bitmap, w io.Writer,
 	return tw, nil
 }
 
-func persistFields(fieldsInv []string, w *CountHashWriter, dictLocs []uint64) (uint64, error) {
+func persistFieldsSection(fieldsInv []string, w *CountHashWriter, dictLocs []uint64, opaque map[int]resetable) (uint64, error) {
 	var rv uint64
 	var fieldsOffsets []uint64
 
@@ -58,8 +58,8 @@ func persistFields(fieldsInv []string, w *CountHashWriter, dictLocs []uint64) (u
 		// record start of this field
 		fieldsOffsets = append(fieldsOffsets, uint64(w.Count()))
 
-		// write out the dict location and field name length
-		_, err := writeUvarints(w, dictLocs[fieldID], uint64(len(fieldName)))
+		// write field name length
+		_, err := writeUvarints(w, uint64(len(fieldName)))
 		if err != nil {
 			return 0, err
 		}
@@ -69,10 +69,30 @@ func persistFields(fieldsInv []string, w *CountHashWriter, dictLocs []uint64) (u
 		if err != nil {
 			return 0, err
 		}
+
+		// write out the number of field-specific indexes
+		// FIXME hard-coding to 2, and not attempting to support sparseness well
+		_, err = writeUvarints(w, uint64(len(segmentSections)))
+		if err != nil {
+			return 0, err
+		}
+
+		// now write pairs of index section ids, and start addresses for each field
+		// which has a specific section's data. this serves as the starting point
+		// using which a field's section data can be read and parsed.
+		for segmentSectionType, segmentSectionImpl := range segmentSections {
+			binary.Write(w, binary.BigEndian, segmentSectionType)
+			binary.Write(w, binary.BigEndian, uint64(segmentSectionImpl.AddrForField(opaque, fieldID)))
+		}
 	}
 
-	// now write out the fields index
 	rv = uint64(w.Count())
+	// write out number of fields
+	_, err := writeUvarints(w, uint64(len(fieldsInv)))
+	if err != nil {
+		return 0, err
+	}
+	// now write out the fields index
 	for fieldID := range fieldsInv {
 		err := binary.Write(w, binary.BigEndian, fieldsOffsets[fieldID])
 		if err != nil {
@@ -84,10 +104,11 @@ func persistFields(fieldsInv []string, w *CountHashWriter, dictLocs []uint64) (u
 }
 
 // FooterSize is the size of the footer record in bytes
-// crc + ver + chunk + field offset + stored offset + num docs + docValueOffset
-const FooterSize = 4 + 4 + 4 + 8 + 8 + 8 + 8
+// crc + ver + chunk + docValueOffset + sectionsIndexOffset + field offset + stored offset + num docs
+const FooterSize = 4 + 4 + 4 + 8 + 8 + 8 + 8 + 8
 
-func persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, docValueOffset uint64,
+// in the index sections format, the fieldsIndexOffset points to the sectionsIndexOffset
+func persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, sectionsIndexOffset, docValueOffset uint64,
 	chunkMode uint32, crcBeforeFooter uint32, writerIn io.Writer) error {
 	w := NewCountHashWriter(writerIn)
 	w.crc = crcBeforeFooter
@@ -107,6 +128,13 @@ func persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, docValueOffset
 	if err != nil {
 		return err
 	}
+
+	// write out the new field index location (to be removed later, as this can eventually replace the old)
+	err = binary.Write(w, binary.BigEndian, sectionsIndexOffset)
+	if err != nil {
+		return err
+	}
+
 	// write out the fieldDocValue location
 	err = binary.Write(w, binary.BigEndian, docValueOffset)
 	if err != nil {

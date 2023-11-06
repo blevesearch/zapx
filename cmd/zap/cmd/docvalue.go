@@ -28,7 +28,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func docValueCmd(data []byte, args []string, field string, id int, fieldEndLoc, fieldStartLoc uint64) error {
+func dumpDocValueResults(data []byte, args []string, field string, id int, fieldEndLoc, fieldStartLoc uint64) error {
 	var chunkOffsetsPosition, offset, numChunks uint64
 
 	var fieldName string
@@ -81,7 +81,10 @@ func docValueCmd(data []byte, args []string, field string, id int, fieldEndLoc, 
 		fieldDvSize = float64(dvSize) / (1024 * 1024)
 		fieldChunkLens = append(fieldChunkLens, chunkLens...)
 		fieldChunkCount = numChunks
+	} else {
+		return nil
 	}
+
 	mbsize := float64(totalDvSize) / (1024 * 1024)
 	fmt.Printf("Total Doc Values Size on Disk: %.6f MB\n", mbsize)
 
@@ -206,7 +209,7 @@ func loadFieldData(data []byte, pos uint64, fieldID uint64, sectionMap map[uint1
 	return fieldsInv, nil
 }
 
-func legacyDocValueCmd(cmd *cobra.Command, args []string) error {
+func docValueCmd(cmd *cobra.Command, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("must specify index file path")
 	}
@@ -253,7 +256,7 @@ func legacyDocValueCmd(cmd *cobra.Command, args []string) error {
 				" persisted \n", id, field, fieldStartLoc, fieldStartLoc)
 			continue
 		}
-		err = docValueCmd(data, args, field, id, fieldEndLoc, fieldStartLoc)
+		err = dumpDocValueResults(data, args, field, id, fieldEndLoc, fieldStartLoc)
 		if err != nil {
 			return err
 		}
@@ -286,9 +289,7 @@ var docvalueCmd = &cobra.Command{
 	Use:   "docvalue [path] <field> optional <docNum> optional",
 	Short: "docvalue prints the docvalue details by field, and docNum",
 	Long:  `The docvalue command lets you explore the docValues in order of field and by doc number.`,
-	// preserve this function and write a new one for the sections type of docValue offset loading and etc.
-	// little bit more change over here perhaps.
-	RunE: legacyDocValueCmd,
+	RunE:  docValueCmd,
 }
 
 func getDocValueLocs(docNum uint64, metaHeader []zap.MetaData) (uint64, uint64) {

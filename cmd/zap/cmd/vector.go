@@ -39,22 +39,12 @@ var vectorCmd = &cobra.Command{
 	3. given a vector ID, get all the local docNums its present in.
 	4. reconstruct vector given the vectorID.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-
-		// the information to be printed out here:
-		// 0. check whether a valid vector index exists or not.
-		// 1. number of vectors.
-		// 2. given a vector, all the docs it's present in (localDocNums).
-		// 3. size of the vector index byte slice.
-		// 4. type of the vector index as well perhaps
-		// 5. dimension of the vector, and similarity metric?
-		// 6. reconstruct the vector given the vectorID.
-
 		data := segment.Data()
 		pos := segment.FieldsIndexOffset()
 
 		if pos == 0 {
 			// this is the case only for older file formats
-			return fmt.Errorf("file format not supported?")
+			return fmt.Errorf("file format not supported")
 		}
 
 		// read the number of fields
@@ -62,14 +52,17 @@ var vectorCmd = &cobra.Command{
 		pos += uint64(sz)
 
 		var fieldID uint64
+		var fieldInv []string
 
 		for fieldID < numFields {
 			addr := binary.BigEndian.Uint64(data[pos : pos+8])
-
 			fieldSectionMap := make(map[uint16]uint64)
 
-			fieldPresent := loadFieldSection(data, args[1], uint16(fieldID), addr, fieldSectionMap)
-			if fieldPresent {
+			fieldInv, err := loadFieldData(data, addr, fieldID, fieldSectionMap, fieldInv)
+			if err != nil {
+				return fmt.Errorf("error while parsing the field data %v", err)
+			}
+			if fieldInv[len(fieldInv)-1] == args[1] {
 				vectorSectionOffset, ok := fieldSectionMap[uint16(sectionFaissVectorIndex)]
 				if !ok {
 					return fmt.Errorf("the specified field doesn't have a vector section in it.")
@@ -98,7 +91,7 @@ var vectorCmd = &cobra.Command{
 					fmt.Printf("the dimension of vectors in the vector index %v\n", metrics[index.MetricType()])
 				case 3:
 					if args[2] == "list" {
-						fmt.Printf("list the vector IDs in the index\n")
+						fmt.Printf("listing the vector IDs in the index\n")
 						for vecID, docs := range vecDocIDMap {
 							fmt.Printf("vector with vecID: %v present in docs: %v\n", vecID, docs)
 						}
@@ -171,35 +164,6 @@ func decodeSection(data []byte, start uint64) (int, int, map[int64][]uint32, *fa
 	}
 
 	return int(numVecs), int(indexSize), vecDocIDMap, vecIndex, nil
-}
-
-func loadFieldSection(data []byte, reqField string, fieldID uint16,
-	addr uint64, sectionMap map[uint16]uint64) bool {
-	pos := addr
-	fieldNameLen, sz := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
-	pos += uint64(sz)
-
-	fieldName := string(data[pos : pos+fieldNameLen])
-	if fieldName != reqField {
-		return false
-	}
-	// s.fieldsInv = append(s.fieldsInv, fieldName)
-	// s.fieldsMap[fieldName] = uint16(fieldID + 1)
-
-	pos += fieldNameLen
-
-	fieldNumSections, sz := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
-	pos += uint64(sz)
-
-	for sectionIdx := uint64(0); sectionIdx < fieldNumSections; sectionIdx++ {
-		// read section id
-		fieldSectionType := binary.BigEndian.Uint16(data[pos : pos+2])
-		pos += 2
-		fieldSectionAddr := binary.BigEndian.Uint64(data[pos : pos+8])
-		pos += 8
-		sectionMap[fieldSectionType] = fieldSectionAddr
-	}
-	return true
 }
 
 func init() {

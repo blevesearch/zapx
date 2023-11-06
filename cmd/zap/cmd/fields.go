@@ -18,7 +18,6 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	zap "github.com/blevesearch/zapx/v16"
 	"github.com/spf13/cobra"
 )
 
@@ -28,33 +27,51 @@ var fieldsCmd = &cobra.Command{
 	Short: "fields prints the fields in the specified file",
 	Long:  `The fields command lets you print the fields in the specified file.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) < 1 {
+			return fmt.Errorf("must specify index file path")
+		}
 
 		data := segment.Data()
 
-		crcOffset := len(data) - 4
-		verOffset := crcOffset - 4
-		chunkOffset := verOffset - 4
-		fieldsOffset := chunkOffset - 16
-		fieldsIndexOffset := binary.BigEndian.Uint64(data[fieldsOffset : fieldsOffset+8])
-		fieldsIndexEnd := uint64(len(data) - zap.FooterSize)
-
 		// iterate through fields index
+		var fieldInv []string
+		pos := segment.FieldsIndexOffset()
+		if pos == 0 {
+			// this is the case only for older file formats
+			return fmt.Errorf("file format not supported?")
+		}
+
+		// read the number of fields
+		numFields, sz := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+		pos += uint64(sz)
 		var fieldID uint64
-		for fieldsIndexOffset+(8*fieldID) < fieldsIndexEnd {
-			addr := binary.BigEndian.Uint64(data[fieldsIndexOffset+(8*fieldID) : fieldsIndexOffset+(8*fieldID)+8])
-			var n uint64
-			dictLoc, read := binary.Uvarint(data[addr+n : fieldsIndexEnd])
-			n += uint64(read)
+		var err error
+		var fieldSectionMap []map[uint16]uint64
 
-			var nameLen uint64
-			nameLen, read = binary.Uvarint(data[addr+n : fieldsIndexEnd])
-			n += uint64(read)
+		for fieldID < numFields {
+			sectionMap := make(map[uint16]uint64)
+			addr := binary.BigEndian.Uint64(data[pos : pos+8])
 
-			name := string(data[addr+n : addr+n+nameLen])
-
-			fmt.Printf("field %d '%s' starts at %d (%x)\n", fieldID, name, dictLoc, dictLoc)
-
+			fieldInv, err = loadFieldData(data, addr, fieldID, sectionMap, fieldInv)
+			if err != nil {
+				return err
+			}
+			fieldSectionMap = append(fieldSectionMap, sectionMap)
 			fieldID++
+			pos += 8
+		}
+
+		for fieldID, field := range fieldInv {
+			for sectionType, sectionAddr := range fieldSectionMap[fieldID] {
+				if sectionAddr > 0 {
+					switch sectionType {
+					case sectionInvertedTextIndex:
+						fmt.Printf("field %d '%s' text index starts at %d (%x)\n", fieldID, field, sectionAddr, sectionAddr)
+					case sectionFaissVectorIndex:
+						fmt.Printf("field %d '%s' vector index starts at %d (%x)\n", fieldID, field, sectionAddr, sectionAddr)
+					}
+				}
+			}
 		}
 
 		return nil

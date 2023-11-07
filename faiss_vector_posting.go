@@ -334,6 +334,8 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 				return nil, err
 			}
 
+			vecIndex.Delete()
+
 			// for every similar vector returned by the Search() API, add the corresponding
 			// docID and the score to the newly created vecPostingsList
 			for i := 0; i < len(ids); i++ {

@@ -302,6 +302,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			return err
 		}
 
+		index.Delete()
+
 		fieldStart, err := v.flushVectorSection(vecToDocID, mergedIndexBytes, w)
 		if err != nil {
 			return err
@@ -328,12 +330,21 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		return err
 	}
 
+	freeReconstructedIndexes(vecIndexes)
+
 	fieldStart, err := v.flushVectorSection(vecToDocID, mergedIndexBytes, w)
 	if err != nil {
 		return err
 	}
 	v.fieldAddrs[uint16(fieldID)] = fieldStart
 	return nil
+}
+
+// todo: can be parallelized.
+func freeReconstructedIndexes(vecIndexes []*faiss.IndexImpl) {
+	for _, index := range vecIndexes {
+		index.Delete()
+	}
 }
 
 // todo: is it possible to merge this resuable stuff with the interim's tmp0?
@@ -384,6 +395,10 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		if err != nil {
 			return 0, err
 		}
+
+		// safe to delete the index now since its been serialized and not
+		// referenced anymore
+		index.Delete()
 
 		fieldStart := w.Count()
 		// writing out two offset values to indicate that the current field's

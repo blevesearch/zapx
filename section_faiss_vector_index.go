@@ -299,7 +299,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			return err
 		}
 
-		index.Delete()
+		index.Close()
 
 		fieldStart, err := v.flushVectorSection(vecToDocID, mergedIndexBytes, w)
 		if err != nil {
@@ -338,7 +338,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 // todo: can be parallelized.
 func freeReconstructedIndexes(vecIndexes []*faiss.IndexImpl) {
 	for _, index := range vecIndexes {
-		index.Delete()
+		index.Close()
 	}
 }
 
@@ -393,7 +393,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 
 		// safe to delete the index now since its been serialized and not
 		// referenced anymore
-		index.Delete()
+		index.Close()
 
 		fieldStart := w.Count()
 		// writing out two offset values to indicate that the current field's

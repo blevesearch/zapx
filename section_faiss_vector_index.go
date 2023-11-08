@@ -241,6 +241,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		vecIndexes = append(vecIndexes, index)
 	}
 
+	defer freeReconstructedIndexes(vecIndexes)
+
 	// todo: perhaps making this threshold a config value would be better?
 	if len(vecToDocID) > 10000 {
 		// merging of more complex index types (for eg ivf family) with reconstruction
@@ -265,12 +267,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		finalVecIDs := maps.Keys(vecToDocID)
 
 		// todo: perhaps the index type can be chosen from a config and tuned accordingly.
-		index, err := faiss.IndexFactory(dims, "IDMap2,IVF100,SQ8", metric)
-		if err != nil {
-			return err
-		}
-
-		index, err = index.GetIVFSubIndex()
+		index, err := faiss.IndexFactory(dims, "IVF100,SQ8", metric)
 		if err != nil {
 			return err
 		}
@@ -301,6 +298,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		if err != nil {
 			return err
 		}
+
+		index.Close()
 
 		fieldStart, err := v.flushVectorSection(vecToDocID, mergedIndexBytes, w)
 		if err != nil {
@@ -334,6 +333,13 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	}
 	v.fieldAddrs[uint16(fieldID)] = fieldStart
 	return nil
+}
+
+// todo: can be parallelized.
+func freeReconstructedIndexes(vecIndexes []*faiss.IndexImpl) {
+	for _, index := range vecIndexes {
+		index.Close()
+	}
 }
 
 // todo: is it possible to merge this resuable stuff with the interim's tmp0?
@@ -384,6 +390,10 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		if err != nil {
 			return 0, err
 		}
+
+		// safe to delete the index now since its been serialized and not
+		// referenced anymore
+		index.Close()
 
 		fieldStart := w.Count()
 		// writing out two offset values to indicate that the current field's
@@ -478,7 +488,7 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 		// to construct the vector index.
 		if _, ok := vo.vecFieldMap[fieldID]; !ok {
 			vo.vecFieldMap[fieldID] = indexContent{
-				vecs: map[uint64]vecInfo{
+				vecs: map[int64]vecInfo{
 					vecHash: {
 						vec: vec,
 					},
@@ -497,10 +507,10 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 // todo: better hash function?
 // keep the perf aspects in mind with respect to the hash function.
 // random seed based hash golang.
-func hashCode(a []float32) uint64 {
-	var rv uint64
+func hashCode(a []float32) int64 {
+	var rv int64
 	for _, v := range a {
-		rv = uint64(math.Float32bits(v)) + (31 * rv)
+		rv = int64(math.Float32bits(v)) + (31 * rv)
 	}
 
 	return rv
@@ -521,7 +531,7 @@ func (v *faissVectorIndexSection) getvectorIndexOpaque(opaque map[int]resetable)
 func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) resetable {
 	rv := &vectorIndexOpaque{
 		fieldAddrs:  make(map[uint16]int),
-		vecIDMap:    make(map[uint64]vecInfo),
+		vecIDMap:    make(map[int64]vecInfo),
 		vecFieldMap: make(map[uint16]indexContent),
 	}
 	for k, v := range args {
@@ -532,7 +542,7 @@ func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) reseta
 }
 
 type indexContent struct {
-	vecs   map[uint64]vecInfo
+	vecs   map[int64]vecInfo
 	dim    uint16
 	metric string
 }
@@ -548,7 +558,7 @@ type vectorIndexOpaque struct {
 
 	fieldAddrs map[uint16]int
 
-	vecIDMap    map[uint64]vecInfo
+	vecIDMap    map[int64]vecInfo
 	vecFieldMap map[uint16]indexContent
 
 	tmp0 []byte

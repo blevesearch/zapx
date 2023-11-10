@@ -236,6 +236,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		indexBytes := seg.mem[indexes[segI].startOffset : indexes[segI].startOffset+int(indexes[segI].indexSize)]
 		index, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
 		if err != nil {
+			freeReconstructedIndexes(vecIndexes)
 			return err
 		}
 		vecIndexes = append(vecIndexes, index)
@@ -272,6 +273,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			return err
 		}
 
+		defer index.Close()
+
 		// the direct map maintained in the IVF index is essential for the
 		// reconstruction of vectors based on vector IDs in the future merges.
 		// the AddWithIDs API also needs a direct map to be set before using.
@@ -298,8 +301,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		if err != nil {
 			return err
 		}
-
-		index.Close()
 
 		fieldStart, err := v.flushVectorSection(vecToDocID, mergedIndexBytes, w)
 		if err != nil {
@@ -375,6 +376,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			return 0, err
 		}
 
+		defer index.Close()
+
 		err = index.Train(vecs)
 		if err != nil {
 			return 0, err
@@ -390,10 +393,6 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		if err != nil {
 			return 0, err
 		}
-
-		// safe to delete the index now since its been serialized and not
-		// referenced anymore
-		index.Close()
 
 		fieldStart := w.Count()
 		// writing out two offset values to indicate that the current field's

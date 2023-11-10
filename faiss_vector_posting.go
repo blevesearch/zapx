@@ -328,13 +328,12 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 			if err != nil {
 				return nil, err
 			}
+			defer vecIndex.Close()
 
 			scores, ids, err := vecIndex.Search(qVector, k)
 			if err != nil {
 				return nil, err
 			}
-
-			vecIndex.Close()
 
 			// for every similar vector returned by the Search() API, add the corresponding
 			// docID and the score to the newly created vecPostingsList

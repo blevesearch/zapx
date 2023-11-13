@@ -306,7 +306,7 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 			numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 			for i := 0; i < int(numVecs); i++ {
-				vecID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+				vecID, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
 				pos += n
 
 				bitMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
@@ -321,7 +321,7 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 					return nil, err
 				}
 
-				vecDocIDMap[int64(vecID)] = bitMap.ToArray()
+				vecDocIDMap[vecID] = bitMap.ToArray()
 			}
 
 			vecIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)

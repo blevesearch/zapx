@@ -131,16 +131,25 @@ LOOP:
 				vecID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 				pos += n
 
-				bitMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+				numDocs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 				pos += n
 
-				roaringBytes := sb.mem[pos : pos+int(bitMapLen)]
-				pos += int(bitMapLen)
-
 				bitMap := roaring.NewBitmap()
-				_, err := bitMap.FromBuffer(roaringBytes)
-				if err != nil {
-					return err
+				if numDocs == 1 {
+					docID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+					pos += n
+					bitMap.Add(uint32(docID))
+				} else {
+					bitMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+					pos += n
+
+					roaringBytes := sb.mem[pos : pos+int(bitMapLen)]
+					pos += int(bitMapLen)
+
+					_, err := bitMap.FromBuffer(roaringBytes)
+					if err != nil {
+						return err
+					}
 				}
 
 				// remap the docIDs from the old segment to the new document nos.
@@ -213,6 +222,23 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 		_, err := writeUvarints(w, uint64(vecID))
 		if err != nil {
 			return 0, err
+		}
+
+		numDocs := docIDs.GetCardinality()
+		n = binary.PutUvarint(tempBuf, numDocs)
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return 0, err
+		}
+
+		// one-hit encoding
+		if numDocs == 1 {
+			n = binary.PutUvarint(tempBuf, numDocs)
+			_, err = w.Write(tempBuf[:n])
+			if err != nil {
+				return 0, err
+			}
+			continue
 		}
 
 		// write the docIDs
@@ -362,7 +388,6 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 
 		var vecs []float32
 		var ids []int64
-
 		for hash, vecInfo := range content.vecs {
 			vecs = append(vecs, vecInfo.vec...)
 			ids = append(ids, int64(hash))
@@ -444,6 +469,23 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 				return 0, err
 			}
 
+			numDocs := docIDs.GetCardinality()
+			n = binary.PutUvarint(tempBuf, numDocs)
+			_, err = w.Write(tempBuf[:n])
+			if err != nil {
+				return 0, err
+			}
+
+			// one-hit encoding
+			if numDocs == 1 {
+				n = binary.PutUvarint(tempBuf, numDocs)
+				_, err = w.Write(tempBuf[:n])
+				if err != nil {
+					return 0, err
+				}
+				continue
+			}
+
 			// write the docIDs
 			_, err = writeRoaringWithLen(docIDs, w, tempBuf)
 			if err != nil {
@@ -467,7 +509,6 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 	}
 
 	//process field
-
 	vec := field.Vector()
 	dim := field.Dims()
 	metric := field.Similarity()

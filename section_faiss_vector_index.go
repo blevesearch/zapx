@@ -231,9 +231,10 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 			return 0, err
 		}
 
-		// one-hit encoding
+		// an optimization to avoid using the bitmaps if there is only 1 doc
+		// with the vecID.
 		if numDocs == 1 {
-			n = binary.PutUvarint(tempBuf, numDocs)
+			n = binary.PutUvarint(tempBuf, uint64(docIDs.Minimum()))
 			_, err = w.Write(tempBuf[:n])
 			if err != nil {
 				return 0, err
@@ -476,7 +477,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 				return 0, err
 			}
 
-			// one-hit encoding
+			// an optimization to avoid using the bitmaps if there is only 1 doc
+			// with the vecID.
 			if numDocs == 1 {
 				n = binary.PutUvarint(tempBuf, numDocs)
 				_, err = w.Write(tempBuf[:n])

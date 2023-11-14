@@ -313,6 +313,10 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 				pos += n
 
 				bitMap := roaring.NewBitmap()
+
+				// if the number docs is more than one, load the bitmap containing the
+				// docIDs, else use the optimized format where the single docID is
+				// varint encoded.
 				if numDocs > 1 {
 					bitMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 					pos += n

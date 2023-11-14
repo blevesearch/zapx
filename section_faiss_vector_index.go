@@ -265,15 +265,15 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	metric := vecIndexes[0].MetricType()
 	finalVecIDs := maps.Keys(vecToDocID)
 
-	var index *faiss.IndexImpl
-	var err error
-	// todo: perhaps making this threshold a config value would be better?
-	if len(vecToDocID) > 10000 {
-		// todo: perhaps the index type can be chosen from a config and tuned accordingly.
-		index, err = faiss.IndexFactory(dims, "IVF100,SQ8", metric)
-	} else {
-		index, err = faiss.IndexFactory(dims, "IVF10,SQ8", metric)
+	var indexType string
+	// todo: perhaps the index type can be chosen from a config and tuned accordingly.
+	switch {
+	case len(vecToDocID) > 10000:
+		indexType = "IVF100,SQ8"
+	default:
+		indexType = "IVF10,Flat"
 	}
+	index, err := faiss.IndexFactory(dims, indexType, metric)
 	if err != nil {
 		return err
 	}

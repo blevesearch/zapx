@@ -368,10 +368,15 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			ids = append(ids, int64(hash))
 		}
 
+		var metric = faiss.MetricL2
+		if content.metric == index.CosineSimilarity {
+			metric = faiss.MetricInnerProduct
+		}
+
 		// create an index, its always a flat for now, because each batch size
 		// won't have too many vectors (in order for >100K). todo: will need to revisit
 		// this logic - creating based on configured batch size in scorch.
-		index, err := faiss.IndexFactory(int(content.dim), "IDMap2,Flat", faiss.MetricL2)
+		index, err := faiss.IndexFactory(int(content.dim), "IDMap2,Flat", metric)
 		if err != nil {
 			return 0, err
 		}

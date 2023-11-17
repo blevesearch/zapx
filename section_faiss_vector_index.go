@@ -128,38 +128,46 @@ LOOP:
 			indexes[len(indexes)-1].vecIds = make([]int64, 0, numVecs)
 
 			for i := 0; i < int(numVecs); i++ {
-				vecID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+				vecID, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
 				pos += n
 
-				bitMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+				numDocs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 				pos += n
-
-				roaringBytes := sb.mem[pos : pos+int(bitMapLen)]
-				pos += int(bitMapLen)
 
 				bitMap := roaring.NewBitmap()
-				_, err := bitMap.FromBuffer(roaringBytes)
-				if err != nil {
-					return err
+				if numDocs == 1 {
+					docID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+					pos += n
+					bitMap.Add(uint32(docID))
+				} else {
+					bitMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+					pos += n
+
+					roaringBytes := sb.mem[pos : pos+int(bitMapLen)]
+					pos += int(bitMapLen)
+
+					_, err := bitMap.FromBuffer(roaringBytes)
+					if err != nil {
+						return err
+					}
 				}
 
 				// remap the docIDs from the old segment to the new document nos.
 				// provided.
 				bitMap = remapDocIDs(bitMap, newDocNumsIn[segI])
-				if vecToDocID[int64(vecID)] == nil {
+				if vecToDocID[vecID] == nil {
 					// if there are some tombstone entries in the docIDs, marked
 					// in the drops[ith-segment] bitmap, don't include them in the
 					// final bitmap.
 					if drops[segI] != nil && !drops[segI].IsEmpty() {
-						vecToDocID[int64(vecID)] = roaring.AndNot(bitMap, drops[segI])
+						vecToDocID[vecID] = roaring.AndNot(bitMap, drops[segI])
 					} else {
-						vecToDocID[int64(vecID)] = bitMap
+						vecToDocID[vecID] = bitMap
 					}
+					indexes[len(indexes)-1].vecIds = append(indexes[len(indexes)-1].vecIds, vecID)
 				} else {
-					vecToDocID[int64(vecID)].Or(bitMap)
+					vecToDocID[vecID].Or(bitMap)
 				}
-
-				indexes[len(indexes)-1].vecIds = append(indexes[len(indexes)-1].vecIds, int64(vecID))
 			}
 		}
 		err := vo.mergeAndWriteVectorIndexes(fieldID, segments, vecToDocID, indexes, w, closeCh)
@@ -210,9 +218,28 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 
 	for vecID, docIDs := range vecToDocID {
 		// write the vecID
-		_, err := writeUvarints(w, uint64(vecID))
+		n = binary.PutVarint(tempBuf, vecID)
+		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return 0, err
+		}
+
+		numDocs := docIDs.GetCardinality()
+		n = binary.PutUvarint(tempBuf, numDocs)
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return 0, err
+		}
+
+		// an optimization to avoid using the bitmaps if there is only 1 doc
+		// with the vecID.
+		if numDocs == 1 {
+			n = binary.PutUvarint(tempBuf, uint64(docIDs.Minimum()))
+			_, err = w.Write(tempBuf[:n])
+			if err != nil {
+				return 0, err
+			}
+			continue
 		}
 
 		// write the docIDs
@@ -341,14 +368,18 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 
 		var vecs []float32
 		var ids []int64
-
 		for hash, vecInfo := range content.vecs {
 			vecs = append(vecs, vecInfo.vec...)
 			ids = append(ids, int64(hash))
 		}
 
+		var metric = faiss.MetricL2
+		if content.metric == index.CosineSimilarity {
+			metric = faiss.MetricInnerProduct
+		}
+
 		// create an index - currently its a IVF with 2 clusters and no compression
-		index, err := faiss.IndexFactory(int(content.dim), "IVF2,Flat", faiss.MetricL2)
+		index, err := faiss.IndexFactory(int(content.dim), "IVF2,Flat", metric)
 		if err != nil {
 			return 0, err
 		}
@@ -409,7 +440,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		}
 
 		// write the number of unique vectors
-		n = binary.PutUvarint(tempBuf, uint64(len(content.vecs)))
+		n = binary.PutUvarint(tempBuf, uint64(index.Ntotal()))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return 0, err
@@ -424,9 +455,28 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		for vecID, _ := range content.vecs {
 			docIDs := vo.vecIDMap[vecID].docIDs
 			// write the vecID
-			_, err := writeUvarints(w, uint64(vecID))
+			n = binary.PutVarint(tempBuf, vecID)
+			_, err = w.Write(tempBuf[:n])
 			if err != nil {
 				return 0, err
+			}
+
+			numDocs := docIDs.GetCardinality()
+			n = binary.PutUvarint(tempBuf, numDocs)
+			_, err = w.Write(tempBuf[:n])
+			if err != nil {
+				return 0, err
+			}
+
+			// an optimization to avoid using the bitmaps if there is only 1 doc
+			// with the vecID.
+			if numDocs == 1 {
+				n = binary.PutUvarint(tempBuf, uint64(docIDs.Minimum()))
+				_, err = w.Write(tempBuf[:n])
+				if err != nil {
+					return 0, err
+				}
+				continue
 			}
 
 			// write the docIDs
@@ -452,7 +502,6 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 	}
 
 	//process field
-
 	vec := field.Vector()
 	dim := field.Dims()
 	metric := field.Similarity()

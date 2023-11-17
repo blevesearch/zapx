@@ -186,6 +186,51 @@ func dumpDocValueResults(data []byte, args []string, field string, id int, field
 	return nil
 }
 
+func docValueCmd(cmd *cobra.Command, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("must specify index file path")
+	}
+
+	data := segment.Data()
+	// iterate through fields index
+	pos := segment.FieldsIndexOffset()
+	if pos == 0 {
+		// this is the case only for older file formats
+		return fmt.Errorf("file format not supported")
+	}
+
+	fieldInv, fieldSectionMap, err := getSectionFields(data, pos)
+	if err != nil {
+		return fmt.Errorf("error while getting fields and sections info %v", err)
+	}
+	// if no fields are specified then print the docValue offsets for all fields set
+	for id, field := range fieldInv {
+		fieldStartLoc, fieldEndLoc, err := getDvOffsets(data, id, fieldSectionMap)
+		if err != nil {
+			return err
+		}
+
+		if fieldStartLoc == math.MaxUint64 && len(args) == 1 {
+			fmt.Printf("FieldID: %d '%s' docvalue at %d (%x) not "+
+				" persisted \n", id, field, fieldStartLoc, fieldStartLoc)
+			continue
+		}
+		err = dumpDocValueResults(data, args, field, id, fieldEndLoc, fieldStartLoc)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// docvalueCmd represents the docvalue command
+var docvalueCmd = &cobra.Command{
+	Use:   "docvalue [path] <field> optional <docNum> optional",
+	Short: "docvalue prints the docvalue details by field, and docNum",
+	Long:  `The docvalue command lets you explore the docValues in order of field and by doc number.`,
+	RunE:  docValueCmd,
+}
+
 func loadFieldData(data []byte, pos uint64, fieldID uint64, sectionMap map[uint16]uint64, fieldsInv []string) ([]string, error) {
 	fieldNameLen, sz := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(sz)
@@ -209,27 +254,15 @@ func loadFieldData(data []byte, pos uint64, fieldID uint64, sectionMap map[uint1
 	return fieldsInv, nil
 }
 
-func docValueCmd(cmd *cobra.Command, args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("must specify index file path")
-	}
-
-	data := segment.Data()
-	log.Printf("hello\n")
-	// iterate through fields index
+func getSectionFields(data []byte, pos uint64) ([]string, []map[uint16]uint64, error) {
+	var fieldID uint64
+	var err error
+	var fieldSectionMap []map[uint16]uint64
 	var fieldInv []string
-	pos := segment.FieldsIndexOffset()
-	if pos == 0 {
-		// this is the case only for older file formats
-		return fmt.Errorf("file format not supported?")
-	}
 
 	// read the number of fields
 	numFields, sz := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(sz)
-	var fieldID uint64
-	var err error
-	var fieldSectionMap []map[uint16]uint64
 
 	for fieldID < numFields {
 		sectionMap := make(map[uint16]uint64)
@@ -237,36 +270,19 @@ func docValueCmd(cmd *cobra.Command, args []string) error {
 
 		fieldInv, err = loadFieldData(data, addr, fieldID, sectionMap, fieldInv)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		fieldSectionMap = append(fieldSectionMap, sectionMap)
 		fieldID++
 		pos += 8
 	}
 
-	// if no fields are specified then print the docValue offsets for all fields set
-	for id, field := range fieldInv {
-		fieldStartLoc, fieldEndLoc, err := getDvOffsets(data, id, fieldSectionMap)
-		if err != nil {
-			return err
-		}
-
-		if fieldStartLoc == math.MaxUint64 && len(args) == 1 {
-			fmt.Printf("FieldID: %d '%s' docvalue at %d (%x) not "+
-				" persisted \n", id, field, fieldStartLoc, fieldStartLoc)
-			continue
-		}
-		err = dumpDocValueResults(data, args, field, id, fieldEndLoc, fieldStartLoc)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return fieldInv, fieldSectionMap, nil
 }
 
 func getDvOffsets(data []byte, id int, fieldSectionMap []map[uint16]uint64) (uint64, uint64, error) {
 	var read uint64
-	pos := fieldSectionMap[id][sectionInvertedTextIndex]
+	pos := fieldSectionMap[id][zap.SectionInvertedTextIndex]
 	fieldStartLoc, n := binary.Uvarint(
 		data[pos : pos+binary.MaxVarintLen64])
 	if n <= 0 {
@@ -282,14 +298,6 @@ func getDvOffsets(data []byte, id int, fieldSectionMap []map[uint16]uint64) (uin
 			"end for field %d", id)
 	}
 	return fieldStartLoc, fieldEndLoc, nil
-}
-
-// docvalueCmd represents the docvalue command
-var docvalueCmd = &cobra.Command{
-	Use:   "docvalue [path] <field> optional <docNum> optional",
-	Short: "docvalue prints the docvalue details by field, and docNum",
-	Long:  `The docvalue command lets you explore the docValues in order of field and by doc number.`,
-	RunE:  docValueCmd,
 }
 
 func getDocValueLocs(docNum uint64, metaHeader []zap.MetaData) (uint64, uint64) {

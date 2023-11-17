@@ -282,7 +282,7 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 	vecDocIDMap := make(map[int64][]uint32)
 	fieldIDPlus1 := sb.fieldsMap[field]
 	if fieldIDPlus1 > 0 {
-		vectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][sectionFaissVectorIndex]
+		vectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionFaissVectorIndex]
 		// check if the field has a vector section in the segment.
 		if vectorSection > 0 {
 			pos := int(vectorSection)

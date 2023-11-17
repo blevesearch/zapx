@@ -28,7 +28,6 @@ import (
 const termNotEncoded = 0
 
 // exploreCmd represents the explore command
-// no big changes over here as well.
 var exploreCmd = &cobra.Command{
 	Use:   "explore [path] [field] <term> <docNum>",
 	Short: "explores the index by field, then term (optional), and then docNum (optional)",

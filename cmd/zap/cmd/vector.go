@@ -1,4 +1,4 @@
-//  Copyright (c) 2017 Couchbase, Inc.
+//  Copyright (c) 2023 Couchbase, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,11 +24,12 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/blevesearch/go-faiss"
+	zap "github.com/blevesearch/zapx/v16"
 	"github.com/spf13/cobra"
 )
 
-// storedCmd represents the stored command
-// no big changes here as well.
+// vectorCmd represent the vector command
+// which parses the vector section of a field
 var vectorCmd = &cobra.Command{
 	Use:   "vector [path] [field] list <vecID> {optional}",
 	Short: "prints vector index details for a specified field",
@@ -63,7 +64,7 @@ var vectorCmd = &cobra.Command{
 				return fmt.Errorf("error while parsing the field data %v", err)
 			}
 			if fieldInv[len(fieldInv)-1] == args[1] {
-				vectorSectionOffset, ok := fieldSectionMap[uint16(sectionFaissVectorIndex)]
+				vectorSectionOffset, ok := fieldSectionMap[uint16(zap.SectionFaissVectorIndex)]
 				if !ok {
 					return fmt.Errorf("the specified field doesn't have a vector section in it.")
 				}
@@ -75,14 +76,8 @@ var vectorCmd = &cobra.Command{
 				switch len(args) {
 				case 2:
 					metrics := map[int]string{
-						faiss.MetricInnerProduct:  "inner product",
-						faiss.MetricL2:            "l2 distance",
-						faiss.MetricL1:            "manhattan distance",
-						faiss.MetricLinf:          "chebyshev distance",
-						faiss.MetricLp:            "lp distance",
-						faiss.MetricCanberra:      "canberra distance",
-						faiss.MetricBrayCurtis:    "bray curtis distance",
-						faiss.MetricJensenShannon: "jensen shannon distance",
+						faiss.MetricInnerProduct: "inner product",
+						faiss.MetricL2:           "l2 distance",
 					}
 					fmt.Printf("decoded vector section content for field %v:\n", args[1])
 					fmt.Printf("the number of vectors %v\n", numVecs)

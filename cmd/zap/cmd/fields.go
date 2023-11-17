@@ -15,9 +15,9 @@
 package cmd
 
 import (
-	"encoding/binary"
 	"fmt"
 
+	zap "github.com/blevesearch/zapx/v16"
 	"github.com/spf13/cobra"
 )
 
@@ -32,42 +32,23 @@ var fieldsCmd = &cobra.Command{
 		}
 
 		data := segment.Data()
-
-		// iterate through fields index
-		var fieldInv []string
 		pos := segment.FieldsIndexOffset()
 		if pos == 0 {
 			// this is the case only for older file formats
-			return fmt.Errorf("file format not supported?")
+			return fmt.Errorf("file format not supported")
 		}
 
-		// read the number of fields
-		numFields, sz := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
-		pos += uint64(sz)
-		var fieldID uint64
-		var err error
-		var fieldSectionMap []map[uint16]uint64
-
-		for fieldID < numFields {
-			sectionMap := make(map[uint16]uint64)
-			addr := binary.BigEndian.Uint64(data[pos : pos+8])
-
-			fieldInv, err = loadFieldData(data, addr, fieldID, sectionMap, fieldInv)
-			if err != nil {
-				return err
-			}
-			fieldSectionMap = append(fieldSectionMap, sectionMap)
-			fieldID++
-			pos += 8
+		fieldInv, fieldSectionMap, err := getSectionFields(data, pos)
+		if err != nil {
+			return fmt.Errorf("error while getting the sections and field info %v", err)
 		}
-
 		for fieldID, field := range fieldInv {
 			for sectionType, sectionAddr := range fieldSectionMap[fieldID] {
 				if sectionAddr > 0 {
 					switch sectionType {
-					case sectionInvertedTextIndex:
+					case zap.SectionInvertedTextIndex:
 						fmt.Printf("field %d '%s' text index starts at %d (%x)\n", fieldID, field, sectionAddr, sectionAddr)
-					case sectionFaissVectorIndex:
+					case zap.SectionFaissVectorIndex:
 						fmt.Printf("field %d '%s' vector index starts at %d (%x)\n", fieldID, field, sectionAddr, sectionAddr)
 					}
 				}

@@ -29,7 +29,7 @@ import (
 )
 
 func init() {
-	registerSegmentSection(sectionFaissVectorIndex, &faissVectorIndexSection{})
+	registerSegmentSection(SectionFaissVectorIndex, &faissVectorIndexSection{})
 }
 
 type faissVectorIndexSection struct {
@@ -100,7 +100,7 @@ LOOP:
 			// check if the section address is a valid one for "fieldName" in the
 			// segment sb. the local fieldID (fetched by the fieldsMap of the sb)
 			// is to be used while consulting the fieldsSectionsMap
-			pos := int(sb.fieldsSectionsMap[sb.fieldsMap[fieldName]-1][sectionFaissVectorIndex])
+			pos := int(sb.fieldsSectionsMap[sb.fieldsMap[fieldName]-1][SectionFaissVectorIndex])
 			if pos == 0 {
 				continue LOOP
 			}
@@ -512,10 +512,10 @@ func (v *vectorIndexOpaque) allocateSpace() {
 }
 
 func (v *faissVectorIndexSection) getvectorIndexOpaque(opaque map[int]resetable) *vectorIndexOpaque {
-	if _, ok := opaque[sectionFaissVectorIndex]; !ok {
-		opaque[sectionFaissVectorIndex] = v.InitOpaque(nil)
+	if _, ok := opaque[SectionFaissVectorIndex]; !ok {
+		opaque[SectionFaissVectorIndex] = v.InitOpaque(nil)
 	}
-	return opaque[sectionFaissVectorIndex].(*vectorIndexOpaque)
+	return opaque[SectionFaissVectorIndex].(*vectorIndexOpaque)
 }
 
 func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) resetable {

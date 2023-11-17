@@ -309,19 +309,33 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 				vecID, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
 				pos += n
 
-				bitMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+				numDocs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 				pos += n
 
-				roaringBytes := sb.mem[pos : pos+int(bitMapLen)]
-				pos += int(bitMapLen)
-
 				bitMap := roaring.NewBitmap()
-				_, err := bitMap.FromBuffer(roaringBytes)
-				if err != nil {
-					return nil, err
-				}
 
-				vecDocIDMap[vecID] = bitMap.ToArray()
+				// if the number docs is more than one, load the bitmap containing the
+				// docIDs, else use the optimized format where the single docID is
+				// varint encoded.
+				if numDocs > 1 {
+					bitMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+					pos += n
+
+					roaringBytes := sb.mem[pos : pos+int(bitMapLen)]
+					pos += int(bitMapLen)
+
+					_, err := bitMap.FromBuffer(roaringBytes)
+					if err != nil {
+						return nil, err
+					}
+
+					vecDocIDMap[vecID] = bitMap.ToArray()
+					continue
+				}
+				docID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+				pos += n
+
+				vecDocIDMap[vecID] = []uint32{uint32(docID)}
 			}
 
 			vecIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)

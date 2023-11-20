@@ -267,7 +267,6 @@ func (vpl *VecPostingsIterator) BytesWritten() uint64 {
 }
 
 func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, except *roaring.Bitmap) (segment.VecPostingsList, error) {
-
 	// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
 	// 2. both the values can be represented using roaring bitmaps.
 	// 3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.

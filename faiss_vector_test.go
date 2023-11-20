@@ -390,7 +390,13 @@ func TestVectorSegment(t *testing.T) {
 	}
 
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
-		pl, err := vecSeg.SimilarVectors("stubVec", []float32{0.0, 0.0, 0.0}, 3, nil)
+		vecIndex, err := vecSeg.ReadVectorIndex("stubVec")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		pl, err := vecSeg.SearchSimilarVectors(vecIndex, "stubVec",
+			[]float32{0.0, 0.0, 0.0}, 3, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -440,10 +446,17 @@ func TestPersistedVectorSegment(t *testing.T) {
 	}()
 
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
-		pl, err := vecSeg.SimilarVectors("stubVec", []float32{0.0, 0.0, 0.0}, 3, nil)
+		vecIndex, err := vecSeg.ReadVectorIndex("stubVec")
 		if err != nil {
 			t.Fatal(err)
 		}
+
+		pl, err := vecSeg.SearchSimilarVectors(vecIndex, "stubVec",
+			[]float32{0.0, 0.0, 0.0}, 3, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
 		itr := pl.Iterator(nil)
 
 		for {

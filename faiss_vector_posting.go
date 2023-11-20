@@ -24,6 +24,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
+	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
@@ -266,7 +267,44 @@ func (vpl *VecPostingsIterator) BytesWritten() uint64 {
 	return 0
 }
 
-func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, except *roaring.Bitmap) (segment.VecPostingsList, error) {
+func (sb *SegmentBase) ReadVectorIndex(field string) (index.VectorIndex, error) {
+	var vecIndex *faiss.IndexImpl
+
+	fieldIDPlus1 := sb.fieldsMap[field]
+	if fieldIDPlus1 > 0 {
+		vectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][sectionFaissVectorIndex]
+		// check if the field has a vector section in the segment.
+		if vectorSection > 0 {
+			pos := int(vectorSection)
+
+			// loading doc values - adhering to the sections format. never
+			// valid values for vector section
+			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+
+			_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+
+			// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
+			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+			indexBytes := sb.mem[pos : pos+int(indexSize)]
+			pos += int(indexSize)
+
+			var err error
+			vecIndex, err = faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
+			if err != nil {
+				return vecIndex, err
+			}
+		}
+	}
+
+	return vecIndex, nil
+}
+
+func (sb *SegmentBase) SearchSimilarVectors(vecIndex index.VectorIndex, field string, qVector []float32, k int64,
+	except *roaring.Bitmap) (segment.VecPostingsList, error) {
+
 	// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
 	// 2. both the values can be represented using roaring bitmaps.
 	// 3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
@@ -297,7 +335,6 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 			// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
 			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
-			indexBytes := sb.mem[pos : pos+int(indexSize)]
 			pos += int(indexSize)
 
 			// read the number vectors indexed for this field and load the vector to docID mapping.
@@ -336,12 +373,6 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 
 				vecDocIDMap[vecID] = []uint32{uint32(docID)}
 			}
-
-			vecIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
-			if err != nil {
-				return nil, err
-			}
-			defer vecIndex.Close()
 
 			scores, ids, err := vecIndex.Search(qVector, k)
 			if err != nil {

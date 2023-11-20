@@ -271,85 +271,57 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 
 	defer freeReconstructedIndexes(vecIndexes)
 
-	// todo: perhaps making this threshold a config value would be better?
-	if len(vecToDocID) > 10000 {
-		// merging of more complex index types (for eg ivf family) with reconstruction
-		// method.
-		var indexData []float32
-		for i := 0; i < len(vecIndexes); i++ {
-			if isClosed(closeCh) {
-				return fmt.Errorf("merging of vector sections aborted")
-			}
-			// todo: parallelize reconstruction
-			recons, err := vecIndexes[i].ReconstructBatch(int64(len(indexes[i].vecIds)), indexes[i].vecIds)
-			if err != nil {
-				return err
-			}
-			indexData = append(indexData, recons...)
-		}
-
-		// safe to assume that all the indexes are of the same config values, given
-		// that they are extracted from the field mapping info.
-		dims := vecIndexes[0].D()
-		metric := vecIndexes[0].MetricType()
-		finalVecIDs := maps.Keys(vecToDocID)
-
-		// todo: perhaps the index type can be chosen from a config and tuned accordingly.
-		index, err := faiss.IndexFactory(dims, "IVF100,SQ8", metric)
-		if err != nil {
-			return err
-		}
-
-		defer index.Close()
-
-		// the direct map maintained in the IVF index is essential for the
-		// reconstruction of vectors based on vector IDs in the future merges.
-		// the AddWithIDs API also needs a direct map to be set before using.
-		err = index.SetDirectMap(2)
-		if err != nil {
-			return err
-		}
-
-		// train the vector index, essentially performs k-means clustering to partition
-		// the data space of indexData such that during the search time, we probe
-		// only a subset of vectors -> non-exhaustive search. could be a time
-		// consuming step when the indexData is large.
-		err = index.Train(indexData)
-		if err != nil {
-			return err
-		}
-
-		index.AddWithIDs(indexData, finalVecIDs)
-		if err != nil {
-			return err
-		}
-
-		mergedIndexBytes, err := faiss.WriteIndexIntoBuffer(index)
-		if err != nil {
-			return err
-		}
-
-		fieldStart, err := v.flushVectorSection(vecToDocID, mergedIndexBytes, w)
-		if err != nil {
-			return err
-		}
-		v.fieldAddrs[uint16(fieldID)] = fieldStart
-
-		return nil
-	}
-
-	// todo: ivf -> flat index when there were huge number of vector deletes for this field
-	for i := 1; i < len(vecIndexes); i++ {
+	// merging of more complex index types (for eg ivf family) with reconstruction
+	// method.
+	var indexData []float32
+	for i := 0; i < len(vecIndexes); i++ {
 		if isClosed(closeCh) {
 			return fmt.Errorf("merging of vector sections aborted")
 		}
-		err := vecIndexes[0].MergeFrom(vecIndexes[i], 0)
+		// todo: parallelize reconstruction
+		recons, err := vecIndexes[i].ReconstructBatch(int64(len(indexes[i].vecIds)), indexes[i].vecIds)
 		if err != nil {
 			return err
 		}
+		indexData = append(indexData, recons...)
 	}
 
-	mergedIndexBytes, err := faiss.WriteIndexIntoBuffer(vecIndexes[0])
+	// safe to assume that all the indexes are of the same config values, given
+	// that they are extracted from the field mapping info.
+	dims := vecIndexes[0].D()
+	metric := vecIndexes[0].MetricType()
+	finalVecIDs := maps.Keys(vecToDocID)
+
+	indexType := getIndexType(len(vecToDocID))
+	index, err := faiss.IndexFactory(dims, indexType, metric)
+	if err != nil {
+		return err
+	}
+	defer index.Close()
+
+	// the direct map maintained in the IVF index is essential for the
+	// reconstruction of vectors based on vector IDs in the future merges.
+	// the AddWithIDs API also needs a direct map to be set before using.
+	err = index.SetDirectMap(2)
+	if err != nil {
+		return err
+	}
+
+	// train the vector index, essentially performs k-means clustering to partition
+	// the data space of indexData such that during the search time, we probe
+	// only a subset of vectors -> non-exhaustive search. could be a time
+	// consuming step when the indexData is large.
+	err = index.Train(indexData)
+	if err != nil {
+		return err
+	}
+
+	err = index.AddWithIDs(indexData, finalVecIDs)
+	if err != nil {
+		return err
+	}
+
+	mergedIndexBytes, err := faiss.WriteIndexIntoBuffer(index)
 	if err != nil {
 		return err
 	}
@@ -359,6 +331,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		return err
 	}
 	v.fieldAddrs[uint16(fieldID)] = fieldStart
+
 	return nil
 }
 
@@ -377,6 +350,17 @@ func (v *vectorIndexOpaque) grabBuf(size int) []byte {
 		v.tmp0 = buf
 	}
 	return buf[0:size]
+}
+
+func getIndexType(nVecs int) string {
+	switch {
+	case nVecs >= 10000:
+		return "IVF100,SQ8"
+	case nVecs >= 10:
+		return "IVF10,Flat"
+	default:
+		return "IVF1,Flat"
+	}
 }
 
 func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint64, err error) {
@@ -398,22 +382,28 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			metric = faiss.MetricInnerProduct
 		}
 
-		// create an index, its always a flat for now, because each batch size
-		// won't have too many vectors (in order for >100K). todo: will need to revisit
-		// this logic - creating based on configured batch size in scorch.
-		index, err := faiss.IndexFactory(int(content.dim), "IDMap2,Flat", metric)
+		// create an index - currently its a IVF with 1 cluster and no compression
+		index, err := faiss.IndexFactory(int(content.dim), "IVF1,Flat", metric)
 		if err != nil {
 			return 0, err
 		}
 
 		defer index.Close()
 
+		// the direct map maintained in the IVF index is essential for the
+		// reconstruction of vectors based on vector IDs in the future merges.
+		// the AddWithIDs API also needs a direct map to be set before using.
+		err = index.SetDirectMap(2)
+		if err != nil {
+			return 0, err
+		}
+
 		err = index.Train(vecs)
 		if err != nil {
 			return 0, err
 		}
 
-		index.AddWithIDs(vecs, ids)
+		err = index.AddWithIDs(vecs, ids)
 		if err != nil {
 			return 0, err
 		}
@@ -485,7 +475,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			// an optimization to avoid using the bitmaps if there is only 1 doc
 			// with the vecID.
 			if numDocs == 1 {
-				n = binary.PutUvarint(tempBuf, numDocs)
+				n = binary.PutUvarint(tempBuf, uint64(docIDs.Minimum()))
 				_, err = w.Write(tempBuf[:n])
 				if err != nil {
 					return 0, err

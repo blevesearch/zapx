@@ -292,14 +292,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	metric := vecIndexes[0].MetricType()
 	finalVecIDs := maps.Keys(vecToDocID)
 
-	var indexType string
-	// todo: perhaps the index type can be chosen from a config and tuned accordingly.
-	switch {
-	case len(vecToDocID) > 10000:
-		indexType = "IVF100,SQ8"
-	default:
-		indexType = "IVF10,Flat"
-	}
+	indexType := getIndexType(len(vecToDocID))
 	index, err := faiss.IndexFactory(dims, indexType, metric)
 	if err != nil {
 		return err
@@ -323,7 +316,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		return err
 	}
 
-	index.AddWithIDs(indexData, finalVecIDs)
+	err = index.AddWithIDs(indexData, finalVecIDs)
 	if err != nil {
 		return err
 	}
@@ -359,6 +352,17 @@ func (v *vectorIndexOpaque) grabBuf(size int) []byte {
 	return buf[0:size]
 }
 
+func getIndexType(nVecs int) string {
+	switch {
+	case nVecs >= 10000:
+		return "IVF100,SQ8"
+	case nVecs >= 10:
+		return "IVF10,Flat"
+	default:
+		return "IVF1,Flat"
+	}
+}
+
 func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint64, err error) {
 	// for every fieldID, contents to store over here are:
 	//    1. the serialized representation of the dense vector index.
@@ -378,8 +382,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			metric = faiss.MetricInnerProduct
 		}
 
-		// create an index - currently its a IVF with 2 clusters and no compression
-		index, err := faiss.IndexFactory(int(content.dim), "IVF2,Flat", metric)
+		// create an index - currently its a IVF with 1 cluster and no compression
+		index, err := faiss.IndexFactory(int(content.dim), "IVF1,Flat", metric)
 		if err != nil {
 			return 0, err
 		}
@@ -399,7 +403,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			return 0, err
 		}
 
-		index.AddWithIDs(vecs, ids)
+		err = index.AddWithIDs(vecs, ids)
 		if err != nil {
 			return 0, err
 		}

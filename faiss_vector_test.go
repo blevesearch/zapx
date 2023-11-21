@@ -360,7 +360,7 @@ func TestVectorSegment(t *testing.T) {
 	}
 
 	fieldsSectionsMap := vecSegBase.fieldsSectionsMap
-	stubVecFieldStartAddr := fieldsSectionsMap[vecSegBase.fieldsMap["stubVec"]-1][sectionFaissVectorIndex]
+	stubVecFieldStartAddr := fieldsSectionsMap[vecSegBase.fieldsMap["stubVec"]-1][SectionFaissVectorIndex]
 	docValueStart, docValueEnd, indexBytesLen, _,
 		numVecs, _ := getSectionContentOffsets(vecSegBase, stubVecFieldStartAddr)
 

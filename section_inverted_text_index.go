@@ -27,7 +27,7 @@ import (
 )
 
 func init() {
-	registerSegmentSection(sectionInvertedTextIndex, &invertedTextIndexSection{})
+	registerSegmentSection(SectionInvertedTextIndex, &invertedTextIndexSection{})
 }
 
 type invertedTextIndexSection struct {
@@ -282,7 +282,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			}
 
 			fieldIDPlus1 := uint16(segment.fieldsMap[fieldName])
-			if dvIter, exists := segment.fieldDvReaders[sectionInvertedTextIndex][fieldIDPlus1-1]; exists &&
+			if dvIter, exists := segment.fieldDvReaders[SectionInvertedTextIndex][fieldIDPlus1-1]; exists &&
 				dvIter != nil {
 				fdvReadersAvailable = true
 				dvIterClone = dvIter.cloneInto(dvIterClone)
@@ -820,10 +820,10 @@ func (i *invertedIndexOpaque) allocateSpace() {
 }
 
 func (i *invertedTextIndexSection) getInvertedIndexOpaque(opaque map[int]resetable) *invertedIndexOpaque {
-	if _, ok := opaque[sectionInvertedTextIndex]; !ok {
-		opaque[sectionInvertedTextIndex] = i.InitOpaque(nil)
+	if _, ok := opaque[SectionInvertedTextIndex]; !ok {
+		opaque[SectionInvertedTextIndex] = i.InitOpaque(nil)
 	}
-	return opaque[sectionInvertedTextIndex].(*invertedIndexOpaque)
+	return opaque[SectionInvertedTextIndex].(*invertedIndexOpaque)
 }
 
 func (i *invertedIndexOpaque) getOrDefineField(fieldName string) int {

@@ -15,7 +15,6 @@
 package cmd
 
 import (
-	"encoding/binary"
 	"fmt"
 
 	zap "github.com/blevesearch/zapx/v16"
@@ -28,33 +27,32 @@ var fieldsCmd = &cobra.Command{
 	Short: "fields prints the fields in the specified file",
 	Long:  `The fields command lets you print the fields in the specified file.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) < 1 {
+			return fmt.Errorf("must specify index file path")
+		}
 
 		data := segment.Data()
+		pos := segment.FieldsIndexOffset()
+		if pos == 0 {
+			// this is the case only for older file formats
+			return fmt.Errorf("file format not supported")
+		}
 
-		crcOffset := len(data) - 4
-		verOffset := crcOffset - 4
-		chunkOffset := verOffset - 4
-		fieldsOffset := chunkOffset - 16
-		fieldsIndexOffset := binary.BigEndian.Uint64(data[fieldsOffset : fieldsOffset+8])
-		fieldsIndexEnd := uint64(len(data) - zap.FooterSize)
-
-		// iterate through fields index
-		var fieldID uint64
-		for fieldsIndexOffset+(8*fieldID) < fieldsIndexEnd {
-			addr := binary.BigEndian.Uint64(data[fieldsIndexOffset+(8*fieldID) : fieldsIndexOffset+(8*fieldID)+8])
-			var n uint64
-			dictLoc, read := binary.Uvarint(data[addr+n : fieldsIndexEnd])
-			n += uint64(read)
-
-			var nameLen uint64
-			nameLen, read = binary.Uvarint(data[addr+n : fieldsIndexEnd])
-			n += uint64(read)
-
-			name := string(data[addr+n : addr+n+nameLen])
-
-			fmt.Printf("field %d '%s' starts at %d (%x)\n", fieldID, name, dictLoc, dictLoc)
-
-			fieldID++
+		fieldInv, fieldSectionMap, err := getSectionFields(data, pos)
+		if err != nil {
+			return fmt.Errorf("error while getting the sections and field info %v", err)
+		}
+		for fieldID, field := range fieldInv {
+			for sectionType, sectionAddr := range fieldSectionMap[fieldID] {
+				if sectionAddr > 0 {
+					switch sectionType {
+					case zap.SectionInvertedTextIndex:
+						fmt.Printf("field %d '%s' text index starts at %d (%x)\n", fieldID, field, sectionAddr, sectionAddr)
+					case zap.SectionFaissVectorIndex:
+						fmt.Printf("field %d '%s' vector index starts at %d (%x)\n", fieldID, field, sectionAddr, sectionAddr)
+					}
+				}
+			}
 		}
 
 		return nil

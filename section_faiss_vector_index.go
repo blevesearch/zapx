@@ -271,61 +271,80 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 
 	defer freeReconstructedIndexes(vecIndexes)
 
-	// merging of more complex index types (for eg ivf family) with reconstruction
-	// method.
-	var indexData []float32
-	for i := 0; i < len(vecIndexes); i++ {
-		if isClosed(closeCh) {
-			return fmt.Errorf("merging of vector sections aborted")
+	var mergedIndexBytes []byte
+	indexType, isIVF := getIndexType(len(vecToDocID))
+	if isIVF {
+		// merging of more complex index types (for eg ivf family) with reconstruction
+		// method.
+		var indexData []float32
+		for i := 0; i < len(vecIndexes); i++ {
+			if isClosed(closeCh) {
+				return fmt.Errorf("merging of vector sections aborted")
+			}
+			// todo: parallelize reconstruction
+			recons, err := vecIndexes[i].ReconstructBatch(int64(len(indexes[i].vecIds)), indexes[i].vecIds)
+			if err != nil {
+				return err
+			}
+			indexData = append(indexData, recons...)
 		}
-		// todo: parallelize reconstruction
-		recons, err := vecIndexes[i].ReconstructBatch(int64(len(indexes[i].vecIds)), indexes[i].vecIds)
+
+		// safe to assume that all the indexes are of the same config values, given
+		// that they are extracted from the field mapping info.
+		dims := vecIndexes[0].D()
+		metric := vecIndexes[0].MetricType()
+		finalVecIDs := maps.Keys(vecToDocID)
+
+		index, err := faiss.IndexFactory(dims, indexType, metric)
 		if err != nil {
 			return err
 		}
-		indexData = append(indexData, recons...)
+		defer index.Close()
+
+		// the direct map maintained in the IVF index is essential for the
+		// reconstruction of vectors based on vector IDs in the future merges.
+		// the AddWithIDs API also needs a direct map to be set before using.
+		err = index.SetDirectMap(2)
+		if err != nil {
+			return err
+		}
+
+		// train the vector index, essentially performs k-means clustering to partition
+		// the data space of indexData such that during the search time, we probe
+		// only a subset of vectors -> non-exhaustive search. could be a time
+		// consuming step when the indexData is large.
+		err = index.Train(indexData)
+		if err != nil {
+			return err
+		}
+
+		err = index.AddWithIDs(indexData, finalVecIDs)
+		if err != nil {
+			return err
+		}
+
+		mergedIndexBytes, err = faiss.WriteIndexIntoBuffer(index)
+		if err != nil {
+			return err
+		}
+	} else {
+		// todo: ivf -> flat index when there were huge number of vector deletes for this field
+		var err error
+		for i := 1; i < len(vecIndexes); i++ {
+			if isClosed(closeCh) {
+				return fmt.Errorf("merging of vector sections aborted")
+			}
+			err := vecIndexes[0].MergeFrom(vecIndexes[i], 0)
+			if err != nil {
+				return err
+			}
+		}
+
+		mergedIndexBytes, err = faiss.WriteIndexIntoBuffer(vecIndexes[0])
+		if err != nil {
+			return err
+		}
 	}
-
-	// safe to assume that all the indexes are of the same config values, given
-	// that they are extracted from the field mapping info.
-	dims := vecIndexes[0].D()
-	metric := vecIndexes[0].MetricType()
-	finalVecIDs := maps.Keys(vecToDocID)
-
-	indexType := getIndexType(len(vecToDocID))
-	index, err := faiss.IndexFactory(dims, indexType, metric)
-	if err != nil {
-		return err
-	}
-	defer index.Close()
-
-	// the direct map maintained in the IVF index is essential for the
-	// reconstruction of vectors based on vector IDs in the future merges.
-	// the AddWithIDs API also needs a direct map to be set before using.
-	err = index.SetDirectMap(2)
-	if err != nil {
-		return err
-	}
-
-	// train the vector index, essentially performs k-means clustering to partition
-	// the data space of indexData such that during the search time, we probe
-	// only a subset of vectors -> non-exhaustive search. could be a time
-	// consuming step when the indexData is large.
-	err = index.Train(indexData)
-	if err != nil {
-		return err
-	}
-
-	err = index.AddWithIDs(indexData, finalVecIDs)
-	if err != nil {
-		return err
-	}
-
-	mergedIndexBytes, err := faiss.WriteIndexIntoBuffer(index)
-	if err != nil {
-		return err
-	}
-
 	fieldStart, err := v.flushVectorSection(vecToDocID, mergedIndexBytes, w)
 	if err != nil {
 		return err
@@ -352,14 +371,15 @@ func (v *vectorIndexOpaque) grabBuf(size int) []byte {
 	return buf[0:size]
 }
 
-func getIndexType(nVecs int) string {
+func getIndexType(nVecs int) (string, bool) {
 	switch {
-	case nVecs >= 10000:
-		return "IVF100,SQ8"
-	case nVecs >= 10:
-		return "IVF10,Flat"
+	case nVecs > 10000:
+		return "IVF100,SQ8", true
+	// default minimum number of training points per cluster is 39
+	case nVecs >= 390:
+		return "IVF10,Flat", true
 	default:
-		return "IVF1,Flat"
+		return "IDMap2,Flat", false
 	}
 }
 
@@ -382,20 +402,20 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			metric = faiss.MetricInnerProduct
 		}
 
-		// create an index - currently its a IVF with 1 cluster and no compression
-		index, err := faiss.IndexFactory(int(content.dim), "IVF1,Flat", metric)
+		indexType, isIVF := getIndexType(len(ids))
+		// create an index - currently keeping it as flat for faster data ingest
+		index, err := faiss.IndexFactory(int(content.dim), indexType, metric)
 		if err != nil {
 			return 0, err
 		}
 
 		defer index.Close()
 
-		// the direct map maintained in the IVF index is essential for the
-		// reconstruction of vectors based on vector IDs in the future merges.
-		// the AddWithIDs API also needs a direct map to be set before using.
-		err = index.SetDirectMap(2)
-		if err != nil {
-			return 0, err
+		if isIVF {
+			err = index.SetDirectMap(2)
+			if err != nil {
+				return 0, err
+			}
 		}
 
 		err = index.Train(vecs)

@@ -402,13 +402,21 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			metric = faiss.MetricInnerProduct
 		}
 
+		indexType, isIVF := getIndexType(len(ids))
 		// create an index - currently keeping it as flat for faster data ingest
-		index, err := faiss.IndexFactory(int(content.dim), "IDMap2,Flat", metric)
+		index, err := faiss.IndexFactory(int(content.dim), indexType, metric)
 		if err != nil {
 			return 0, err
 		}
 
 		defer index.Close()
+
+		if isIVF {
+			err = index.SetDirectMap(2)
+			if err != nil {
+				return 0, err
+			}
+		}
 
 		err = index.Train(vecs)
 		if err != nil {

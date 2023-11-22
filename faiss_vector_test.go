@@ -317,11 +317,10 @@ func serializeVecs(dataset [][]float32) []float32 {
 func letsCreateVectorIndexForTesting(dataset [][]float32, dims int, similarity string) (*faiss.IndexImpl, error) {
 	vecs := serializeVecs(dataset)
 
-	idx, err := faiss.IndexFactory(dims, "IVF1,Flat", faiss.MetricL2)
+	idx, err := faiss.IndexFactory(dims, "IDMap2,Flat", faiss.MetricL2)
 	if err != nil {
 		return nil, err
 	}
-	idx.SetDirectMap(2)
 
 	idx.Train(vecs)
 

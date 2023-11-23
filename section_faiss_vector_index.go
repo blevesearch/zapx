@@ -62,6 +62,7 @@ type vecIndexMeta struct {
 	startOffset int
 	indexSize   uint64
 	vecIds      []int64
+	deleted     []int64
 }
 
 func remapDocIDs(oldIDs *roaring.Bitmap, newIDs []uint64) *roaring.Bitmap {
@@ -153,18 +154,16 @@ LOOP:
 				}
 
 				// remap the docIDs from the old segment to the new document nos.
-				// provided.
+				// provided. furthermore, this function also drops the invalid doc nums
+				// of that segment in the resulting bitmap
 				bitMap = remapDocIDs(bitMap, newDocNumsIn[segI])
 				if vecToDocID[vecID] == nil {
-					// if there are some tombstone entries in the docIDs, marked
-					// in the drops[ith-segment] bitmap, don't include them in the
-					// final bitmap.
-					if drops[segI] != nil && !drops[segI].IsEmpty() {
-						vecToDocID[vecID] = roaring.AndNot(bitMap, drops[segI])
-					} else {
+					if bitMap.GetCardinality() > 0 {
 						vecToDocID[vecID] = bitMap
+						indexes[len(indexes)-1].vecIds = append(indexes[len(indexes)-1].vecIds, vecID)
+					} else {
+						indexes[len(indexes)-1].deleted = append(indexes[len(indexes)-1].deleted, vecID)
 					}
-					indexes[len(indexes)-1].vecIds = append(indexes[len(indexes)-1].vecIds, vecID)
 				} else {
 					vecToDocID[vecID].Or(bitMap)
 				}
@@ -252,6 +251,19 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 	return fieldStart, nil
 }
 
+func removeInvalidVecs(index *faiss.IndexImpl, ids []int64) error {
+	sel, err := faiss.NewIDSelectorBatch(ids)
+	if err != nil {
+		return err
+	}
+
+	_, err = index.RemoveIDs(sel)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // todo: naive implementation. need to keep in mind the perf implications and improve on this.
 // perhaps, parallelized merging can help speed things up over here.
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*SegmentBase,
@@ -275,7 +287,9 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	indexType, isIVF := getIndexType(len(vecToDocID))
 	if isIVF {
 		// merging of more complex index types (for eg ivf family) with reconstruction
-		// method.
+		// method. the indexes[i].vecIds is such that it has only the valid vecs
+		// of this vector index present in it, so we'd be reconstructed only the
+		// valid ones.
 		var indexData []float32
 		for i := 0; i < len(vecIndexes); i++ {
 			if isClosed(closeCh) {
@@ -329,12 +343,26 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		}
 	} else {
 		// todo: ivf -> flat index when there were huge number of vector deletes for this field
+		// first flush out the invalid vecs in the first index if any, before the
+		// merge
 		var err error
+		if len(indexes[0].deleted) > 0 {
+			err = removeInvalidVecs(vecIndexes[0], indexes[0].deleted)
+			if err != nil {
+				return err
+			}
+		}
 		for i := 1; i < len(vecIndexes); i++ {
 			if isClosed(closeCh) {
 				return fmt.Errorf("merging of vector sections aborted")
 			}
-			err := vecIndexes[0].MergeFrom(vecIndexes[i], 0)
+			if len(indexes[i].deleted) > 0 {
+				err = removeInvalidVecs(vecIndexes[i], indexes[i].deleted)
+				if err != nil {
+					return err
+				}
+			}
+			err = vecIndexes[0].MergeFrom(vecIndexes[i], 0)
 			if err != nil {
 				return err
 			}

@@ -17,7 +17,6 @@ package zap
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"math"
 	"sort"
 	"sync"
@@ -171,11 +170,7 @@ type interimLoc struct {
 
 func (s *interim) convert() (uint64, []uint64, uint64, error) {
 	s.FieldsMap = map[string]uint16{}
-	fmt.Println("before INIT")
 
-	for _, op := range s.opaque {
-		op.CustomPrint()
-	}
 	args := map[string]interface{}{
 		"results":   s.results,
 		"chunkMode": s.chunkMode,
@@ -208,11 +203,6 @@ func (s *interim) convert() (uint64, []uint64, uint64, error) {
 
 	for fieldID, fieldName := range s.FieldsInv {
 		s.FieldsMap[fieldName] = uint16(fieldID + 1)
-	}
-
-	fmt.Println("asfter INIT")
-	for _, op := range s.opaque {
-		op.CustomPrint()
 	}
 
 	s.processDocuments()

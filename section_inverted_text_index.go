@@ -17,7 +17,6 @@ package zap
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"math"
 	"sort"
 
@@ -976,9 +975,4 @@ func (i *invertedIndexOpaque) Set(key string, val interface{}) {
 	case "numDocs":
 		i.numDocs = val.(uint64)
 	}
-}
-
-func (i *invertedIndexOpaque) CustomPrint() {
-	fmt.Println("the inverted index opaque")
-	fmt.Println("the capacity of locsbacking and locs", cap(i.locsBacking), cap(i.Locs))
 }

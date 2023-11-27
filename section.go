@@ -51,7 +51,6 @@ type section interface {
 type resetable interface {
 	Reset() error
 	Set(key string, value interface{})
-	CustomPrint()
 }
 
 // -----------------------------------------------------------------------------

@@ -327,7 +327,6 @@ func (s *SegmentBase) loadFieldsNew() error {
 
 	for fieldID < numFields {
 		addr := binary.BigEndian.Uint64(s.mem[pos : pos+8])
-
 		fieldSectionMap := make(map[uint16]uint64)
 
 		err := s.loadFieldNew(uint16(fieldID), addr, fieldSectionMap)
@@ -336,7 +335,7 @@ func (s *SegmentBase) loadFieldsNew() error {
 		}
 
 		s.fieldsSectionsMap = append(s.fieldsSectionsMap, fieldSectionMap)
-
+		// fmt.Println("the loaded field is", s.fieldsInv[fieldID])
 		fieldID++
 		pos += 8
 	}
@@ -346,6 +345,10 @@ func (s *SegmentBase) loadFieldsNew() error {
 
 func (s *SegmentBase) loadFieldNew(fieldID uint16, addr uint64,
 	fieldSectionMap map[uint16]uint64) error {
+	if addr == 0 {
+		// there is no indexing structure present for this field/section
+		return nil
+	}
 	pos := addr
 	fieldNameLen, sz := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(sz)

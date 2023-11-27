@@ -641,13 +641,19 @@ type vecInfo struct {
 	docIDs *roaring.Bitmap
 }
 
-// todo: document the data structures involved in vector section.
 type vectorIndexOpaque struct {
 	init bool
 
+	checkPoint int
+
+	// maps the field to the address of its vector section
 	fieldAddrs map[uint16]int
 
-	vecIDMap    map[int64]vecInfo
+	// maps the vecID to basic info involved around it such as
+	// the docIDs its present in and the vector itself
+	vecIDMap map[int64]vecInfo
+	// maps the field to information necessary for its vector
+	// index to be build.
 	vecFieldMap map[uint16]indexContent
 
 	tmp0 []byte
@@ -655,9 +661,20 @@ type vectorIndexOpaque struct {
 
 func (vo *vectorIndexOpaque) Reset() (err error) {
 	// cleanup stuff over here
+	vo.checkPoint = len(vo.vecIDMap)
+	vo.fieldAddrs = nil
+	vo.vecFieldMap = nil
+	vo.vecIDMap = nil
+	vo.tmp0 = vo.tmp0[:0]
 
 	return nil
 }
 func (v *vectorIndexOpaque) Set(key string, val interface{}) {
 
+}
+
+func (v *vectorIndexOpaque) CustomPrint() {
+	fmt.Println("vector index opaque")
+	fmt.Println("the checkpoint value is", v.checkPoint)
+	fmt.Println("the capacity of tmp0 is", cap(v.tmp0))
 }

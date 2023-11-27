@@ -17,6 +17,7 @@ package zap
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"math"
 	"sort"
 
@@ -733,12 +734,10 @@ func (i *invertedIndexOpaque) allocateSpace() {
 		}
 	}
 
-	if i.IncludeDocValues == nil {
-		if cap(i.IncludeDocValues) >= len(i.FieldsInv) {
-			i.IncludeDocValues = i.IncludeDocValues[:len(i.FieldsInv)]
-		} else {
-			i.IncludeDocValues = make([]bool, len(i.FieldsInv))
-		}
+	if cap(i.IncludeDocValues) >= len(i.FieldsInv) {
+		i.IncludeDocValues = i.IncludeDocValues[:len(i.FieldsInv)]
+	} else {
+		i.IncludeDocValues = make([]bool, len(i.FieldsInv))
 	}
 
 	for _, result := range i.results {
@@ -977,4 +976,9 @@ func (i *invertedIndexOpaque) Set(key string, val interface{}) {
 	case "numDocs":
 		i.numDocs = val.(uint64)
 	}
+}
+
+func (i *invertedIndexOpaque) CustomPrint() {
+	fmt.Println("the inverted index opaque")
+	fmt.Println("the capacity of locsbacking and locs", cap(i.locsBacking), cap(i.Locs))
 }

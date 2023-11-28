@@ -158,6 +158,10 @@ LOOP:
 				// of that segment in the resulting bitmap
 				bitMap = remapDocIDs(bitMap, newDocNumsIn[segI])
 				if vecToDocID[vecID] == nil {
+					// if the remapped bitmap has valid docs as entries, track it
+					// as part of vecs to be reconstructed (for larger indexes).
+					// otherwise, since there are no docs present for this vecID,
+					// delete it from the specific vector index later on.
 					if bitMap.GetCardinality() > 0 {
 						vecToDocID[vecID] = bitMap
 						indexes[len(indexes)-1].vecIds = append(indexes[len(indexes)-1].vecIds, vecID)
@@ -251,7 +255,7 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 	return fieldStart, nil
 }
 
-func removeInvalidVecs(index *faiss.IndexImpl, ids []int64) error {
+func removeDeletedVectors(index *faiss.IndexImpl, ids []int64) error {
 	sel, err := faiss.NewIDSelectorBatch(ids)
 	if err != nil {
 		return err
@@ -347,7 +351,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		// merge
 		var err error
 		if len(indexes[0].deleted) > 0 {
-			err = removeInvalidVecs(vecIndexes[0], indexes[0].deleted)
+			err = removeDeletedVectors(vecIndexes[0], indexes[0].deleted)
 			if err != nil {
 				return err
 			}
@@ -357,7 +361,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 				return fmt.Errorf("merging of vector sections aborted")
 			}
 			if len(indexes[i].deleted) > 0 {
-				err = removeInvalidVecs(vecIndexes[i], indexes[i].deleted)
+				err = removeDeletedVectors(vecIndexes[i], indexes[i].deleted)
 				if err != nil {
 					return err
 				}

@@ -267,7 +267,7 @@ func (vpl *VecPostingsIterator) BytesWritten() uint64 {
 	return 0
 }
 
-func (sb *SegmentBase) ReadVectorIndex(field string) (index.VectorIndex, error) {
+func (sb *SegmentBase) GetVectorIndex(field string) (index.VectorIndex, error) {
 	var vecIndex *faiss.IndexImpl
 
 	fieldIDPlus1 := sb.fieldsMap[field]
@@ -304,6 +304,14 @@ func (sb *SegmentBase) ReadVectorIndex(field string) (index.VectorIndex, error) 
 
 func (sb *SegmentBase) SearchSimilarVectors(vecIndex index.VectorIndex, field string, qVector []float32, k int64,
 	except *roaring.Bitmap) (segment.VecPostingsList, error) {
+
+	if vecIndex == nil {
+		var err error
+		vecIndex, err = sb.GetVectorIndex(field)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
 	// 2. both the values can be represented using roaring bitmaps.

@@ -390,7 +390,7 @@ func TestVectorSegment(t *testing.T) {
 	}
 
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
-		vecIndex, err := vecSeg.ReadVectorIndex("stubVec")
+		vecIndex, err := vecSeg.GetVectorIndex("stubVec")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -446,7 +446,7 @@ func TestPersistedVectorSegment(t *testing.T) {
 	}()
 
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
-		vecIndex, err := vecSeg.ReadVectorIndex("stubVec")
+		vecIndex, err := vecSeg.GetVectorIndex("stubVec")
 		if err != nil {
 			t.Fatal(err)
 		}

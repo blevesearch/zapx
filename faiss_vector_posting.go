@@ -24,7 +24,6 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
-	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
@@ -267,7 +266,7 @@ func (vpl *VecPostingsIterator) BytesWritten() uint64 {
 	return 0
 }
 
-func (sb *SegmentBase) GetVectorIndex(field string) (index.VectorIndex, error) {
+func (sb *SegmentBase) GetVectorIndex(field string) (segment.VectorIndex, error) {
 	var vecIndex *faiss.IndexImpl
 
 	fieldIDPlus1 := sb.fieldsMap[field]
@@ -275,15 +274,7 @@ func (sb *SegmentBase) GetVectorIndex(field string) (index.VectorIndex, error) {
 		vectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionFaissVectorIndex]
 		// check if the field has a vector section in the segment.
 		if vectorSection > 0 {
-			pos := int(vectorSection)
-
-			// loading doc values - adhering to the sections format. never
-			// valid values for vector section
-			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-			pos += n
-
-			_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-			pos += n
+			pos := sb.navigatingVectorDocValues(vectorSection)
 
 			// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
 			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
@@ -302,7 +293,23 @@ func (sb *SegmentBase) GetVectorIndex(field string) (index.VectorIndex, error) {
 	return vecIndex, nil
 }
 
-func (sb *SegmentBase) SearchSimilarVectors(vecIndex index.VectorIndex, field string, qVector []float32, k int64,
+// Returns position after skipping through bytes for doc values.
+func (sb *SegmentBase) navigatingVectorDocValues(vectorSection uint64) int {
+	pos := int(vectorSection)
+
+	// loading doc values - adhering to the sections format. never
+	// valid values for vector section
+	_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
+	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
+	return pos
+}
+
+func (sb *SegmentBase) SearchSimilarVectors(vecIndex segment.VectorIndex, field string,
+	qVector []float32, k int64,
 	except *roaring.Bitmap) (segment.VecPostingsList, error) {
 
 	if vecIndex == nil {
@@ -330,15 +337,7 @@ func (sb *SegmentBase) SearchSimilarVectors(vecIndex index.VectorIndex, field st
 		vectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionFaissVectorIndex]
 		// check if the field has a vector section in the segment.
 		if vectorSection > 0 {
-			pos := int(vectorSection)
-
-			// loading doc values - adhering to the sections format. never
-			// valid values for vector section
-			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-			pos += n
-
-			_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-			pos += n
+			pos := sb.navigatingVectorDocValues(vectorSection)
 
 			// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
 			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])

@@ -216,7 +216,7 @@ func (i *VecPostingsIterator) nextCodeAtOrAfter(atOrAfter uint64) (uint64, bool,
 // a transformation function which stores both the score and the docNum as a single
 // entry which is a uint64 number.
 func getVectorCode(docNum uint32, score float32) uint64 {
-	return uint64(docNum)<<31 | uint64(math.Float32bits(score))
+	return uint64(docNum)<<32 | uint64(math.Float32bits(score))
 }
 
 // Next returns the next posting on the vector postings list, or nil at the end
@@ -234,7 +234,7 @@ func (i *VecPostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.VecPostin
 	i.next = VecPosting{} // clear the struct
 	rv := &i.next
 	rv.score = math.Float32frombits(uint32(code & maskLow32Bits))
-	rv.docNum = code >> 31
+	rv.docNum = code >> 32
 
 	return rv, nil
 }
@@ -352,6 +352,9 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 			// docID and the score to the newly created vecPostingsList
 			for i := 0; i < len(ids); i++ {
 				vecID := ids[i]
+				if vecID == -1 {
+					continue // ignore the invalid entries of ids
+				}
 				docIDs := vecDocIDMap[vecID]
 				var code uint64
 

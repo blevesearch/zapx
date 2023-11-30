@@ -549,7 +549,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 
 func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, docNum uint32) {
 	if !vo.init {
-		vo.allocateSpace()
+		vo.realloc()
 		vo.init = true
 	}
 	if fieldID == math.MaxUint16 {
@@ -655,7 +655,7 @@ type vectorIndexOpaque struct {
 	tmp0 []byte
 }
 
-func (v *vectorIndexOpaque) allocateSpace() {
+func (v *vectorIndexOpaque) realloc() {
 	// when an opaque instance is reused, the two maps are pre-allocated
 	// with space before they were reset. this can be useful in continuous
 	// mutation scenarios, where the batch sizes are more or less same.

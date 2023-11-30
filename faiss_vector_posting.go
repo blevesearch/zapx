@@ -266,35 +266,71 @@ func (vpl *VecPostingsIterator) BytesWritten() uint64 {
 	return 0
 }
 
-func (sb *SegmentBase) GetVectorIndex(field string) (segment.VectorIndex, error) {
+func (sb *SegmentBase) InterpretVectorIndex(field string) (
+	segment.SearchVectorIndex, segment.CloseVectorIndex, error) {
+	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
+	vecDocIDMap := make(map[int64][]uint32)
 
-	fieldIDPlus1 := sb.fieldsMap[field]
-	if fieldIDPlus1 > 0 {
-		vectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionFaissVectorIndex]
-		// check if the field has a vector section in the segment.
-		if vectorSection > 0 {
-			pos := sb.navigatingVectorDocValues(vectorSection)
+	searchVectorIndex := func(field string, qVector []float32,
+		k int64, except *roaring.Bitmap) (segment.VecPostingsList, error) {
+		// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
+		// 2. both the values can be represented using roaring bitmaps.
+		// 3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
+		// 4. VecPostings would just have the docNum and the score. Every call of Next()
+		//    and Advance just returns the next VecPostings. The caller would do a vp.Number()
+		//    and the Score() to get the corresponding values
+		rv := &VecPostingsList{
+			except:   nil, // todo: handle the except bitmap within postings iterator.
+			postings: roaring64.New(),
+		}
 
-			// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
-			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-			pos += n
-			indexBytes := sb.mem[pos : pos+int(indexSize)]
-			pos += int(indexSize)
+		if vecIndex == nil {
+			return rv, nil
+		}
 
-			var err error
-			vecIndex, err = faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
-			if err != nil {
-				return vecIndex, err
+		scores, ids, err := vecIndex.Search(qVector, k)
+		if err != nil {
+			return nil, err
+		}
+		// for every similar vector returned by the Search() API, add the corresponding
+		// docID and the score to the newly created vecPostingsList
+		for i := 0; i < len(ids); i++ {
+			vecID := ids[i]
+			docIDs := vecDocIDMap[vecID]
+			var code uint64
+			for _, docID := range docIDs {
+				if except != nil && except.Contains(docID) {
+					// ignore the deleted doc
+					continue
+				}
+				code = getVectorCode(docID, scores[i])
+				rv.postings.Add(uint64(code))
 			}
+		}
+
+		return rv, nil
+	}
+
+	closeVectorIndex := func() {
+		if vecIndex != nil {
+			vecIndex.Close()
 		}
 	}
 
-	return vecIndex, nil
-}
+	var err error
 
-// Returns position after skipping through bytes for doc values.
-func (sb *SegmentBase) navigatingVectorDocValues(vectorSection uint64) int {
+	fieldIDPlus1 := sb.fieldsMap[field]
+	if fieldIDPlus1 <= 0 {
+		return searchVectorIndex, closeVectorIndex, nil
+	}
+
+	vectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionFaissVectorIndex]
+	// check if the field has a vector section in the segment.
+	if vectorSection <= 0 {
+		return searchVectorIndex, closeVectorIndex, nil
+	}
+
 	pos := int(vectorSection)
 
 	// loading doc values - adhering to the sections format. never
@@ -305,108 +341,42 @@ func (sb *SegmentBase) navigatingVectorDocValues(vectorSection uint64) int {
 	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
-	return pos
-}
+	// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
+	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
+	indexBytes := sb.mem[pos : pos+int(indexSize)]
+	pos += int(indexSize)
 
-func (sb *SegmentBase) SearchSimilarVectors(vecIndex segment.VectorIndex, field string,
-	qVector []float32, k int64,
-	except *roaring.Bitmap) (segment.VecPostingsList, error) {
-
-	if vecIndex == nil {
-		var err error
-		vecIndex, err = sb.GetVectorIndex(field)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
-	// 2. both the values can be represented using roaring bitmaps.
-	// 3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
-	// 4. VecPostings would just have the docNum and the score. Every call of Next()
-	//    and Advance just returns the next VecPostings. The caller would do a vp.Number()
-	//    and the Score() to get the corresponding values
-	rv := &VecPostingsList{
-		except:   nil, // todo: handle the except bitmap within postings iterator.
-		postings: roaring64.New(),
-	}
-
-	vecDocIDMap := make(map[int64][]uint32)
-	fieldIDPlus1 := sb.fieldsMap[field]
-	if fieldIDPlus1 > 0 {
-		vectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionFaissVectorIndex]
-		// check if the field has a vector section in the segment.
-		if vectorSection > 0 {
-			pos := sb.navigatingVectorDocValues(vectorSection)
-
-			// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
-			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	// read the number vectors indexed for this field and load the vector to docID mapping.
+	// todo: cache the vecID to docIDs mapping for a fieldID
+	numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
+	for i := 0; i < int(numVecs); i++ {
+		vecID, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += n
+		numDocs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += n
+		bitMap := roaring.NewBitmap()
+		// if the number docs is more than one, load the bitmap containing the
+		// docIDs, else use the optimized format where the single docID is
+		// varint encoded.
+		if numDocs > 1 {
+			bitMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
-			pos += int(indexSize)
-
-			// read the number vectors indexed for this field and load the vector to docID mapping.
-			// todo: cache the vecID to docIDs mapping for a fieldID
-			numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-			pos += n
-			for i := 0; i < int(numVecs); i++ {
-				vecID, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
-				pos += n
-
-				numDocs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-				pos += n
-
-				bitMap := roaring.NewBitmap()
-
-				// if the number docs is more than one, load the bitmap containing the
-				// docIDs, else use the optimized format where the single docID is
-				// varint encoded.
-				if numDocs > 1 {
-					bitMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-					pos += n
-
-					roaringBytes := sb.mem[pos : pos+int(bitMapLen)]
-					pos += int(bitMapLen)
-
-					_, err := bitMap.FromBuffer(roaringBytes)
-					if err != nil {
-						return nil, err
-					}
-
-					vecDocIDMap[vecID] = bitMap.ToArray()
-					continue
-				}
-				docID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-				pos += n
-
-				vecDocIDMap[vecID] = []uint32{uint32(docID)}
-			}
-
-			scores, ids, err := vecIndex.Search(qVector, k)
+			roaringBytes := sb.mem[pos : pos+int(bitMapLen)]
+			pos += int(bitMapLen)
+			_, err = bitMap.FromBuffer(roaringBytes)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-
-			// for every similar vector returned by the Search() API, add the corresponding
-			// docID and the score to the newly created vecPostingsList
-			for i := 0; i < len(ids); i++ {
-				vecID := ids[i]
-				if vecID == -1 {
-					continue // ignore the invalid entries of ids
-				}
-				docIDs := vecDocIDMap[vecID]
-				var code uint64
-
-				for _, docID := range docIDs {
-					if except != nil && except.Contains(docID) {
-						// ignore the deleted doc
-						continue
-					}
-					code = getVectorCode(docID, scores[i])
-					rv.postings.Add(uint64(code))
-				}
-			}
+			vecDocIDMap[vecID] = bitMap.ToArray()
+			continue
 		}
+		docID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += n
+		vecDocIDMap[vecID] = []uint32{uint32(docID)}
 	}
 
-	return rv, nil
+	vecIndex, err = faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
+	return searchVectorIndex, closeVectorIndex, err
 }

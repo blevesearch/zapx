@@ -215,6 +215,14 @@ func (s *interim) convert() (uint64, []uint64, uint64, error) {
 		}
 	}
 
+	// after persisting the sections to the writer, account corresponding
+	for _, opaque := range s.opaque {
+		opaqueIO, ok := opaque.(segment.DiskStatsReporter)
+		if ok {
+			s.incrementBytesWritten(opaqueIO.BytesWritten())
+		}
+	}
+
 	if len(s.results) == 0 {
 		dictOffsets = make([]uint64, len(s.FieldsInv))
 	}

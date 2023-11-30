@@ -510,6 +510,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			}
 		}
 
+		// accounts for whatever data has been written out to the writer.
+		vo.incrementBytesWritten(uint64(w.Count() - fieldStart))
 		vo.fieldAddrs[fieldID] = fieldStart
 	}
 	return 0, nil
@@ -613,6 +615,8 @@ type vecInfo struct {
 type vectorIndexOpaque struct {
 	init bool
 
+	bytesWritten uint64
+
 	fieldAddrs map[uint16]int
 
 	vecIDMap    map[int64]vecInfo
@@ -620,6 +624,20 @@ type vectorIndexOpaque struct {
 
 	tmp0 []byte
 }
+
+func (v *vectorIndexOpaque) incrementBytesWritten(val uint64) {
+	v.bytesWritten += val
+}
+
+func (v *vectorIndexOpaque) BytesWritten() uint64 {
+	return v.bytesWritten
+}
+
+func (v *vectorIndexOpaque) BytesRead() uint64 {
+	return 0
+}
+
+func (v *vectorIndexOpaque) ResetBytesRead(uint64) {}
 
 func (vo *vectorIndexOpaque) Reset() (err error) {
 	// cleanup stuff over here

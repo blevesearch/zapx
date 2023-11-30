@@ -348,6 +348,10 @@ func (s *SegmentBase) loadFieldsNew() error {
 
 func (s *SegmentBase) loadFieldNew(fieldID uint16, pos uint64,
 	fieldSectionMap map[uint16]uint64) error {
+	if pos == 0 {
+		// there is no indexing structure present for this field/section
+		return nil
+	}
 
 	fieldStartPos := pos // to track the number of bytes read
 	fieldNameLen, sz := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])

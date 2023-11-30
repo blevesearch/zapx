@@ -551,8 +551,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 
 func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, docNum uint32) {
 	if !vo.init {
+		vo.realloc()
 		vo.init = true
-		vo.allocateSpace()
 	}
 	if fieldID == math.MaxUint16 {
 		// doc processing checkpoint. currently nothing to do
@@ -607,11 +607,6 @@ func hashCode(a []float32) int64 {
 	return rv
 }
 
-func (v *vectorIndexOpaque) allocateSpace() {
-	// todo: allocate the space for the opaque contents if possible.
-	// basically to avoid too many heap allocs and also reuse things
-}
-
 func (v *faissVectorIndexSection) getvectorIndexOpaque(opaque map[int]resetable) *vectorIndexOpaque {
 	if _, ok := opaque[SectionFaissVectorIndex]; !ok {
 		opaque[SectionFaissVectorIndex] = v.InitOpaque(nil)
@@ -643,18 +638,34 @@ type vecInfo struct {
 	docIDs *roaring.Bitmap
 }
 
-// todo: document the data structures involved in vector section.
 type vectorIndexOpaque struct {
 	init bool
 
 	bytesWritten uint64
 
+	lastNumVecs   int
+	lastNumFields int
+
+	// maps the field to the address of its vector section
 	fieldAddrs map[uint16]int
 
-	vecIDMap    map[int64]vecInfo
+	// maps the vecID to basic info involved around it such as
+	// the docIDs its present in and the vector itself
+	vecIDMap map[int64]vecInfo
+	// maps the field to information necessary for its vector
+	// index to be build.
 	vecFieldMap map[uint16]indexContent
 
 	tmp0 []byte
+}
+
+func (v *vectorIndexOpaque) realloc() {
+	// when an opaque instance is reused, the two maps are pre-allocated
+	// with space before they were reset. this can be useful in continuous
+	// mutation scenarios, where the batch sizes are more or less same.
+	v.vecFieldMap = make(map[uint16]indexContent, v.lastNumFields)
+	v.vecIDMap = make(map[int64]vecInfo, v.lastNumVecs)
+	v.fieldAddrs = make(map[uint16]int, v.lastNumFields)
 }
 
 func (v *vectorIndexOpaque) incrementBytesWritten(val uint64) {
@@ -669,13 +680,24 @@ func (v *vectorIndexOpaque) BytesRead() uint64 {
 	return 0
 }
 
-func (v *vectorIndexOpaque) ResetBytesRead(uint64) {}
+func (v *vectorIndexOpaque) ResetBytesRead(uint64) {
+}
 
-func (vo *vectorIndexOpaque) Reset() (err error) {
-	// cleanup stuff over here
+// cleanup stuff over here for reusability
+func (v *vectorIndexOpaque) Reset() (err error) {
+	// tracking the number of vecs and fields processed and tracked in this
+	// opaque, for better allocations of the maps
+	v.lastNumVecs = len(v.vecIDMap)
+	v.lastNumFields = len(v.vecFieldMap)
+
+	v.init = false
+	v.fieldAddrs = nil
+	v.vecFieldMap = nil
+	v.vecIDMap = nil
+	v.tmp0 = v.tmp0[:0]
 
 	return nil
 }
-func (v *vectorIndexOpaque) Set(key string, val interface{}) {
 
+func (v *vectorIndexOpaque) Set(key string, val interface{}) {
 }

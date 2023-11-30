@@ -135,8 +135,18 @@ func decodeSection(data []byte, start uint64) (int, int, map[int64][]uint32, *fa
 	numVecs, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += n
 	for i := 0; i < int(numVecs); i++ {
-		vecID, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+		vecID, n := binary.Varint(data[pos : pos+binary.MaxVarintLen64])
 		pos += n
+
+		numDocs, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+		pos += n
+
+		if numDocs == 1 {
+			docID, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+			pos += n
+			vecDocIDMap[int64(vecID)] = []uint32{uint32(docID)}
+			continue
+		}
 
 		bitMapLen, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 		pos += n

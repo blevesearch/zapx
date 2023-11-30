@@ -17,10 +17,11 @@ import (
 )
 
 func getStubDocScores(k int) (ids []uint64, scores []float32, err error) {
-	for i := 1; i <= k; i++ {
+	for i := 0; i < k; i++ {
 		ids = append(ids, uint64(i))
 		scores = append(scores, float32((2*i+3)/200))
 	}
+	scores[0] = -scores[0]
 	return ids, scores, nil
 }
 
@@ -37,7 +38,7 @@ func TestVecPostingsIterator(t *testing.T) {
 	docIDs := make(map[uint64]float32)
 
 	for i, id := range ids {
-		code := uint64(id)<<31 | uint64(math.Float32bits(scores[i]))
+		code := uint64(id)<<32 | uint64(math.Float32bits(scores[i]))
 		vecPL.postings.Add(code)
 		docIDs[id] = scores[i]
 	}

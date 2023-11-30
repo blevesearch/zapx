@@ -338,6 +338,7 @@ func (s *SegmentBase) loadFieldsNew() error {
 		}
 
 		s.fieldsSectionsMap = append(s.fieldsSectionsMap, fieldSectionMap)
+
 		fieldID++
 		pos += 8
 	}

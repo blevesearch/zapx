@@ -627,7 +627,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 
 func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum uint32) {
 	if !io.init && io.results != nil {
-		io.allocateSpace()
+		io.realloc()
 		io.init = true
 	}
 
@@ -693,7 +693,7 @@ func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum
 	}
 }
 
-func (i *invertedIndexOpaque) allocateSpace() {
+func (i *invertedIndexOpaque) realloc() {
 	var pidNext int
 
 	var totTFs int
@@ -753,12 +753,10 @@ func (i *invertedIndexOpaque) allocateSpace() {
 		}
 	}
 
-	if i.IncludeDocValues == nil {
-		if cap(i.IncludeDocValues) >= len(i.FieldsInv) {
-			i.IncludeDocValues = i.IncludeDocValues[:len(i.FieldsInv)]
-		} else {
-			i.IncludeDocValues = make([]bool, len(i.FieldsInv))
-		}
+	if cap(i.IncludeDocValues) >= len(i.FieldsInv) {
+		i.IncludeDocValues = i.IncludeDocValues[:len(i.FieldsInv)]
+	} else {
+		i.IncludeDocValues = make([]bool, len(i.FieldsInv))
 	}
 
 	for _, result := range i.results {

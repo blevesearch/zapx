@@ -266,7 +266,60 @@ func (vpl *VecPostingsIterator) BytesWritten() uint64 {
 	return 0
 }
 
-func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, except *roaring.Bitmap) (segment.VecPostingsList, error) {
+func (sb *SegmentBase) GetVectorIndex(field string) (segment.VectorIndex, error) {
+	var vecIndex *faiss.IndexImpl
+
+	fieldIDPlus1 := sb.fieldsMap[field]
+	if fieldIDPlus1 > 0 {
+		vectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionFaissVectorIndex]
+		// check if the field has a vector section in the segment.
+		if vectorSection > 0 {
+			pos := sb.navigatingVectorDocValues(vectorSection)
+
+			// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
+			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+			indexBytes := sb.mem[pos : pos+int(indexSize)]
+			pos += int(indexSize)
+
+			var err error
+			vecIndex, err = faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
+			if err != nil {
+				return vecIndex, err
+			}
+		}
+	}
+
+	return vecIndex, nil
+}
+
+// Returns position after skipping through bytes for doc values.
+func (sb *SegmentBase) navigatingVectorDocValues(vectorSection uint64) int {
+	pos := int(vectorSection)
+
+	// loading doc values - adhering to the sections format. never
+	// valid values for vector section
+	_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
+	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
+	return pos
+}
+
+func (sb *SegmentBase) SearchSimilarVectors(vecIndex segment.VectorIndex, field string,
+	qVector []float32, k int64,
+	except *roaring.Bitmap) (segment.VecPostingsList, error) {
+
+	if vecIndex == nil {
+		var err error
+		vecIndex, err = sb.GetVectorIndex(field)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
 	// 2. both the values can be represented using roaring bitmaps.
 	// 3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
@@ -284,20 +337,11 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 		vectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionFaissVectorIndex]
 		// check if the field has a vector section in the segment.
 		if vectorSection > 0 {
-			pos := int(vectorSection)
-
-			// loading doc values - adhering to the sections format. never
-			// valid values for vector section
-			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-			pos += n
-
-			_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-			pos += n
+			pos := sb.navigatingVectorDocValues(vectorSection)
 
 			// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
 			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
-			indexBytes := sb.mem[pos : pos+int(indexSize)]
 			pos += int(indexSize)
 
 			// read the number vectors indexed for this field and load the vector to docID mapping.
@@ -336,12 +380,6 @@ func (sb *SegmentBase) SimilarVectors(field string, qVector []float32, k int64, 
 
 				vecDocIDMap[vecID] = []uint32{uint32(docID)}
 			}
-
-			vecIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
-			if err != nil {
-				return nil, err
-			}
-			defer vecIndex.Close()
 
 			scores, ids, err := vecIndex.Search(qVector, k)
 			if err != nil {

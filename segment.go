@@ -328,7 +328,7 @@ func (s *SegmentBase) loadFieldsNew() error {
 
 	for fieldID < numFields {
 		addr := binary.BigEndian.Uint64(s.mem[pos : pos+8])
-    s.incrementBytesRead(8)
+    		s.incrementBytesRead(8)
     
 		fieldSectionMap := make(map[uint16]uint64)
 

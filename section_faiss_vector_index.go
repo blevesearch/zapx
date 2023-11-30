@@ -641,7 +641,7 @@ type vecInfo struct {
 type vectorIndexOpaque struct {
 	init bool
 
-  bytesWritten uint64
+	bytesWritten uint64
 
 	lastNumVecs   int
 	lastNumFields int

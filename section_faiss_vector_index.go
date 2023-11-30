@@ -542,6 +542,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			}
 		}
 
+		// accounts for whatever data has been written out to the writer.
+		vo.incrementBytesWritten(uint64(w.Count() - fieldStart))
 		vo.fieldAddrs[fieldID] = fieldStart
 	}
 	return 0, nil
@@ -639,6 +641,8 @@ type vecInfo struct {
 type vectorIndexOpaque struct {
 	init bool
 
+  bytesWritten uint64
+
 	lastNumVecs   int
 	lastNumFields int
 
@@ -664,6 +668,21 @@ func (v *vectorIndexOpaque) realloc() {
 	v.fieldAddrs = make(map[uint16]int, v.lastNumFields)
 }
 
+func (v *vectorIndexOpaque) incrementBytesWritten(val uint64) {
+	v.bytesWritten += val
+}
+
+func (v *vectorIndexOpaque) BytesWritten() uint64 {
+	return v.bytesWritten
+}
+
+func (v *vectorIndexOpaque) BytesRead() uint64 {
+	return 0
+}
+
+func (v *vectorIndexOpaque) ResetBytesRead(uint64) {
+}
+
 // cleanup stuff over here for reusability
 func (v *vectorIndexOpaque) Reset() (err error) {
 	// tracking the number of vecs and fields processed and tracked in this
@@ -679,6 +698,6 @@ func (v *vectorIndexOpaque) Reset() (err error) {
 
 	return nil
 }
-func (v *vectorIndexOpaque) Set(key string, val interface{}) {
 
+func (v *vectorIndexOpaque) Set(key string, val interface{}) {
 }

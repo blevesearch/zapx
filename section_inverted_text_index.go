@@ -379,6 +379,20 @@ func (i *invertedIndexOpaque) grabBuf(size int) []byte {
 	return buf[:size]
 }
 
+func (i *invertedIndexOpaque) incrementBytesWritten(bytes uint64) {
+	i.bytesWritten += bytes
+}
+
+func (i *invertedIndexOpaque) BytesWritten() uint64 {
+	return i.bytesWritten
+}
+
+func (i *invertedIndexOpaque) BytesRead() uint64 {
+	return 0
+}
+
+func (i *invertedIndexOpaque) ResetBytesRead(uint64) {}
+
 func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uint64, err error) {
 
 	if io.results == nil || len(io.results) == 0 {
@@ -494,6 +508,8 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 
 			tfEncoder.Close()
 			locEncoder.Close()
+			io.incrementBytesWritten(locEncoder.getBytesWritten())
+			io.incrementBytesWritten(tfEncoder.getBytesWritten())
 
 			postingsOffset, err :=
 				writePostings(postingsBS, tfEncoder, locEncoder, nil, w, buf)
@@ -528,6 +544,8 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 		if err != nil {
 			return nil, err
 		}
+
+		io.incrementBytesWritten(uint64(len(vellumData)))
 
 		// write this vellum to disk
 		_, err = w.Write(vellumData)
@@ -564,6 +582,8 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 			if err != nil {
 				return nil, err
 			}
+
+			io.incrementBytesWritten(fdvEncoder.getBytesWritten())
 
 			fdvOffsetsStart[fieldID] = uint64(w.Count())
 
@@ -909,8 +929,9 @@ type invertedIndexOpaque struct {
 
 	fieldAddrs map[int]int
 
-	fieldsSame bool
-	numDocs    uint64
+	bytesWritten uint64
+	fieldsSame   bool
+	numDocs      uint64
 }
 
 func (io *invertedIndexOpaque) Reset() (err error) {

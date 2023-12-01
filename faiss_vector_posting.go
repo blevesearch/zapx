@@ -266,6 +266,13 @@ func (vpl *VecPostingsIterator) BytesWritten() uint64 {
 	return 0
 }
 
+// InterpretVectorIndex returns closures that will allow the caller to -
+// (1) SearchVectorIndex - search within an attached vector index
+// (2) CloseVectorIndex - close attached vector index
+//
+// These function pointers may be nil, when InterpretVectorIndex return a non-nil err.
+// It is on the caller to ensure CloseVectorIndex is invoked (sync or async) after
+// their business with the attached vector index concludes.
 func (sb *SegmentBase) InterpretVectorIndex(field string) (
 	segment.SearchVectorIndex, segment.CloseVectorIndex, error) {
 	// Params needed for the closures

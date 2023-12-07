@@ -83,11 +83,11 @@ var vectorCmd = &cobra.Command{
 						faiss.MetricInnerProduct: "inner product",
 						faiss.MetricL2:           "l2 distance",
 					}
-					fmt.Printf("decoded vector section content for field %v:\n", args[1])
-					fmt.Printf("the number of vectors %v\n", numVecs)
-					fmt.Printf("the size of the serialized vector index %v\n", indexSize)
-					fmt.Printf("the dimension of vectors in the vector index %v\n", index.D())
-					fmt.Printf("the dimension of vectors in the vector index %v\n", metrics[index.MetricType()])
+					fmt.Printf("decoded vector section content for field `%v`:\n", args[1])
+					fmt.Printf("  number of vectors: %v\n", numVecs)
+					fmt.Printf("  size of the serialized vector index: %v\n", indexSize)
+					fmt.Printf("  dimensionality of vectors in the index: %v\n", index.D())
+					fmt.Printf("  similarity metric used: %v\n", metrics[index.MetricType()])
 				case 3:
 					if args[2] == "list" {
 						fmt.Printf("listing the vector IDs in the index\n")

@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
 	index "github.com/blevesearch/bleve_index_api"
@@ -669,11 +670,11 @@ func (v *vectorIndexOpaque) realloc() {
 }
 
 func (v *vectorIndexOpaque) incrementBytesWritten(val uint64) {
-	v.bytesWritten += val
+	atomic.AddUint64(&v.bytesWritten, val)
 }
 
 func (v *vectorIndexOpaque) BytesWritten() uint64 {
-	return v.bytesWritten
+	return atomic.LoadUint64(&v.bytesWritten)
 }
 
 func (v *vectorIndexOpaque) BytesRead() uint64 {
@@ -695,6 +696,8 @@ func (v *vectorIndexOpaque) Reset() (err error) {
 	v.vecFieldMap = nil
 	v.vecIDMap = nil
 	v.tmp0 = v.tmp0[:0]
+
+	atomic.StoreUint64(&v.bytesWritten, 0)
 
 	return nil
 }

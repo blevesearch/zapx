@@ -320,9 +320,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 	}
 
 	closeVectorIndex := func() {
-		if vecIndex != nil {
-			vecIndex.Close()
-		}
+		// defering the closing of index to the point when cache is cleared
 	}
 
 	var err error
@@ -351,7 +349,20 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 	// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
 	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
-	indexBytes := sb.mem[pos : pos+int(indexSize)]
+
+	sb.m1.Lock()
+	if cacheEntry, ok := sb.fieldVecs[fieldIDPlus1]; ok {
+		vecIndex = cacheEntry
+	} else {
+		indexBytes := sb.mem[pos : pos+int(indexSize)]
+		vecIndex, err = faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
+		if err != nil {
+			return nil, nil, err
+		}
+		sb.fieldVecs[fieldIDPlus1] = vecIndex
+	}
+	sb.m1.Unlock()
+
 	pos += int(indexSize)
 
 	// read the number vectors indexed for this field and load the vector to docID mapping.
@@ -384,6 +395,5 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 		vecDocIDMap[vecID] = []uint32{uint32(docID)}
 	}
 
-	vecIndex, err = faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
 	return searchVectorIndex, closeVectorIndex, err
 }

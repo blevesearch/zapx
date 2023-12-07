@@ -21,6 +21,7 @@ import (
 	"math"
 	"os"
 
+	faiss "github.com/blevesearch/go-faiss"
 	"github.com/blevesearch/vellum"
 )
 
@@ -175,6 +176,7 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32,
 		docValueOffset:      0, // docvalueOffsets identified automicatically by the section
 		dictLocs:            dictLocs,
 		fieldFSTs:           make(map[uint16]*vellum.FST),
+		fieldVecs:           make(map[uint16]*faiss.IndexImpl),
 	}
 	sb.updateSize()
 

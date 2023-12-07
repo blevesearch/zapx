@@ -48,6 +48,10 @@ var vectorCmd = &cobra.Command{
 			return fmt.Errorf("file format not supported")
 		}
 
+		if len(args) < 2 {
+			return fmt.Errorf("must specify field")
+		}
+
 		// read the number of fields
 		numFields, sz := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(sz)

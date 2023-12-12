@@ -256,7 +256,7 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 }
 
 func removeDeletedVectors(index *faiss.IndexImpl, ids []int64) error {
-	sel, err := faiss.NewIDSelectorBatch(ids)
+	sel, err := faiss.NewIDSelectorArray(ids)
 	if err != nil {
 		return err
 	}

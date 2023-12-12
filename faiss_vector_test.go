@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"testing"
 
@@ -134,6 +135,14 @@ func newStubFieldVec(name string, vector []float32, d int, metric string, fieldO
 		encodedType: 'v',
 		options:     fieldOptions,
 	}
+}
+
+func stubVecDataLengthN(n int) [][]float32 {
+	rv := make([][]float32, n)
+	for i := 0; i < n; i++ {
+		rv[i] = []float32{rand.Float32(), rand.Float32(), rand.Float32()}
+	}
+	return rv
 }
 
 func stubVecData() [][]float32 {
@@ -315,24 +324,63 @@ func serializeVecs(dataset [][]float32) []float32 {
 	return vecs
 }
 
-func letsCreateVectorIndexForTesting(dataset [][]float32, dims int, similarity string) (*faiss.IndexImpl, error) {
+func letsCreateVectorIndexOfTypeForTesting(dataset [][]float32, dims int, similarity,
+	index_key string, isIVF bool) (*faiss.IndexImpl, error) {
 	vecs := serializeVecs(dataset)
 
-	idx, err := faiss.IndexFactory(dims, "IDMap2,Flat", faiss.MetricL2)
+	idx, err := faiss.IndexFactory(dims, index_key, faiss.MetricL2)
 	if err != nil {
 		return nil, err
 	}
-
-	idx.Train(vecs)
 
 	ids := make([]int64, len(dataset))
 	for i := 0; i < len(dataset); i++ {
 		ids[i] = int64(i)
 	}
 
+	if isIVF {
+		err = idx.SetDirectMap(2)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	idx.Train(vecs)
+
 	idx.AddWithIDs(vecs, ids)
 
 	return idx, nil
+}
+
+func TestRemoveVectorIDs(t *testing.T) {
+
+	testCases := []struct {
+		numVecs int
+	}{
+		{
+			// 5 vectors to test for flat indexes.
+			numVecs: 5,
+		},
+		{
+			// 500 vectors to test for IVF indexes
+			numVecs: 500,
+		},
+	}
+
+	for _, testCase := range testCases {
+		data := stubVecDataLengthN(testCase.numVecs)
+		index_key, isIVF := getIndexType(testCase.numVecs)
+		vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3, "l2",
+			index_key, isIVF)
+		if err != nil {
+			t.Fatalf("error creating vector index %v", err)
+		}
+
+		err = removeDeletedVectors(vecIndex, []int64{1, 2})
+		if err != nil {
+			t.Fatalf("err removing deleted vectors: %v\n", err)
+		}
+	}
 }
 
 func TestVectorSegment(t *testing.T) {
@@ -373,7 +421,8 @@ func TestVectorSegment(t *testing.T) {
 	}
 
 	data := stubVecData()
-	vecIndex, err := letsCreateVectorIndexForTesting(data, 3, "l2")
+	vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3, "l2", "IDMap2,Flat",
+		false)
 	if err != nil {
 		t.Fatalf("error creating vector index %v", err)
 	}
@@ -454,7 +503,7 @@ func TestPersistedVectorSegment(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		pl, err := searchVectorIndex("stubVec",[]float32{0.0, 0.0, 0.0}, 3, nil)
+		pl, err := searchVectorIndex("stubVec", []float32{0.0, 0.0, 0.0}, 3, nil)
 		if err != nil {
 			closeVectorIndex()
 			t.Fatal(err)

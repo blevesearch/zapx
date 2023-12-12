@@ -19,12 +19,13 @@ package zap
 
 import (
 	"encoding/binary"
-	"fmt"
 	"math"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
 	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
+	seg "github.com/blevesearch/scorch_segment_api/v2"
 	"golang.org/x/exp/maps"
 )
 
@@ -92,7 +93,7 @@ LOOP:
 		// be beneficial in terms of perf?
 		for segI, sb := range segments {
 			if isClosed(closeCh) {
-				return fmt.Errorf("merging of vector sections aborted")
+				return seg.ErrClosed
 			}
 			if _, ok := sb.fieldsMap[fieldName]; !ok {
 				continue
@@ -297,7 +298,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		var indexData []float32
 		for i := 0; i < len(vecIndexes); i++ {
 			if isClosed(closeCh) {
-				return fmt.Errorf("merging of vector sections aborted")
+				return seg.ErrClosed
 			}
 			// todo: parallelize reconstruction
 			recons, err := vecIndexes[i].ReconstructBatch(int64(len(indexes[i].vecIds)), indexes[i].vecIds)
@@ -358,7 +359,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		}
 		for i := 1; i < len(vecIndexes); i++ {
 			if isClosed(closeCh) {
-				return fmt.Errorf("merging of vector sections aborted")
+				return seg.ErrClosed
 			}
 			if len(indexes[i].deleted) > 0 {
 				err = removeDeletedVectors(vecIndexes[i], indexes[i].deleted)
@@ -669,11 +670,11 @@ func (v *vectorIndexOpaque) realloc() {
 }
 
 func (v *vectorIndexOpaque) incrementBytesWritten(val uint64) {
-	v.bytesWritten += val
+	atomic.AddUint64(&v.bytesWritten, val)
 }
 
 func (v *vectorIndexOpaque) BytesWritten() uint64 {
-	return v.bytesWritten
+	return atomic.LoadUint64(&v.bytesWritten)
 }
 
 func (v *vectorIndexOpaque) BytesRead() uint64 {
@@ -695,6 +696,8 @@ func (v *vectorIndexOpaque) Reset() (err error) {
 	v.vecFieldMap = nil
 	v.vecIDMap = nil
 	v.tmp0 = v.tmp0[:0]
+
+	atomic.StoreUint64(&v.bytesWritten, 0)
 
 	return nil
 }

@@ -292,7 +292,8 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 			postings: roaring64.New(),
 		}
 
-		if vecIndex == nil {
+		if vecIndex == nil || vecIndex.D() != len(qVector) {
+			// vector index not found or dimensionality mismatched
 			return rv, nil
 		}
 

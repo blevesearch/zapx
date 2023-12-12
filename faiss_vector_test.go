@@ -324,7 +324,7 @@ func serializeVecs(dataset [][]float32) []float32 {
 	return vecs
 }
 
-func letsCreateVectorIndexOfTypeForTesting(dataset [][]float32, dims int, similarity,
+func letsCreateVectorIndexOfTypeForTesting(dataset [][]float32, dims int,
 	index_key string, isIVF bool) (*faiss.IndexImpl, error) {
 	vecs := serializeVecs(dataset)
 
@@ -370,15 +370,25 @@ func TestRemoveVectorIDs(t *testing.T) {
 	for _, testCase := range testCases {
 		data := stubVecDataLengthN(testCase.numVecs)
 		index_key, isIVF := getIndexType(testCase.numVecs)
-		vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3, "l2",
+		vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3,
 			index_key, isIVF)
 		if err != nil {
 			t.Fatalf("error creating vector index %v", err)
 		}
 
+		currCount := vecIndex.Ntotal()
+		if currCount != int64(testCase.numVecs) {
+			t.Fatalf("all vectors not indexed?")
+		}
+
 		err = removeDeletedVectors(vecIndex, []int64{1, 2})
 		if err != nil {
 			t.Fatalf("err removing deleted vectors: %v\n", err)
+		}
+
+		currCount = vecIndex.Ntotal()
+		if currCount != int64(testCase.numVecs)-2 {
+			t.Fatalf("vectors not deleted correctly?")
 		}
 	}
 }
@@ -421,7 +431,7 @@ func TestVectorSegment(t *testing.T) {
 	}
 
 	data := stubVecData()
-	vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3, "l2", "IDMap2,Flat",
+	vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3, "IDMap2,Flat",
 		false)
 	if err != nil {
 		t.Fatalf("error creating vector index %v", err)

@@ -281,12 +281,11 @@ func removeDeletedVectors(index *faiss.IndexImpl, ids []int64) error {
 		return err
 	}
 
+	defer sel.Delete()
 	_, err = index.RemoveIDs(sel)
 	if err != nil {
-		sel.Delete()
 		return err
 	}
-	sel.Delete()
 	return nil
 }
 
@@ -398,7 +397,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			return err
 		}
 	}
-
 	fieldStart, err := v.flushVectorSection(vecToDocID, mergedIndexBytes, w)
 	if err != nil {
 		return err

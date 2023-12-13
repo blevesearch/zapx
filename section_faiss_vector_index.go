@@ -275,11 +275,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	defer freeReconstructedIndexes(vecIndexes)
 
 	var mergedIndexBytes []byte
+	// index type to be created after merge.
 	indexType, isIVF := getIndexType(len(vecToDocID))
-	// could this be possible in a scenario where there are a lot of small segments
-	// i.e. flat indexes but cumulatively their numbers are high enough that they
-	// must now be made into an IVF index.
-
 	// merging of indexes with reconstruction
 	// method. the indexes[i].vecIds is such that it has only the valid vecs
 	// of this vector index present in it, so we'd be reconstructed only the

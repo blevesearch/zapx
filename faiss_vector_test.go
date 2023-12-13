@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"math/rand"
 	"os"
 	"testing"
 
@@ -135,14 +134,6 @@ func newStubFieldVec(name string, vector []float32, d int, metric string, fieldO
 		encodedType: 'v',
 		options:     fieldOptions,
 	}
-}
-
-func stubVecDataLengthN(n int) [][]float32 {
-	rv := make([][]float32, n)
-	for i := 0; i < n; i++ {
-		rv[i] = []float32{rand.Float32(), rand.Float32(), rand.Float32()}
-	}
-	return rv
 }
 
 func stubVecData() [][]float32 {
@@ -343,9 +334,12 @@ func letsCreateVectorIndexOfTypeForTesting(dataset [][]float32, dims int,
 		if err != nil {
 			return nil, err
 		}
-	}
 
-	idx.Train(vecs)
+		err = idx.Train(vecs)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	idx.AddWithIDs(vecs, ids)
 

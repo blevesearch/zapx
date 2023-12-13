@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"math"
 	"sort"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
 	index "github.com/blevesearch/bleve_index_api"
@@ -380,11 +381,11 @@ func (i *invertedIndexOpaque) grabBuf(size int) []byte {
 }
 
 func (i *invertedIndexOpaque) incrementBytesWritten(bytes uint64) {
-	i.bytesWritten += bytes
+	atomic.AddUint64(&i.bytesWritten, bytes)
 }
 
 func (i *invertedIndexOpaque) BytesWritten() uint64 {
-	return i.bytesWritten
+	return atomic.LoadUint64(&i.bytesWritten)
 }
 
 func (i *invertedIndexOpaque) BytesRead() uint64 {
@@ -978,6 +979,7 @@ func (io *invertedIndexOpaque) Reset() (err error) {
 	io.reusableFieldTFs = io.reusableFieldTFs[:0]
 
 	io.tmp0 = io.tmp0[:0]
+	atomic.StoreUint64(&io.bytesWritten, 0)
 	io.fieldsSame = false
 	io.numDocs = 0
 

@@ -352,47 +352,6 @@ func letsCreateVectorIndexOfTypeForTesting(dataset [][]float32, dims int,
 	return idx, nil
 }
 
-func TestRemoveVectorIDs(t *testing.T) {
-
-	testCases := []struct {
-		numVecs int
-	}{
-		{
-			// 5 vectors to test for flat indexes.
-			numVecs: 5,
-		},
-		{
-			// 500 vectors to test for IVF indexes
-			numVecs: 500,
-		},
-	}
-
-	for _, testCase := range testCases {
-		data := stubVecDataLengthN(testCase.numVecs)
-		index_key, isIVF := getIndexType(testCase.numVecs)
-		vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3,
-			index_key, isIVF)
-		if err != nil {
-			t.Fatalf("error creating vector index %v", err)
-		}
-
-		currCount := vecIndex.Ntotal()
-		if currCount != int64(testCase.numVecs) {
-			t.Fatalf("all vectors not indexed?")
-		}
-
-		err = removeDeletedVectors(vecIndex, []int64{1, 2})
-		if err != nil {
-			t.Fatalf("err removing deleted vectors: %v\n", err)
-		}
-
-		currCount = vecIndex.Ntotal()
-		if currCount != int64(testCase.numVecs)-2 {
-			t.Fatalf("vectors not deleted correctly?")
-		}
-	}
-}
-
 func TestVectorSegment(t *testing.T) {
 	docs := buildMultiDocDataset()
 

@@ -342,12 +342,14 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		}
 		defer index.Close()
 
-		// the direct map maintained in the IVF index is essential for the
-		// reconstruction of vectors based on vector IDs in the future merges.
-		// the AddWithIDs API also needs a direct map to be set before using.
-		err = index.SetDirectMap(2)
-		if err != nil {
-			return err
+		if isIVF {
+			// the direct map maintained in the IVF index is essential for the
+			// reconstruction of vectors based on vector IDs in the future merges.
+			// the AddWithIDs API also needs a direct map to be set before using.
+			err = index.SetDirectMap(2)
+			if err != nil {
+				return err
+			}
 		}
 
 		// train the vector index, essentially performs k-means clustering to partition

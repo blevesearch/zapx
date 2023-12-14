@@ -587,32 +587,37 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 	dim := field.Dims()
 	metric := field.Similarity()
 
-	if vec != nil {
+	// caller is supposed to make sure len(vec) is a multiple of dim.
+	// Not double checking it here to avoid the overhead.
+	numSubVecs := len(vec) / dim
+	for i := 0; i < numSubVecs; i++ {
+		subVec := vec[i*dim : (i+1)*dim]
+
 		// NOTE: currently, indexing only unique vectors.
-		vecHash := hashCode(vec)
-		if _, ok := vo.vecIDMap[vecHash]; !ok {
-			vo.vecIDMap[vecHash] = vecInfo{
+		subVecHash := hashCode(subVec)
+		if _, ok := vo.vecIDMap[subVecHash]; !ok {
+			vo.vecIDMap[subVecHash] = vecInfo{
 				docIDs: roaring.NewBitmap(),
 			}
 		}
 		// add the docID to the bitmap
-		vo.vecIDMap[vecHash].docIDs.Add(docNum)
+		vo.vecIDMap[subVecHash].docIDs.Add(docNum)
 
 		// tracking the unique vectors for every field which will be used later
 		// to construct the vector index.
 		if _, ok := vo.vecFieldMap[fieldID]; !ok {
 			vo.vecFieldMap[fieldID] = indexContent{
 				vecs: map[int64]vecInfo{
-					vecHash: {
-						vec: vec,
+					subVecHash: {
+						vec: subVec,
 					},
 				},
 				dim:    uint16(dim),
 				metric: metric,
 			}
 		} else {
-			vo.vecFieldMap[fieldID].vecs[vecHash] = vecInfo{
-				vec: vec,
+			vo.vecFieldMap[fieldID].vecs[subVecHash] = vecInfo{
+				vec: subVec,
 			}
 		}
 	}

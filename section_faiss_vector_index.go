@@ -350,15 +350,15 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			if err != nil {
 				return err
 			}
-		}
 
-		// train the vector index, essentially performs k-means clustering to partition
-		// the data space of indexData such that during the search time, we probe
-		// only a subset of vectors -> non-exhaustive search. could be a time
-		// consuming step when the indexData is large.
-		err = index.Train(indexData)
-		if err != nil {
-			return err
+			// train the vector index, essentially performs k-means clustering to partition
+			// the data space of indexData such that during the search time, we probe
+			// only a subset of vectors -> non-exhaustive search. could be a time
+			// consuming step when the indexData is large.
+			err = index.Train(indexData)
+			if err != nil {
+				return err
+			}
 		}
 
 		err = index.AddWithIDs(indexData, finalVecIDs)
@@ -470,11 +470,11 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			if err != nil {
 				return 0, err
 			}
-		}
 
-		err = index.Train(vecs)
-		if err != nil {
-			return 0, err
+			err = index.Train(vecs)
+			if err != nil {
+				return 0, err
+			}
 		}
 
 		err = index.AddWithIDs(vecs, ids)

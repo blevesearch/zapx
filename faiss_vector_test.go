@@ -5,7 +5,6 @@ package zap
 
 import (
 	"encoding/binary"
-	"fmt"
 	"math"
 	"os"
 	"testing"
@@ -19,7 +18,7 @@ import (
 func getStubDocScores(k int) (ids []uint64, scores []float32, err error) {
 	for i := 0; i < k; i++ {
 		ids = append(ids, uint64(i))
-		scores = append(scores, float32((2*i+3)/200))
+		scores = append(scores, float32(2*i+3)/float32(200))
 	}
 	scores[0] = -scores[0]
 	return ids, scores, nil
@@ -136,34 +135,35 @@ func newStubFieldVec(name string, vector []float32, d int, metric string, fieldO
 	}
 }
 
-func stubVecData() [][]float32 {
-	rv := [][]float32{
-		{1.0, 2.0, 3.0},
-		{12.0, 42.6, 78.65},
-		{6.7, 0.876, 9.45},
-		{7.437, 9.994, 0.407},
-		{4.439, 0.307, 1.063},
-		{6.653, 7.752, 0.972},
-	}
-	return rv
+var stubVecData = [][]float32{
+	{1.0, 2.0, 3.0},
+	{12.0, 42.6, 78.65},
+	{6.7, 0.876, 9.45},
+	{7.437, 9.994, 0.407},
+	{4.439, 0.307, 1.063},
+	{6.653, 7.752, 0.972},
+
+	// flattened nested vectors
+	// len(vec) > dims and len(vec) % dims == 0
+	{1.23, 2.45, 2.867, 3.33, 4.56, 5.67},
+	{0.123, 0.456, 0.789, 0.987, 0.654, 0.321},
 }
 
-func stubVec1Data() [][]float32 {
-	rv := [][]float32{
-		{5.6, 2.3, 9.8},
-		{89.1, 312.7, 940.65},
-		{123.4, 8.98, 0.765},
-		{0.413, 9.054, 3.393},
-		{2.463, 3.388, 2.082},
-		{3.371, 3.473, 6.906},
-	}
-	return rv
+var stubVec1Data = [][]float32{
+	{5.6, 2.3, 9.8},
+	{89.1, 312.7, 940.65},
+	{123.4, 8.98, 0.765},
+	{0.413, 9.054, 3.393},
+	{2.463, 3.388, 2.082},
+	{3.371, 3.473, 6.906},
+	{5.67, 4.56, 3.33, 2.867, 2.45, 1.23},
+	{0.321, 0.654, 0.987, 0.789, 0.456, 0.123},
 }
 
 func buildMultiDocDataset() []index.Document {
 
-	stubVecs := stubVecData()
-	stubVecs1 := stubVec1Data()
+	stubVecs := stubVecData
+	stubVecs1 := stubVec1Data
 
 	doc1 := newStubDocument("a", []*stubField{
 		newStubFieldSplitString("_id", nil, "a", true, false, false),
@@ -215,6 +215,18 @@ func buildMultiDocDataset() []index.Document {
 		newStubFieldVec("stubVec2", stubVecs1[5], 3, "l2", index.IndexField),
 	})
 
+	doc9 := newVecStubDocument("i", []index.Field{
+		newStubFieldSplitString("_id", nil, "i", true, false, false),
+		newStubFieldVec("stubVec", stubVecs[6], 3, "l2", index.IndexField),
+		newStubFieldVec("stubVec2", stubVecs1[6], 3, "l2", index.IndexField),
+	})
+
+	doc10 := newVecStubDocument("j", []index.Field{
+		newStubFieldSplitString("_id", nil, "j", true, false, false),
+		newStubFieldVec("stubVec", stubVecs[7], 3, "l2", index.IndexField),
+		newStubFieldVec("stubVec2", stubVecs1[7], 3, "l2", index.IndexField),
+	})
+
 	results := []index.Document{
 		doc1,
 		doc2,
@@ -224,6 +236,8 @@ func buildMultiDocDataset() []index.Document {
 		doc6,
 		doc7,
 		doc8,
+		doc9,
+		doc10,
 	}
 
 	return results
@@ -315,8 +329,19 @@ func serializeVecs(dataset [][]float32) []float32 {
 	return vecs
 }
 
-func letsCreateVectorIndexOfTypeForTesting(dataset [][]float32, dims int,
+func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
 	indexKey string, isIVF bool) (*faiss.IndexImpl, error) {
+	// input dataset may have flattened nested vectors, len(vec) > dims
+	// Let's fold them back into nested vectors
+	var dataset [][]float32
+	for _, vec := range inputData {
+		numSubVecs := len(vec) / dims
+		for i := 0; i < numSubVecs; i++ {
+			subVec := vec[i*dims : (i+1)*dims]
+			dataset = append(dataset, subVec)
+		}
+	}
+
 	vecs := serializeVecs(dataset)
 
 	idx, err := faiss.IndexFactory(dims, indexKey, faiss.MetricL2)
@@ -344,6 +369,29 @@ func letsCreateVectorIndexOfTypeForTesting(dataset [][]float32, dims int,
 	idx.AddWithIDs(vecs, ids)
 
 	return idx, nil
+}
+
+func calculateL2Score(qVec []float32, vec []float32) float32 {
+	var score float32
+	for i := 0; i < len(qVec); i++ {
+		score += (qVec[i] - vec[i]) * (qVec[i] - vec[i])
+	}
+	return score
+}
+
+// returns true, if scores are equal upto precision
+// false, expectedScore, gotScore, if scores are not equal
+func compareL2Scores(gotScore float32, qVec []float32, vec []float32,
+	precision int) (bool, int, int) {
+	multiplier := float32(math.Pow10(precision))
+	expectedScoreInt := int(calculateL2Score(qVec, vec) * multiplier)
+	gotScoreInt := int(gotScore * multiplier)
+
+	if gotScoreInt == expectedScoreInt {
+		return true, expectedScoreInt, gotScoreInt
+	}
+
+	return false, expectedScoreInt, gotScoreInt
 }
 
 func TestVectorSegment(t *testing.T) {
@@ -383,9 +431,8 @@ func TestVectorSegment(t *testing.T) {
 		t.Fatal("vector field doesn't support doc values")
 	}
 
-	data := stubVecData()
-	vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3, "IDMap2,Flat",
-		false)
+	data := stubVecData
+	vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3, "IDMap2,Flat", false)
 	if err != nil {
 		t.Fatalf("error creating vector index %v", err)
 	}
@@ -402,6 +449,9 @@ func TestVectorSegment(t *testing.T) {
 		t.Fatalf("expected %d vecs got %d vecs", vecIndex.Ntotal(), numVecs)
 	}
 
+	queryVec := []float32{0.0, 0.0, 0.0}
+	hitDocIDs := []uint64{2, 9, 9}
+	hitVecs := [][]float32{data[0], data[7][0:3], data[7][3:6]}
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
 		searchVectorIndex, closeVectorIndex, err := vecSeg.InterpretVectorIndex("stubVec")
 		if err != nil {
@@ -415,6 +465,7 @@ func TestVectorSegment(t *testing.T) {
 		}
 		itr := pl.Iterator(nil)
 
+		hitCounter := 0
 		for {
 			next, err := itr.Next()
 			if err != nil {
@@ -424,7 +475,19 @@ func TestVectorSegment(t *testing.T) {
 			if next == nil {
 				break
 			}
-			fmt.Printf("similar vec %v score %v\n", next.Number(), next.Score())
+
+			expectedDocID := hitDocIDs[hitCounter]
+			if next.Number() != expectedDocID {
+				t.Fatalf("expected %d got %d", expectedDocID, next.Number())
+			}
+
+			ok, expectedScore, gotScore := compareL2Scores(next.Score(),
+				queryVec, hitVecs[hitCounter], 3)
+			if !ok {
+				t.Fatalf("expected %d got %d", expectedScore, gotScore)
+			}
+
+			hitCounter++
 		}
 		closeVectorIndex()
 	}
@@ -460,6 +523,10 @@ func TestPersistedVectorSegment(t *testing.T) {
 		_ = os.RemoveAll(path)
 	}()
 
+	data := stubVecData
+	queryVec := []float32{0.0, 0.0, 0.0}
+	hitDocIDs := []uint64{2, 9, 9}
+	hitVecs := [][]float32{data[0], data[7][0:3], data[7][3:6]}
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
 		searchVectorIndex, closeVectorIndex, err := vecSeg.InterpretVectorIndex("stubVec")
 		if err != nil {
@@ -474,6 +541,7 @@ func TestPersistedVectorSegment(t *testing.T) {
 
 		itr := pl.Iterator(nil)
 
+		hitCounter := 0
 		for {
 			next, err := itr.Next()
 			if err != nil {
@@ -483,7 +551,20 @@ func TestPersistedVectorSegment(t *testing.T) {
 			if next == nil {
 				break
 			}
-			fmt.Printf("similar vec %v score %v\n", next.Number(), next.Score())
+
+
+			expectedDocID := hitDocIDs[hitCounter]
+			if next.Number() != expectedDocID {
+				t.Fatalf("expected %d got %d", expectedDocID, next.Number())
+			}
+
+			ok, expectedScore, gotScore := compareL2Scores(next.Score(),
+				queryVec, hitVecs[hitCounter], 3)
+			if !ok {
+				t.Fatalf("expected %d got %d", expectedScore, gotScore)
+			}
+
+			hitCounter++
 		}
 		closeVectorIndex()
 	}

@@ -533,7 +533,7 @@ func TestPersistedVectorSegment(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		pl, err := searchVectorIndex("stubVec",[]float32{0.0, 0.0, 0.0}, 3, nil)
+		pl, err := searchVectorIndex("stubVec", []float32{0.0, 0.0, 0.0}, 3, nil)
 		if err != nil {
 			closeVectorIndex()
 			t.Fatal(err)

@@ -316,10 +316,10 @@ func serializeVecs(dataset [][]float32) []float32 {
 }
 
 func letsCreateVectorIndexOfTypeForTesting(dataset [][]float32, dims int,
-	index_key string, isIVF bool) (*faiss.IndexImpl, error) {
+	indexKey string, isIVF bool) (*faiss.IndexImpl, error) {
 	vecs := serializeVecs(dataset)
 
-	idx, err := faiss.IndexFactory(dims, index_key, faiss.MetricL2)
+	idx, err := faiss.IndexFactory(dims, indexKey, faiss.MetricL2)
 	if err != nil {
 		return nil, err
 	}

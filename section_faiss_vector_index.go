@@ -564,15 +564,11 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 	dim := field.Dims()
 	metric := field.Similarity()
 
-	// Embedder is supposed to make sure len(vec) is a multiple of dim.
+	// caller is supposed to make sure len(vec) is a multiple of dim.
 	// Not double checking it here to avoid the overhead.
-	numSubVecs := len(vec) / int(dim)
+	numSubVecs := len(vec) / dim
 	for i := 0; i < numSubVecs; i++ {
-		subVec := vec[i*int(dim) : (i+1)*int(dim)]
-
-		if subVec == nil {
-			continue
-		}
+		subVec := vec[i*dim : (i+1)*dim]
 
 		// NOTE: currently, indexing only unique vectors.
 		subVecHash := hashCode(subVec)

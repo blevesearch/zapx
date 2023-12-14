@@ -329,8 +329,9 @@ func serializeVecs(dataset [][]float32) []float32 {
 	return vecs
 }
 
-func letsCreateVectorIndexForTesting(inputData [][]float32, dims int, similarity string) (*faiss.IndexImpl, error) {
-	// input data may have flattened nested vectors, len(vec) > dims
+func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
+	indexKey string, isIVF bool) (*faiss.IndexImpl, error) {
+	// input dataset may have flattened nested vectors, len(vec) > dims
 	// Let's fold them back into nested vectors
 	var dataset [][]float32
 	for _, vec := range inputData {
@@ -343,16 +344,26 @@ func letsCreateVectorIndexForTesting(inputData [][]float32, dims int, similarity
 
 	vecs := serializeVecs(dataset)
 
-	idx, err := faiss.IndexFactory(dims, "IDMap2,Flat", faiss.MetricL2)
+	idx, err := faiss.IndexFactory(dims, indexKey, faiss.MetricL2)
 	if err != nil {
 		return nil, err
 	}
 
-	idx.Train(vecs)
-
 	ids := make([]int64, len(dataset))
 	for i := 0; i < len(dataset); i++ {
 		ids[i] = int64(i)
+	}
+
+	if isIVF {
+		err = idx.SetDirectMap(2)
+		if err != nil {
+			return nil, err
+		}
+
+		err = idx.Train(vecs)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	idx.AddWithIDs(vecs, ids)
@@ -421,7 +432,7 @@ func TestVectorSegment(t *testing.T) {
 	}
 
 	data := stubVecData
-	vecIndex, err := letsCreateVectorIndexForTesting(data, 3, "l2")
+	vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3, "IDMap2,Flat", false)
 	if err != nil {
 		t.Fatalf("error creating vector index %v", err)
 	}

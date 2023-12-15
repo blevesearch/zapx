@@ -83,10 +83,9 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
 	vo := v.getvectorIndexOpaque(opaque)
 
-LOOP:
 	for fieldID, fieldName := range fieldsInv {
 
-		var indexes []vecIndexMeta
+		indexes := make([]vecIndexMeta, len(segments))
 		vecToDocID := make(map[int64]*roaring.Bitmap)
 
 		// todo: would parallely fetching the following stuff from segments
@@ -104,7 +103,7 @@ LOOP:
 			// is to be used while consulting the fieldsSectionsMap
 			pos := int(sb.fieldsSectionsMap[sb.fieldsMap[fieldName]-1][SectionFaissVectorIndex])
 			if pos == 0 {
-				continue LOOP
+				continue
 			}
 
 			// loading doc values - adhering to the sections format. never
@@ -118,16 +117,16 @@ LOOP:
 			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
-			indexes = append(indexes, vecIndexMeta{
+			indexes[segI] = vecIndexMeta{
 				startOffset: pos,
 				indexSize:   indexSize,
-			})
+			}
 
 			pos += int(indexSize)
 
 			numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
-			indexes[len(indexes)-1].vecIds = make([]int64, 0, numVecs)
+			indexes[segI].vecIds = make([]int64, 0, numVecs)
 
 			for i := 0; i < int(numVecs); i++ {
 				vecID, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
@@ -165,9 +164,9 @@ LOOP:
 					// delete it from the specific vector index later on.
 					if bitMap.GetCardinality() > 0 {
 						vecToDocID[vecID] = bitMap
-						indexes[len(indexes)-1].vecIds = append(indexes[len(indexes)-1].vecIds, vecID)
+						indexes[segI].vecIds = append(indexes[segI].vecIds, vecID)
 					} else {
-						indexes[len(indexes)-1].deleted = append(indexes[len(indexes)-1].deleted, vecID)
+						indexes[segI].deleted = append(indexes[segI].deleted, vecID)
 					}
 				} else {
 					vecToDocID[vecID].Or(bitMap)
@@ -298,6 +297,9 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	var vecIndexes []*faiss.IndexImpl
 	for segI, seg := range sbs {
 		// read the index bytes. todo: parallelize this
+		if indexes[segI].startOffset == 0 {
+			continue
+		}
 		indexBytes := seg.mem[indexes[segI].startOffset : indexes[segI].startOffset+int(indexes[segI].indexSize)]
 		index, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
 		if err != nil {
@@ -305,6 +307,11 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			return err
 		}
 		vecIndexes = append(vecIndexes, index)
+	}
+
+	// no vector indexes to merge
+	if vecIndexes == nil {
+		return nil
 	}
 
 	defer freeReconstructedIndexes(vecIndexes)

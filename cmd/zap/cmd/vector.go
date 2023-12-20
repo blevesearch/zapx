@@ -67,9 +67,11 @@ var vectorCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("error while parsing the field data %v", err)
 			}
+			// add panic check here.
 			if fieldInv[len(fieldInv)-1] == args[1] {
 				vectorSectionOffset, ok := fieldSectionMap[uint16(zap.SectionFaissVectorIndex)]
 				if !ok {
+					fmt.Printf("failed this \n")
 					return fmt.Errorf("the specified field doesn't have a vector section in it.")
 				}
 				numVecs, indexSize, vecDocIDMap, index, err := decodeSection(data, vectorSectionOffset)
@@ -127,6 +129,10 @@ func decodeSection(data []byte, start uint64) (int, int, map[int64][]uint32, *fa
 
 	_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += n
+
+	indexType, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+	pos += n
+	fmt.Printf("index type is %v \n", indexType)
 
 	// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
 	indexSize, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])

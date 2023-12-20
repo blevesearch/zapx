@@ -278,6 +278,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
 	vecDocIDMap := make(map[int64][]uint32)
+	var indexTypeInt uint64
 
 	searchVectorIndex := func(field string, qVector []float32,
 		k int64, except *roaring.Bitmap) (segment.VecPostingsList, error) {
@@ -297,9 +298,26 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 			return rv, nil
 		}
 
-		scores, ids, err := vecIndex.Search(qVector, k)
-		if err != nil {
-			return nil, err
+		var scores []float32
+		var ids []int64
+		var err error
+		// only for IVF indexes.
+		// Again, nprobe as a search criteria is very limited to IVF indexes.
+		// In future, if we change to let's say a diff type which requires a diff
+		// query time parameter, it'll require changes again
+		// hence, let's stick to query time categories(speed/recall) and based on
+		// index type, we can tweak an index specific param to optimize for either.
+
+		// Just for dummy testing, I'm changing nprobe to half the existing value
+		// so that search latency is reduced.
+		if indexTypeInt == 1 {
+			nprobe, _ := vecIndex.Nlist()
+			scores, ids, err = vecIndex.Search_with_nprobe(qVector, k, int32(nprobe/2))
+		} else {
+			scores, ids, err = vecIndex.Search(qVector, k)
+			if err != nil {
+				return nil, err
+			}
 		}
 		// for every similar vector returned by the Search() API, add the corresponding
 		// docID and the score to the newly created vecPostingsList
@@ -347,6 +365,11 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 	pos += n
 
 	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
+	// reading index type
+	// use it to check if searching with nprobe() is valid.
+	indexTypeInt, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
 	// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.

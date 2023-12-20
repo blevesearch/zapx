@@ -20,6 +20,7 @@ package zap
 import (
 	"encoding/binary"
 	"math"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
@@ -64,6 +65,8 @@ type vecIndexMeta struct {
 	indexSize   uint64
 	vecIds      []int64
 	deleted     []int64
+
+	indexType uint64
 }
 
 func remapDocIDs(oldIDs *roaring.Bitmap, newIDs []uint64) *roaring.Bitmap {
@@ -114,12 +117,16 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
+			indexTypeInt, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+
 			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
 			indexes[segI] = vecIndexMeta{
 				startOffset: pos,
 				indexSize:   indexSize,
+				indexType:   indexTypeInt,
 			}
 
 			pos += int(indexSize)
@@ -183,7 +190,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 }
 
 func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bitmap,
-	serializedIndex []byte, w *CountHashWriter) (int, error) {
+	serializedIndex []byte, indextype uint64, w *CountHashWriter) (int, error) {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 
 	fieldStart := w.Count()
@@ -195,6 +202,14 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 		return 0, err
 	}
 	n = binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
+	_, err = w.Write(tempBuf[:n])
+	if err != nil {
+		return 0, err
+	}
+
+	// right before the index size
+	// also need to do it apart from merge
+	n = binary.PutUvarint(tempBuf, indextype)
 	_, err = w.Write(tempBuf[:n])
 	if err != nil {
 		return 0, err
@@ -266,7 +281,8 @@ func reconstructionRequired(isNewIndexIVF bool, indexes []vecIndexMeta) bool {
 
 	// if any existing index is not flat, all need to be reconstructed.
 	for _, index := range indexes {
-		_, isExistingIndexIVF := getIndexType(len(index.vecIds) + len(index.deleted))
+		// read the index type from disk so using it here
+		isExistingIndexIVF := index.indexType == 1
 		if isExistingIndexIVF {
 			return true
 		}
@@ -318,10 +334,12 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 
 	var mergedIndexBytes []byte
 	// index type to be created after merge.
-	indexType, isIVF := getIndexType(len(vecToDocID))
+	nlist := getNumCentroids(len(vecToDocID))
+	indexType, isIVF := getIndexType(len(vecToDocID), nlist)
 
 	if reconstructionRequired(isIVF, indexes) {
 		// merging of indexes with reconstruction
+		// merging of more complex index types (for eg ivf family) with reconstruction
 		// method. the indexes[i].vecIds is such that it has only the valid vecs
 		// of this vector index present in it, so we'd be reconstructed only the
 		// valid ones.
@@ -358,6 +376,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			if err != nil {
 				return err
 			}
+
+			index.SetNProbe(int32(math.Sqrt(float64(nlist))))
 
 			// train the vector index, essentially performs k-means clustering to partition
 			// the data space of indexData such that during the search time, we probe
@@ -407,7 +427,13 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			return err
 		}
 	}
-	fieldStart, err := v.flushVectorSection(vecToDocID, mergedIndexBytes, w)
+
+	mergedIndexType := 0
+	if isIVF {
+		mergedIndexType = 1
+	}
+
+	fieldStart, err := v.flushVectorSection(vecToDocID, mergedIndexBytes, uint64(mergedIndexType), w)
 	if err != nil {
 		return err
 	}
@@ -433,13 +459,37 @@ func (v *vectorIndexOpaque) grabBuf(size int) []byte {
 	return buf[0:size]
 }
 
-func getIndexType(nVecs int) (string, bool) {
+func getNumCentroids(nVecs int) int {
+	var nlist int
+
 	switch {
-	case nVecs > 10000:
-		return "IVF100,SQ8", true
-	// default minimum number of training points per cluster is 39
-	case nVecs >= 390:
-		return "IVF10,Flat", true
+	// At 1M vectors, nlist = 4k gave a reasonably high recall with the right nprobe and
+	// hence, 1M/100 = 10000 centroids would increase training time without
+	// corresponding increase in recall
+	case nVecs >= 1000000:
+		nlist = int(4 * math.Sqrt(float64(nVecs)))
+	case nVecs >= 1000:
+		// 100 points per cluster
+		nlist = nVecs / 100
+	}
+	return nlist
+}
+
+func getIndexType(nVecs, nlist int) (string, bool) {
+	// nlist := getNumCentroids(nVecs)
+	switch {
+	case nVecs >= 10000:
+		return "IVF" + strconv.Itoa(nlist) + ",SQ8", true
+	// Earlier, 6k vectors --> 10 centroids
+	// Now, 6k/100 = 60 centroids.
+	// Earlier, 90k vectors --> 100 centroids
+	// Now, 90k/100 = 900 centroids.
+	case nVecs >= 400:
+		// https://github.com/facebookresearch/faiss/blob/131adc57432eddb2d00113e326f7245457edfc41/demos/demo_ivfpq_indexing.cpp#L42
+		return "IVF" + strconv.Itoa(nlist) + ",Flat", true
+		// default minimum number of training points per cluster is 39
+	// The earlier nlist assignment where upto 10k vectors, 10 centroids were used
+	// was wrong since that's possible only till 256 * 10 = 2560 vectors.
 	default:
 		return "IDMap2,Flat", false
 	}
@@ -464,7 +514,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			metric = faiss.MetricInnerProduct
 		}
 
-		indexType, isIVF := getIndexType(len(ids))
+		nlist := getNumCentroids(len(ids))
+		indexType, isIVF := getIndexType(len(ids), nlist)
 		// create an index - currently keeping it as flat for faster data ingest
 		index, err := faiss.IndexFactory(int(content.dim), indexType, metric)
 		if err != nil {
@@ -505,6 +556,18 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			return 0, err
 		}
 		n = binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return 0, err
+		}
+
+		// TODO Don't calculate this this way
+		// should be returned from the index type function itself.
+		indexTypeInt := 0
+		if isIVF {
+			indexTypeInt = 1
+		}
+		n = binary.PutUvarint(tempBuf, uint64(indexTypeInt))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return 0, err

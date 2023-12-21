@@ -20,7 +20,9 @@ func getStubDocScores(k int) (ids []uint64, scores []float32, err error) {
 		ids = append(ids, uint64(i))
 		scores = append(scores, float32(2*i+3)/float32(200))
 	}
+	// having some negative scores -> possible due to dot product
 	scores[0] = -scores[0]
+	scores[4] = -scores[4]
 	return ids, scores, nil
 }
 
@@ -37,7 +39,7 @@ func TestVecPostingsIterator(t *testing.T) {
 	docIDs := make(map[uint64]float32)
 
 	for i, id := range ids {
-		code := uint64(id)<<32 | uint64(math.Float32bits(scores[i]))
+		code := getVectorCode(uint32(id), scores[i])
 		vecPL.postings.Add(code)
 		docIDs[id] = scores[i]
 	}
@@ -551,7 +553,6 @@ func TestPersistedVectorSegment(t *testing.T) {
 			if next == nil {
 				break
 			}
-
 
 			expectedDocID := hitDocIDs[hitCounter]
 			if next.Number() != expectedDocID {

@@ -84,8 +84,9 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 	vo := v.getvectorIndexOpaque(opaque)
 
 	for fieldID, fieldName := range fieldsInv {
-
-		indexes := make([]vecIndexMeta, len(segments))
+		indexes := make([]*vecIndexMeta, 0, len(segments))
+		// the segments with valid vector sections in them
+		vecSegs := make([]*SegmentBase, 0, len(segments))
 		vecToDocID := make(map[int64]*roaring.Bitmap)
 
 		// todo: would parallely fetching the following stuff from segments
@@ -117,16 +118,18 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
-			indexes[segI] = vecIndexMeta{
+			vecSegs = append(vecSegs, sb)
+			indexes = append(indexes, &vecIndexMeta{
 				startOffset: pos,
 				indexSize:   indexSize,
-			}
+			})
 
 			pos += int(indexSize)
 
 			numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
-			indexes[segI].vecIds = make([]int64, 0, numVecs)
+			curIdx := len(indexes) - 1
+			indexes[curIdx].vecIds = make([]int64, 0, numVecs)
 
 			for i := 0; i < int(numVecs); i++ {
 				vecID, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
@@ -164,16 +167,16 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 					// delete it from the specific vector index later on.
 					if bitMap.GetCardinality() > 0 {
 						vecToDocID[vecID] = bitMap
-						indexes[segI].vecIds = append(indexes[segI].vecIds, vecID)
+						indexes[curIdx].vecIds = append(indexes[curIdx].vecIds, vecID)
 					} else {
-						indexes[segI].deleted = append(indexes[segI].deleted, vecID)
+						indexes[curIdx].deleted = append(indexes[curIdx].deleted, vecID)
 					}
 				} else {
 					vecToDocID[vecID].Or(bitMap)
 				}
 			}
 		}
-		err := vo.mergeAndWriteVectorIndexes(fieldID, segments, vecToDocID, indexes, w, closeCh)
+		err := vo.mergeAndWriteVectorIndexes(fieldID, vecSegs, vecToDocID, indexes, w, closeCh)
 		if err != nil {
 			return err
 		}
@@ -258,7 +261,7 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 // Func which returns if reconstruction is required.
 // Won't be required if multiple flat indexes are being combined into a larger
 // flat index.
-func reconstructionRequired(isNewIndexIVF bool, indexes []vecIndexMeta) bool {
+func reconstructionRequired(isNewIndexIVF bool, indexes []*vecIndexMeta) bool {
 	// Always required for IVF indexes.
 	if isNewIndexIVF {
 		return true
@@ -266,7 +269,8 @@ func reconstructionRequired(isNewIndexIVF bool, indexes []vecIndexMeta) bool {
 
 	// if any existing index is not flat, all need to be reconstructed.
 	for _, index := range indexes {
-		_, isExistingIndexIVF := getIndexType(len(index.vecIds) + len(index.deleted))
+		_, isExistingIndexIVF := getIndexType(len(index.vecIds) +
+			len(index.deleted))
 		if isExistingIndexIVF {
 			return true
 		}
@@ -292,14 +296,11 @@ func removeDeletedVectors(index *faiss.IndexImpl, ids []int64) error {
 // todo: naive implementation. need to keep in mind the perf implications and improve on this.
 // perhaps, parallelized merging can help speed things up over here.
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*SegmentBase,
-	vecToDocID map[int64]*roaring.Bitmap, indexes []vecIndexMeta, w *CountHashWriter, closeCh chan struct{}) error {
+	vecToDocID map[int64]*roaring.Bitmap, indexes []*vecIndexMeta, w *CountHashWriter, closeCh chan struct{}) error {
 
 	var vecIndexes []*faiss.IndexImpl
 	for segI, seg := range sbs {
 		// read the index bytes. todo: parallelize this
-		if indexes[segI].startOffset == 0 {
-			continue
-		}
 		indexBytes := seg.mem[indexes[segI].startOffset : indexes[segI].startOffset+int(indexes[segI].indexSize)]
 		index, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
 		if err != nil {
@@ -330,12 +331,24 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			if isClosed(closeCh) {
 				return seg.ErrClosed
 			}
-			// todo: parallelize reconstruction
-			recons, err := vecIndexes[i].ReconstructBatch(int64(len(indexes[i].vecIds)), indexes[i].vecIds)
-			if err != nil {
-				return err
+
+			// reconstruct the vectors only if present, it could be that
+			// some of the indexes had all of their vectors updated/deleted.
+			if len(indexes[i].vecIds) > 0 {
+				// todo: parallelize reconstruction
+				recons, err := vecIndexes[i].ReconstructBatch(int64(len(indexes[i].vecIds)),
+					indexes[i].vecIds)
+				if err != nil {
+					return err
+				}
+				indexData = append(indexData, recons...)
 			}
-			indexData = append(indexData, recons...)
+		}
+
+		if len(indexData) == 0 {
+			// no valid vectors for this index, so we don't even have to
+			// record it in the section
+			return nil
 		}
 
 		// safe to assume that all the indexes are of the same config values, given
@@ -417,8 +430,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 }
 
 // todo: can be parallelized.
-func freeReconstructedIndexes(vecIndexes []*faiss.IndexImpl) {
-	for _, index := range vecIndexes {
+func freeReconstructedIndexes(indexes []*faiss.IndexImpl) {
+	for _, index := range indexes {
 		index.Close()
 	}
 }

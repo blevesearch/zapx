@@ -84,11 +84,10 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 	vo := v.getvectorIndexOpaque(opaque)
 
 	for fieldID, fieldName := range fieldsInv {
-
 		indexes := make([]*vecIndexMeta, 0, len(segments))
+		// the segments with valid vector sections in them
+		vecSegs := make([]*SegmentBase, 0, len(segments))
 		vecToDocID := make(map[int64]*roaring.Bitmap)
-
-		var vecSegs []*SegmentBase // the segments with valid vector in them
 
 		// todo: would parallely fetching the following stuff from segments
 		// be beneficial in terms of perf?
@@ -129,7 +128,8 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 
 			numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
-			indexes[len(indexes)-1].vecIds = make([]int64, 0, numVecs)
+			curIdx := len(indexes) - 1
+			indexes[curIdx].vecIds = make([]int64, 0, numVecs)
 
 			for i := 0; i < int(numVecs); i++ {
 				vecID, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
@@ -167,9 +167,9 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 					// delete it from the specific vector index later on.
 					if bitMap.GetCardinality() > 0 {
 						vecToDocID[vecID] = bitMap
-						indexes[len(indexes)-1].vecIds = append(indexes[len(indexes)-1].vecIds, vecID)
+						indexes[curIdx].vecIds = append(indexes[curIdx].vecIds, vecID)
 					} else {
-						indexes[len(indexes)-1].deleted = append(indexes[len(indexes)-1].deleted, vecID)
+						indexes[curIdx].deleted = append(indexes[curIdx].deleted, vecID)
 					}
 				} else {
 					vecToDocID[vecID].Or(bitMap)
@@ -323,7 +323,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 
 	if reconstructionRequired(isIVF, indexes) {
 		// merging of indexes with reconstruction
-		// method. the meta.indexes[i].vecIds is such that it has only the valid vecs
+		// method. the indexes[i].vecIds is such that it has only the valid vecs
 		// of this vector index present in it, so we'd be reconstructed only the
 		// valid ones.
 		var indexData []float32

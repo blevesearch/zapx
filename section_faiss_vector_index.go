@@ -207,8 +207,6 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 		return 0, err
 	}
 
-	// right before the index size
-	// also need to do it apart from merge
 	n = binary.PutUvarint(tempBuf, indextype)
 	_, err = w.Write(tempBuf[:n])
 	if err != nil {
@@ -273,17 +271,15 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 // Func which returns if reconstruction is required.
 // Won't be required if multiple flat indexes are being combined into a larger
 // flat index.
-func reconstructionRequired(isNewIndexIVF bool, indexes []vecIndexMeta) bool {
+func reconstructionRequired(newIndexType int, indexes []vecIndexMeta) bool {
 	// Always required for IVF indexes.
-	if isNewIndexIVF {
+	if newIndexType == IndexTypeIVF {
 		return true
 	}
 
 	// if any existing index is not flat, all need to be reconstructed.
 	for _, index := range indexes {
-		// read the index type from disk so using it here
-		isExistingIndexIVF := index.indexType == 1
-		if isExistingIndexIVF {
+		if index.indexType != IndexTypeFlat {
 			return true
 		}
 	}
@@ -335,9 +331,9 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	var mergedIndexBytes []byte
 	// index type to be created after merge.
 	nlist := getNumCentroids(len(vecToDocID))
-	indexType, isIVF := getIndexType(len(vecToDocID), nlist)
+	indexFactoryString, indexType := getIndexType(len(vecToDocID), nlist)
 
-	if reconstructionRequired(isIVF, indexes) {
+	if reconstructionRequired(indexType, indexes) {
 		// merging of indexes with reconstruction
 		// merging of more complex index types (for eg ivf family) with reconstruction
 		// method. the indexes[i].vecIds is such that it has only the valid vecs
@@ -362,13 +358,13 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		metric := vecIndexes[0].MetricType()
 		finalVecIDs := maps.Keys(vecToDocID)
 
-		index, err := faiss.IndexFactory(dims, indexType, metric)
+		index, err := faiss.IndexFactory(dims, indexFactoryString, metric)
 		if err != nil {
 			return err
 		}
 		defer index.Close()
 
-		if isIVF {
+		if indexType == IndexTypeIVF {
 			// the direct map maintained in the IVF index is essential for the
 			// reconstruction of vectors based on vector IDs in the future merges.
 			// the AddWithIDs API also needs a direct map to be set before using.
@@ -428,12 +424,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		}
 	}
 
-	mergedIndexType := 0
-	if isIVF {
-		mergedIndexType = 1
-	}
-
-	fieldStart, err := v.flushVectorSection(vecToDocID, mergedIndexBytes, uint64(mergedIndexType), w)
+	fieldStart, err := v.flushVectorSection(vecToDocID, mergedIndexBytes,
+		uint64(indexType), w)
 	if err != nil {
 		return err
 	}
@@ -475,23 +467,25 @@ func getNumCentroids(nVecs int) int {
 	return nlist
 }
 
-func getIndexType(nVecs, nlist int) (string, bool) {
-	// nlist := getNumCentroids(nVecs)
+const IndexTypeIVF = 1
+const IndexTypeFlat = 0
+
+func getIndexType(nVecs, nlist int) (string, int) {
 	switch {
 	case nVecs >= 10000:
-		return "IVF" + strconv.Itoa(nlist) + ",SQ8", true
+		return "IVF" + strconv.Itoa(nlist) + ",SQ8", IndexTypeIVF
 	// Earlier, 6k vectors --> 10 centroids
 	// Now, 6k/100 = 60 centroids.
 	// Earlier, 90k vectors --> 100 centroids
 	// Now, 90k/100 = 900 centroids.
-	case nVecs >= 400:
+	case nVecs >= 1000:
 		// https://github.com/facebookresearch/faiss/blob/131adc57432eddb2d00113e326f7245457edfc41/demos/demo_ivfpq_indexing.cpp#L42
-		return "IVF" + strconv.Itoa(nlist) + ",Flat", true
+		return "IVF" + strconv.Itoa(nlist) + ",Flat", IndexTypeIVF
 		// default minimum number of training points per cluster is 39
 	// The earlier nlist assignment where upto 10k vectors, 10 centroids were used
 	// was wrong since that's possible only till 256 * 10 = 2560 vectors.
 	default:
-		return "IDMap2,Flat", false
+		return "IDMap2,Flat", IndexTypeFlat
 	}
 }
 
@@ -515,16 +509,16 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		}
 
 		nlist := getNumCentroids(len(ids))
-		indexType, isIVF := getIndexType(len(ids), nlist)
+		indexFactoryString, indexType := getIndexType(len(ids), nlist)
 		// create an index - currently keeping it as flat for faster data ingest
-		index, err := faiss.IndexFactory(int(content.dim), indexType, metric)
+		index, err := faiss.IndexFactory(int(content.dim), indexFactoryString, metric)
 		if err != nil {
 			return 0, err
 		}
 
 		defer index.Close()
 
-		if isIVF {
+		if indexType == IndexTypeIVF {
 			err = index.SetDirectMap(2)
 			if err != nil {
 				return 0, err
@@ -561,13 +555,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			return 0, err
 		}
 
-		// TODO Don't calculate this this way
-		// should be returned from the index type function itself.
-		indexTypeInt := 0
-		if isIVF {
-			indexTypeInt = 1
-		}
-		n = binary.PutUvarint(tempBuf, uint64(indexTypeInt))
+		n = binary.PutUvarint(tempBuf, uint64(indexType))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return 0, err

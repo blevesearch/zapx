@@ -311,7 +311,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 		// Just for dummy testing, I'm changing nprobe to half the existing value
 		// so that search latency is reduced.
 		if indexTypeInt == 1 {
-			nprobe, _ := vecIndex.Nlist()
+			nprobe, _ := vecIndex.Nprobe()
 			scores, ids, err = vecIndex.Search_with_nprobe(qVector, k, int32(nprobe/2))
 		} else {
 			scores, ids, err = vecIndex.Search(qVector, k)

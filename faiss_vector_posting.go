@@ -19,6 +19,7 @@ package zap
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"reflect"
 
@@ -299,21 +300,25 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 		if err != nil {
 			return nil, err
 		}
+		fmt.Printf("number of ids returned: %v \n", len(ids))
 		// for every similar vector returned by the Search() API, add the corresponding
 		// docID and the score to the newly created vecPostingsList
 		for i := 0; i < len(ids); i++ {
 			vecID := ids[i]
 			docIDs := vecDocIDMap[vecID]
+			fmt.Printf("doc ids for vec ID %v are %+v \n", vecID, docIDs)
 			var code uint64
 			for _, docID := range docIDs {
 				if except != nil && except.Contains(docID) {
 					// ignore the deleted doc
+					fmt.Printf("doc id being deleted is %v \n", docID)
 					continue
 				}
 				code = getVectorCode(docID, scores[i])
 				rv.postings.Add(uint64(code))
 			}
 		}
+		fmt.Printf("length of postings list: %v \n", rv.postings.Stats().Cardinality)
 
 		return rv, nil
 	}
@@ -360,24 +365,6 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 	for i := 0; i < int(numVecs); i++ {
 		vecID, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
-		numDocs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += n
-		bitMap := roaring.NewBitmap()
-		// if the number docs is more than one, load the bitmap containing the
-		// docIDs, else use the optimized format where the single docID is
-		// varint encoded.
-		if numDocs > 1 {
-			bitMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-			pos += n
-			roaringBytes := sb.mem[pos : pos+int(bitMapLen)]
-			pos += int(bitMapLen)
-			_, err = bitMap.FromBuffer(roaringBytes)
-			if err != nil {
-				return nil, nil, err
-			}
-			vecDocIDMap[vecID] = bitMap.ToArray()
-			continue
-		}
 		docID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
 		vecDocIDMap[vecID] = []uint32{uint32(docID)}

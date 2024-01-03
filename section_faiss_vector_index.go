@@ -67,13 +67,11 @@ type vecIndexMeta struct {
 	deleted     []int64
 }
 
-func remapDocIDs(oldIDs *roaring.Bitmap, newIDs []uint64) *roaring.Bitmap {
+func remapDocIDs(oldID uint32, newIDs []uint64) *roaring.Bitmap {
 	newBitmap := roaring.NewBitmap()
 
-	for _, oldID := range oldIDs.ToArray() {
-		if newIDs[oldID] != docDropped {
-			newBitmap.Add(uint32(newIDs[oldID]))
-		}
+	if newIDs[oldID] != docDropped {
+		newBitmap.Add(uint32(newIDs[oldID]))
 	}
 	return newBitmap
 }
@@ -144,7 +142,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 				// remap the docIDs from the old segment to the new document nos.
 				// provided. furthermore, this function also drops the invalid doc nums
 				// of that segment in the resulting bitmap
-				bitMap = remapDocIDs(bitMap, newDocNumsIn[segI])
+				bitMap = remapDocIDs(uint32(docID), newDocNumsIn[segI])
 				if vecToDocID[vecID] == nil {
 					// if the remapped bitmap has valid docs as entries, track it
 					// as part of vecs to be reconstructed (for larger indexes).
@@ -254,42 +252,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 
 	var mergedIndexBytes []byte
 
-	fmt.Printf("merging %v indexes \n", len(vecIndexes))
-	if reconstructionRequired(isIVF, indexes) {
-		// merging of indexes with reconstruction
-		// method. the indexes[i].vecIds is such that it has only the valid vecs
-		// of this vector index present in it, so we'd be reconstructed only the
-		// valid ones.
-		var indexData []float32
-		for i := 0; i < len(vecIndexes); i++ {
-			if isClosed(closeCh) {
-				return seg.ErrClosed
-			}
-
-			// reconstruct the vectors only if present, it could be that
-			// some of the indexes had all of their vectors updated/deleted.
-			if len(indexes[i].vecIds) > 0 {
-				// todo: parallelize reconstruction
-				recons, err := vecIndexes[i].ReconstructBatch(int64(len(indexes[i].vecIds)),
-					indexes[i].vecIds)
-				if err != nil {
-					return err
-				}
-				indexData = append(indexData, recons...)
-			}
-		}
-
-		if len(indexData) == 0 {
-			// no valid vectors for this index, so we don't even have to
-			// record it in the section
-			return nil
-		}
-
-		// safe to assume that all the indexes are of the same config values, given
-		// that they are extracted from the field mapping info.
-		dims := vecIndexes[0].D()
-		metric := vecIndexes[0].MetricType()
-		finalVecIDs := maps.Keys(vecToDocID)
+	var finalVecIDs []int64
 
 	// merging of indexes with reconstruction method.
 	// the indexes[i].vecIds has only the valid vecs of this vector

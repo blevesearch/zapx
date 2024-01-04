@@ -26,7 +26,6 @@ import (
 	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 	seg "github.com/blevesearch/scorch_segment_api/v2"
-	"golang.org/x/exp/maps"
 )
 
 func init() {
@@ -300,6 +299,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	// index type to be created after merge.
 	indexType, isIVF := getIndexType(len(vecToDocID))
 
+	var finalVecIDs []int64
+
 	// merging of indexes with reconstruction
 	// method. the indexes[i].vecIds is such that it has only the valid vecs
 	// of this vector index present in it, so we'd be reconstructed only the
@@ -320,6 +321,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 				return err
 			}
 			indexData = append(indexData, recons...)
+			// Adding vector IDs in the same order as the vectors
+			finalVecIDs = append(finalVecIDs, indexes[i].vecIds...)
 		}
 	}
 
@@ -333,7 +336,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	// that they are extracted from the field mapping info.
 	dims := vecIndexes[0].D()
 	metric := vecIndexes[0].MetricType()
-	finalVecIDs := maps.Keys(vecToDocID)
 
 	index, err := faiss.IndexFactory(dims, indexType, metric)
 	if err != nil {

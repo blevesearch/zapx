@@ -64,6 +64,7 @@ type vecIndexMeta struct {
 	indexSize   uint64
 	vecIds      []int64
 	deleted     []int64
+	indexType   uint64
 }
 
 func remapDocIDs(oldIDs *roaring.Bitmap, newIDs []uint64) *roaring.Bitmap {
@@ -115,6 +116,9 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
+			indexTypeInt, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+
 			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
@@ -122,6 +126,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			indexes = append(indexes, &vecIndexMeta{
 				startOffset: pos,
 				indexSize:   indexSize,
+				indexType:   indexTypeInt,
 			})
 
 			pos += int(indexSize)
@@ -186,7 +191,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 }
 
 func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bitmap,
-	serializedIndex []byte, w *CountHashWriter) (int, error) {
+	serializedIndex []byte, indextype uint64, w *CountHashWriter) (int, error) {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 
 	fieldStart := w.Count()
@@ -198,6 +203,12 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 		return 0, err
 	}
 	n = binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
+	_, err = w.Write(tempBuf[:n])
+	if err != nil {
+		return 0, err
+	}
+
+	n = binary.PutUvarint(tempBuf, indextype)
 	_, err = w.Write(tempBuf[:n])
 	if err != nil {
 		return 0, err
@@ -259,19 +270,17 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 }
 
 // Func which returns if reconstruction is required.
-// Won't be required if multiple flat indexes are being combined into a larger
-// flat index.
-func reconstructionRequired(isNewIndexIVF bool, indexes []*vecIndexMeta) bool {
+func reconstructionRequired(newIndexType int, indexes []*vecIndexMeta) bool {
 	// Always required for IVF indexes.
-	if isNewIndexIVF {
+	if newIndexType == indexTypeIVF {
 		return true
 	}
 
-	// if any existing index is not flat, all need to be reconstructed.
+	// Won't be required if multiple flat indexes are being combined into a larger
+	// flat index.
+	// if any existing/future index is not flat, all need to be reconstructed.
 	for _, index := range indexes {
-		_, isExistingIndexIVF := getIndexType(len(index.vecIds) +
-			len(index.deleted))
-		if isExistingIndexIVF {
+		if index.indexType == indexTypeIVF {
 			return true
 		}
 	}
@@ -319,9 +328,9 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 
 	var mergedIndexBytes []byte
 	// index type to be created after merge.
-	indexType, isIVF := getIndexType(len(vecToDocID))
+	indexTypeString, indexType := getIndexType(len(vecToDocID))
 
-	if reconstructionRequired(isIVF, indexes) {
+	if reconstructionRequired(indexType, indexes) {
 		// merging of indexes with reconstruction
 		// method. the indexes[i].vecIds is such that it has only the valid vecs
 		// of this vector index present in it, so we'd be reconstructed only the
@@ -357,13 +366,13 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		metric := vecIndexes[0].MetricType()
 		finalVecIDs := maps.Keys(vecToDocID)
 
-		index, err := faiss.IndexFactory(dims, indexType, metric)
+		index, err := faiss.IndexFactory(dims, indexTypeString, metric)
 		if err != nil {
 			return err
 		}
 		defer index.Close()
 
-		if isIVF {
+		if indexType == indexTypeIVF {
 			// the direct map maintained in the IVF index is essential for the
 			// reconstruction of vectors based on vector IDs in the future merges.
 			// the AddWithIDs API also needs a direct map to be set before using.
@@ -420,7 +429,9 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			return err
 		}
 	}
-	fieldStart, err := v.flushVectorSection(vecToDocID, mergedIndexBytes, w)
+
+	fieldStart, err := v.flushVectorSection(vecToDocID, mergedIndexBytes,
+		uint64(indexType), w)
 	if err != nil {
 		return err
 	}
@@ -446,17 +457,20 @@ func (v *vectorIndexOpaque) grabBuf(size int) []byte {
 	return buf[0:size]
 }
 
-func getIndexType(nVecs int) (string, bool) {
+func getIndexType(nVecs int) (string, int) {
 	switch {
 	case nVecs > 10000:
-		return "IVF100,SQ8", true
+		return "IVF100,SQ8", indexTypeIVF
 	// default minimum number of training points per cluster is 39
 	case nVecs >= 390:
-		return "IVF10,Flat", true
+		return "IVF10,Flat", indexTypeIVF
 	default:
-		return "IDMap2,Flat", false
+		return "IDMap2,Flat", indexTypeFlat
 	}
 }
+
+const indexTypeIVF = 1
+const indexTypeFlat = 0
 
 func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint64, err error) {
 	// for every fieldID, contents to store over here are:
@@ -477,16 +491,16 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			metric = faiss.MetricInnerProduct
 		}
 
-		indexType, isIVF := getIndexType(len(ids))
+		indexTypeString, indexType := getIndexType(len(ids))
 		// create an index - currently keeping it as flat for faster data ingest
-		index, err := faiss.IndexFactory(int(content.dim), indexType, metric)
+		index, err := faiss.IndexFactory(int(content.dim), indexTypeString, metric)
 		if err != nil {
 			return 0, err
 		}
 
 		defer index.Close()
 
-		if isIVF {
+		if indexType == indexTypeIVF {
 			err = index.SetDirectMap(2)
 			if err != nil {
 				return 0, err
@@ -518,6 +532,12 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			return 0, err
 		}
 		n = binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return 0, err
+		}
+
+		n = binary.PutUvarint(tempBuf, uint64(indexType))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return 0, err

@@ -128,6 +128,9 @@ func decodeSection(data []byte, start uint64) (int, int, map[int64][]uint32, *fa
 	_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
+	_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
 	// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
 	indexSize, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += n

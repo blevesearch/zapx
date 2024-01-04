@@ -347,6 +347,10 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
+	// reading index type.
+	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
 	// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
 	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n

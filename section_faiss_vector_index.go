@@ -257,20 +257,6 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 	return fieldStart, nil
 }
 
-func removeDeletedVectors(index *faiss.IndexImpl, ids []int64) error {
-	sel, err := faiss.NewIDSelectorBatch(ids)
-	if err != nil {
-		return err
-	}
-
-	defer sel.Delete()
-	_, err = index.RemoveIDs(sel)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 // todo: naive implementation. need to keep in mind the perf implications and improve on this.
 // perhaps, parallelized merging can help speed things up over here.
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*SegmentBase,

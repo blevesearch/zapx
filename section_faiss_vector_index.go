@@ -287,10 +287,9 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 
 	var finalVecIDs []int64
 
-	// merging of indexes with reconstruction
-	// method. the indexes[i].vecIds is such that it has only the valid vecs
-	// of this vector index present in it, so we'd be reconstructed only the
-	// valid ones.
+	// merging of indexes with reconstruction method.
+	// the indexes[i].vecIds has only the valid vecs of this vector
+	// index present in it, so we'd be reconstructing only those.
 	var indexData []float32
 	for i := 0; i < len(vecIndexes); i++ {
 		if isClosed(closeCh) {

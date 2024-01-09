@@ -19,8 +19,8 @@ package zap
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
-	"strconv"
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
@@ -319,20 +319,20 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	// index type to be created after merge based on the number of vectors in
 	// indexData added into the index.
 	nlist := getNumCentroids(len(finalVecIDs))
-	indexType, indexCategory := getIndexType(len(finalVecIDs), nlist)
+	indexDescription, indexClass := getIndexType(len(finalVecIDs), nlist)
 
 	// safe to assume that all the indexes are of the same config values, given
 	// that they are extracted from the field mapping info.
 	dims := vecIndexes[0].D()
 	metric := vecIndexes[0].MetricType()
 
-	index, err := faiss.IndexFactory(dims, indexType, metric)
+	index, err := faiss.IndexFactory(dims, indexDescription, metric)
 	if err != nil {
 		return err
 	}
 	defer index.Close()
 
-	if indexCategory == IndexTypeIVF {
+	if indexClass == IndexTypeIVF {
 		// the direct map maintained in the IVF index is essential for the
 		// reconstruction of vectors based on vector IDs in the future merges.
 		// the AddWithIDs API also needs a direct map to be set before using.
@@ -418,10 +418,9 @@ const (
 func getIndexType(nVecs, nlist int) (string, int) {
 	switch {
 	case nVecs >= 10000:
-		return "IVF" + strconv.Itoa(nlist) + ",SQ8", IndexTypeIVF
+		return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF
 	case nVecs >= 1000:
-		return "IVF" + strconv.Itoa(nlist) + ",Flat", IndexTypeIVF
-		// default minimum number of training points per cluster is 39
+		return fmt.Sprintf("IVF%d,Flat", nlist), IndexTypeIVF
 	default:
 		return "IDMap2,Flat", IndexTypeFlat
 	}
@@ -447,16 +446,16 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		}
 
 		nlist := getNumCentroids(len(ids))
-		indexType, indexCategory := getIndexType(len(ids), nlist)
+		indexDescription, indexClass := getIndexType(len(ids), nlist)
 		// create an index - currently keeping it as flat for faster data ingest
-		index, err := faiss.IndexFactory(int(content.dim), indexType, metric)
+		index, err := faiss.IndexFactory(int(content.dim), indexDescription, metric)
 		if err != nil {
 			return 0, err
 		}
 
 		defer index.Close()
 
-		if indexCategory == IndexTypeIVF {
+		if indexClass == IndexTypeIVF {
 			err = index.SetDirectMap(2)
 			if err != nil {
 				return 0, err

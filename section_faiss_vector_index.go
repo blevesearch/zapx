@@ -408,8 +408,10 @@ func getNumCentroids(nVecs int) int {
 	return nlist
 }
 
-const IndexTypeIVF = 1
-const IndexTypeFlat = 0
+const (
+	IndexTypeFlat = iota
+	IndexTypeIVF
+)
 
 // Returns a description string for the index and quantizer type
 // and an index type.

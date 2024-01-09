@@ -20,6 +20,7 @@ package zap
 import (
 	"encoding/binary"
 	"math"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
@@ -282,8 +283,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	defer freeReconstructedIndexes(vecIndexes)
 
 	var mergedIndexBytes []byte
-	// index type to be created after merge.
-	indexType, isIVF := getIndexType(len(vecToDocID))
 
 	var finalVecIDs []int64
 
@@ -317,6 +316,11 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		return nil
 	}
 
+	// index type to be created after merge based on the number of vectors in
+	// indexData added into the index.
+	nlist := getNumCentroids(len(finalVecIDs))
+	indexType, indexCategory := getIndexType(len(finalVecIDs), nlist)
+
 	// safe to assume that all the indexes are of the same config values, given
 	// that they are extracted from the field mapping info.
 	dims := vecIndexes[0].D()
@@ -328,7 +332,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	}
 	defer index.Close()
 
-	if isIVF {
+	if indexCategory == IndexTypeIVF {
 		// the direct map maintained in the IVF index is essential for the
 		// reconstruction of vectors based on vector IDs in the future merges.
 		// the AddWithIDs API also needs a direct map to be set before using.
@@ -336,6 +340,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		if err != nil {
 			return err
 		}
+
+		index.SetNProbe(int32(math.Sqrt(float64(nlist))))
 
 		// train the vector index, essentially performs k-means clustering to partition
 		// the data space of indexData such that during the search time, we probe
@@ -382,15 +388,40 @@ func (v *vectorIndexOpaque) grabBuf(size int) []byte {
 	return buf[0:size]
 }
 
-func getIndexType(nVecs int) (string, bool) {
+// Return the number of centroids for an IVF index.
+func getNumCentroids(nVecs int) int {
+	var nlist int
+
 	switch {
-	case nVecs > 10000:
-		return "IVF100,SQ8", true
-	// default minimum number of training points per cluster is 39
-	case nVecs >= 390:
-		return "IVF10,Flat", true
+	// At 1M vectors, nlist = 4k gave a reasonably high recall with the right nprobe,
+	// whereas 1M/100 = 10000 centroids would increase training time without
+	// corresponding increase in recall
+	case nVecs >= 1000000:
+		nlist = int(4 * math.Sqrt(float64(nVecs)))
+	case nVecs >= 1000:
+		// 100 points per cluster is a reasonable default, considering the default
+		// minimum and maximum points per cluster is 39 and 256 respectively.
+		// Since it's a recommendation to have a minimum of 10 clusters, 1000(100 * 10)
+		// was chosen as the lower threshold.
+		nlist = nVecs / 100
+	}
+	return nlist
+}
+
+const IndexTypeIVF = 1
+const IndexTypeFlat = 0
+
+// Returns a description string for the index and quantizer type
+// and an index type.
+func getIndexType(nVecs, nlist int) (string, int) {
+	switch {
+	case nVecs >= 10000:
+		return "IVF" + strconv.Itoa(nlist) + ",SQ8", IndexTypeIVF
+	case nVecs >= 1000:
+		return "IVF" + strconv.Itoa(nlist) + ",Flat", IndexTypeIVF
+		// default minimum number of training points per cluster is 39
 	default:
-		return "IDMap2,Flat", false
+		return "IDMap2,Flat", IndexTypeFlat
 	}
 }
 
@@ -413,7 +444,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			metric = faiss.MetricInnerProduct
 		}
 
-		indexType, isIVF := getIndexType(len(ids))
+		nlist := getNumCentroids(len(ids))
+		indexType, indexCategory := getIndexType(len(ids), nlist)
 		// create an index - currently keeping it as flat for faster data ingest
 		index, err := faiss.IndexFactory(int(content.dim), indexType, metric)
 		if err != nil {
@@ -422,11 +454,13 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 
 		defer index.Close()
 
-		if isIVF {
+		if indexCategory == IndexTypeIVF {
 			err = index.SetDirectMap(2)
 			if err != nil {
 				return 0, err
 			}
+
+			index.SetNProbe(int32(math.Sqrt(float64(nlist))))
 
 			err = index.Train(vecs)
 			if err != nil {

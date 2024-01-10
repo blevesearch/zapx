@@ -316,10 +316,12 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		return nil
 	}
 
+	nvecs := len(finalVecIDs)
+
 	// index type to be created after merge based on the number of vectors in
 	// indexData added into the index.
-	nlist := getNumCentroids(len(finalVecIDs))
-	indexDescription, indexClass := determineIndexToUse(len(finalVecIDs), nlist)
+	nlist := determineCentroids(nvecs)
+	indexDescription, indexClass := determineIndexToUse(nvecs, nlist)
 
 	// safe to assume that all the indexes are of the same config values, given
 	// that they are extracted from the field mapping info.
@@ -388,22 +390,22 @@ func (v *vectorIndexOpaque) grabBuf(size int) []byte {
 	return buf[0:size]
 }
 
-// Return the number of centroids for an IVF index.
-func getNumCentroids(nVecs int) int {
+// Determines the number of centroids to use for an IVF index.
+func determineCentroids(nvecs int) int {
 	var nlist int
 
 	switch {
 	// At 1M vectors, nlist = 4k gave a reasonably high recall with the right nprobe,
 	// whereas 1M/100 = 10000 centroids would increase training time without
 	// corresponding increase in recall
-	case nVecs >= 1000000:
-		nlist = int(4 * math.Sqrt(float64(nVecs)))
-	case nVecs >= 1000:
+	case nvecs >= 1000000:
+		nlist = int(4 * math.Sqrt(float64(nvecs)))
+	case nvecs >= 1000:
 		// 100 points per cluster is a reasonable default, considering the default
 		// minimum and maximum points per cluster is 39 and 256 respectively.
 		// Since it's a recommendation to have a minimum of 10 clusters, 1000(100 * 10)
 		// was chosen as the lower threshold.
-		nlist = nVecs / 100
+		nlist = nvecs / 100
 	}
 	return nlist
 }
@@ -415,11 +417,11 @@ const (
 
 // Returns a description string for the index and quantizer type
 // and an index type.
-func determineIndexToUse(nVecs, nlist int) (string, int) {
+func determineIndexToUse(nvecs, nlist int) (string, int) {
 	switch {
-	case nVecs >= 10000:
+	case nvecs >= 10000:
 		return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF
-	case nVecs >= 1000:
+	case nvecs >= 1000:
 		return fmt.Sprintf("IVF%d,Flat", nlist), IndexTypeIVF
 	default:
 		return "IDMap2,Flat", IndexTypeFlat
@@ -445,8 +447,9 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			metric = faiss.MetricInnerProduct
 		}
 
-		nlist := getNumCentroids(len(ids))
-		indexDescription, indexClass := determineIndexToUse(len(ids), nlist)
+		nvecs := len(ids)
+		nlist := determineCentroids(nvecs)
+		indexDescription, indexClass := determineIndexToUse(nvecs, nlist)
 		// create an index - currently keeping it as flat for faster data ingest
 		index, err := faiss.IndexFactory(int(content.dim), indexDescription, metric)
 		if err != nil {

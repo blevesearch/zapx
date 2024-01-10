@@ -319,7 +319,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	// index type to be created after merge based on the number of vectors in
 	// indexData added into the index.
 	nlist := getNumCentroids(len(finalVecIDs))
-	indexDescription, indexClass := getIndexType(len(finalVecIDs), nlist)
+	indexDescription, indexClass := determineIndexToUse(len(finalVecIDs), nlist)
 
 	// safe to assume that all the indexes are of the same config values, given
 	// that they are extracted from the field mapping info.
@@ -415,7 +415,7 @@ const (
 
 // Returns a description string for the index and quantizer type
 // and an index type.
-func getIndexType(nVecs, nlist int) (string, int) {
+func determineIndexToUse(nVecs, nlist int) (string, int) {
 	switch {
 	case nVecs >= 10000:
 		return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF
@@ -446,7 +446,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		}
 
 		nlist := getNumCentroids(len(ids))
-		indexDescription, indexClass := getIndexType(len(ids), nlist)
+		indexDescription, indexClass := determineIndexToUse(len(ids), nlist)
 		// create an index - currently keeping it as flat for faster data ingest
 		index, err := faiss.IndexFactory(int(content.dim), indexDescription, metric)
 		if err != nil {

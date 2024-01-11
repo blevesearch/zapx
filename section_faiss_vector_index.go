@@ -215,14 +215,12 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 			return 0, err
 		}
 
-		// an optimization to avoid using the bitmaps if there is only 1 doc
-		// with the vecID.
+		// write the docID
 		n = binary.PutUvarint(tempBuf, uint64(docIDs.Minimum()))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return 0, err
 		}
-		continue
 	}
 
 	return fieldStart, nil
@@ -403,14 +401,10 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 	//    1. the serialized representation of the dense vector index.
 	//    2. its constituent vectorID -> {docID} mapping. perhaps a bitmap is enough.
 	tempBuf := vo.grabBuf(binary.MaxVarintLen64)
-	// order of iteration of a field map is random.
-	// vector field num --> content for that field to be build
 	for fieldID, content := range vo.vecFieldMap {
 
 		var vecs []float32
 		var ids []int64
-		// randomly ordered iteration(map) but seems okay since
-		// both hash and the vectors are appended in the same order.
 		for hash, vecInfo := range content.vecs {
 			vecs = append(vecs, vecInfo.vec...)
 			ids = append(ids, int64(hash))
@@ -488,7 +482,6 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 
 		// write the number of unique vectors
 		n = binary.PutUvarint(tempBuf, uint64(index.Ntotal()))
-		fmt.Printf("ntotal is %v \n", uint64(index.Ntotal()))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return 0, err
@@ -554,8 +547,6 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 				docIDs: roaring.NewBitmap(),
 			}
 		}
-		fmt.Printf("adding hash %v to vec id map with docNum %v \n", subVecHash,
-			docNum)
 		// add the docID to the bitmap
 		vo.vecIDMap[subVecHash].docIDs.Add(docNum)
 
@@ -581,13 +572,19 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 
 // todo: better hash function?
 // keep the perf aspects in mind with respect to the hash function.
-// random seed based hash golang.
+// Uses a time based seed to avoid 2 identical vectors in different
+// segments having the same hash -> could be an issue when merging those
+// segments
 func hashCode(a []float32) int64 {
-	// Uses a time based seed to avoid 2 identical vectors in different
-	// segments having the same hash -> could be an issue when merging those
-	// segments
-	rv := int64(rand.Int())
+	var rv, sum int64
+	for _, v := range a {
+		sum += int64(math.Float32bits(v))
+	}
 
+	// Similar to getVectorCode(), this uses the first 32 bits for the vector sum
+	// and the last 32 for a random 32-bit int to ensure identical vectors have
+	// unique hashes.
+	rv = sum<<32 | int64(rand.Int31())
 	return rv
 }
 
@@ -612,8 +609,6 @@ func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) reseta
 }
 
 type indexContent struct {
-	// hash to vector?
-	// hash functions as vector ID(unique to every vector)
 	vecs   map[int64]vecInfo
 	dim    uint16
 	metric string

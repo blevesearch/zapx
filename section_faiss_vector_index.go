@@ -23,6 +23,7 @@ import (
 	"math"
 	"math/rand"
 	"sync/atomic"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	index "github.com/blevesearch/bleve_index_api"
@@ -31,6 +32,7 @@ import (
 )
 
 func init() {
+	rand.Seed(time.Now().UTC().UnixNano())
 	registerSegmentSection(SectionFaissVectorIndex, &faissVectorIndexSection{})
 }
 
@@ -577,18 +579,14 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 	}
 }
 
-// TODO INCLUDE SEGMENT ID TOO SINCE THIS COULD BE GOING
-// ON IN PARALLEL FOR MULTIPLE SEGMENTS.
 // todo: better hash function?
 // keep the perf aspects in mind with respect to the hash function.
 // random seed based hash golang.
 func hashCode(a []float32) int64 {
-	var rv int64
-	for _, v := range a {
-		rv = int64(math.Float32bits(v)) + (31 * rv)
-	}
-
-	rv += int64(rand.Int())
+	// Uses a time based seed to avoid 2 identical vectors in different
+	// segments having the same hash -> could be an issue when merging those
+	// segments
+	rv := int64(rand.Int())
 
 	return rv
 }

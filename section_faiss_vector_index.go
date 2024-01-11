@@ -69,18 +69,9 @@ type vecIndexMeta struct {
 	deleted     []int64
 }
 
-func remapDocIDs(oldID uint32, newIDs []uint64) *roaring.Bitmap {
-	newBitmap := roaring.NewBitmap()
-
-	if newIDs[oldID] != docDropped {
-		newBitmap.Add(uint32(newIDs[oldID]))
-	}
-	return newBitmap
-}
-
-// keep in mind with respect to update and delete opeartions with resepct to vectors/
-// leverage bitmaps stored
-func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase, drops []*roaring.Bitmap, fieldsInv []string,
+// keep in mind with respect to update and delete operations with resepct to vectors
+func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
+	drops []*roaring.Bitmap, fieldsInv []string,
 	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
 	vo := v.getvectorIndexOpaque(opaque)
 
@@ -88,7 +79,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		indexes := make([]*vecIndexMeta, 0, len(segments))
 		// the segments with valid vector sections in them
 		vecSegs := make([]*SegmentBase, 0, len(segments))
-		vecToDocID := make(map[int64]*roaring.Bitmap)
+		vecToDocID := make(map[int64]uint64)
 
 		// todo: would parallely fetching the following stuff from segments
 		// be beneficial in terms of perf?
@@ -136,28 +127,27 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 				vecID, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
 				pos += n
 
-				bitMap := roaring.NewBitmap()
 				docID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 				pos += n
-				bitMap.Add(uint32(docID))
 
-				// remap the docIDs from the old segment to the new document nos.
-				// provided. furthermore, this function also drops the invalid doc nums
-				// of that segment in the resulting bitmap
-				bitMap = remapDocIDs(uint32(docID), newDocNumsIn[segI])
-				if vecToDocID[vecID] == nil {
-					// if the remapped bitmap has valid docs as entries, track it
-					// as part of vecs to be reconstructed (for larger indexes).
-					// otherwise, since there are no docs present for this vecID,
-					// delete it from the specific vector index later on.
-					if bitMap.GetCardinality() > 0 {
-						vecToDocID[vecID] = bitMap
-						indexes[curIdx].vecIds = append(indexes[curIdx].vecIds, vecID)
-					} else {
-						indexes[curIdx].deleted = append(indexes[curIdx].deleted, vecID)
-					}
+				// remap the docID from the old segment to the new document nos.
+				// provided. furthermore, also drop the now-invalid doc nums
+				// of that segment
+				var vecIDNotDeleted bool // indicates if the vector ID was not deleted.
+				var newDocID uint64      // new docID in the new segment
+				if newDocNumsIn[segI][uint32(docID)] != docDropped {
+					newDocID = newDocNumsIn[segI][uint32(docID)]
+					vecIDNotDeleted = true
+				}
+				// if the remapped doc ID is valid, track it
+				// as part of vecs to be reconstructed (for larger indexes).
+				// otherwise, since there are no docs present for this vecID,
+				// delete it from the specific vector index later on.
+				if vecIDNotDeleted {
+					vecToDocID[vecID] = newDocID
+					indexes[curIdx].vecIds = append(indexes[curIdx].vecIds, vecID)
 				} else {
-					vecToDocID[vecID].Or(bitMap)
+					indexes[curIdx].deleted = append(indexes[curIdx].deleted, vecID)
 				}
 			}
 		}
@@ -170,7 +160,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 	return nil
 }
 
-func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bitmap,
+func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]uint64,
 	serializedIndex []byte, w *CountHashWriter) (int, error) {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 
@@ -207,7 +197,7 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 		return 0, err
 	}
 
-	for vecID, docIDs := range vecToDocID {
+	for vecID, docID := range vecToDocID {
 		// write the vecID
 		n = binary.PutVarint(tempBuf, vecID)
 		_, err = w.Write(tempBuf[:n])
@@ -216,7 +206,7 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 		}
 
 		// write the docID
-		n = binary.PutUvarint(tempBuf, uint64(docIDs.Minimum()))
+		n = binary.PutUvarint(tempBuf, uint64(docID))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return 0, err
@@ -229,7 +219,7 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]*roaring.Bit
 // todo: naive implementation. need to keep in mind the perf implications and improve on this.
 // perhaps, parallelized merging can help speed things up over here.
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*SegmentBase,
-	vecToDocID map[int64]*roaring.Bitmap, indexes []*vecIndexMeta, w *CountHashWriter, closeCh chan struct{}) error {
+	vecToDocID map[int64]uint64, indexes []*vecIndexMeta, w *CountHashWriter, closeCh chan struct{}) error {
 
 	var vecIndexes []*faiss.IndexImpl
 	for segI, seg := range sbs {
@@ -399,7 +389,7 @@ func determineIndexToUse(nvecs, nlist int) (string, int) {
 func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint64, err error) {
 	// for every fieldID, contents to store over here are:
 	//    1. the serialized representation of the dense vector index.
-	//    2. its constituent vectorID -> {docID} mapping. perhaps a bitmap is enough.
+	//    2. its constituent vectorID -> {docID} mapping.
 	tempBuf := vo.grabBuf(binary.MaxVarintLen64)
 	for fieldID, content := range vo.vecFieldMap {
 
@@ -494,8 +484,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		// (which is to load a non-cacheable info like index). this could help the
 		// paging costs
 		for vecID, _ := range content.vecs {
-			// This will be single element bitmap just for now.
-			docIDs := vo.vecIDMap[vecID].docIDs
+			docID := vo.vecIDMap[vecID].docIDs
 			// write the vecID
 			n = binary.PutVarint(tempBuf, vecID)
 			_, err = w.Write(tempBuf[:n])
@@ -503,9 +492,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 				return 0, err
 			}
 
-			// an optimization to avoid using the bitmaps if there is only 1 doc
-			// with the vecID.
-			n = binary.PutUvarint(tempBuf, uint64(docIDs.Minimum()))
+			n = binary.PutUvarint(tempBuf, docID)
 			_, err = w.Write(tempBuf[:n])
 			if err != nil {
 				return 0, err
@@ -544,11 +531,9 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 		subVecHash := hashCode(subVec)
 		if _, ok := vo.vecIDMap[subVecHash]; !ok {
 			vo.vecIDMap[subVecHash] = vecInfo{
-				docIDs: roaring.NewBitmap(),
+				docIDs: uint64(docNum),
 			}
 		}
-		// add the docID to the bitmap
-		vo.vecIDMap[subVecHash].docIDs.Add(docNum)
 
 		// tracking the unique vectors for every field which will be used later
 		// to construct the vector index.
@@ -616,7 +601,7 @@ type indexContent struct {
 
 type vecInfo struct {
 	vec    []float32
-	docIDs *roaring.Bitmap
+	docIDs uint64
 }
 
 type vectorIndexOpaque struct {

@@ -115,9 +115,9 @@ var vectorCmd = &cobra.Command{
 	},
 }
 
-func decodeSection(data []byte, start uint64) (int, int, map[uint64]uint64, *faiss.IndexImpl, error) {
+func decodeSection(data []byte, start uint64) (int, int, map[int64]uint64, *faiss.IndexImpl, error) {
 	pos := int(start)
-	vecDocIDMap := make(map[uint64]uint64)
+	vecDocIDMap := make(map[int64]uint64)
 
 	// loading doc values - adhering to the sections format. never
 	// valid values for vector section
@@ -138,7 +138,7 @@ func decodeSection(data []byte, start uint64) (int, int, map[uint64]uint64, *fai
 	numVecs, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += n
 	for i := 0; i < int(numVecs); i++ {
-		vecID, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+		vecID, n := binary.Varint(data[pos : pos+binary.MaxVarintLen64])
 		pos += n
 
 		docID, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])

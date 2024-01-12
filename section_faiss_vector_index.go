@@ -206,7 +206,7 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]uint64,
 		}
 
 		// write the docID
-		n = binary.PutUvarint(tempBuf, uint64(docID))
+		n = binary.PutUvarint(tempBuf, docID)
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return 0, err

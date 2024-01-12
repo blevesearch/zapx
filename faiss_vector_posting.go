@@ -304,14 +304,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 			}
 		}
 
-		var scores []float32
-		var ids []int64
-		var err error
-		if len(vectorIDsToExclude) > 0 {
-			scores, ids, err = vecIndex.SearchWithoutIDs(qVector, k, vectorIDsToExclude)
-		} else {
-			scores, ids, err = vecIndex.Search(qVector, k)
-		}
+		scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k, vectorIDsToExclude)
 
 		if err != nil {
 			return nil, err

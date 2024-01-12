@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/blevesearch/go-faiss"
 	zap "github.com/blevesearch/zapx/v16"
 	"github.com/spf13/cobra"
@@ -91,8 +90,8 @@ var vectorCmd = &cobra.Command{
 				case 3:
 					if args[2] == "list" {
 						fmt.Printf("listing the vector IDs in the index\n")
-						for vecID, docs := range vecDocIDMap {
-							fmt.Printf("vector with vecID: %v present in docs: %v\n", vecID, docs)
+						for vecID, doc := range vecDocIDMap {
+							fmt.Printf("vector with vecID: %v present in doc: %v\n", vecID, doc)
 						}
 					}
 				case 4:
@@ -116,9 +115,9 @@ var vectorCmd = &cobra.Command{
 	},
 }
 
-func decodeSection(data []byte, start uint64) (int, int, map[int64][]uint32, *faiss.IndexImpl, error) {
+func decodeSection(data []byte, start uint64) (int, int, map[uint64]uint64, *faiss.IndexImpl, error) {
 	pos := int(start)
-	vecDocIDMap := make(map[int64][]uint32)
+	vecDocIDMap := make(map[uint64]uint64)
 
 	// loading doc values - adhering to the sections format. never
 	// valid values for vector section
@@ -139,32 +138,12 @@ func decodeSection(data []byte, start uint64) (int, int, map[int64][]uint32, *fa
 	numVecs, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += n
 	for i := 0; i < int(numVecs); i++ {
-		vecID, n := binary.Varint(data[pos : pos+binary.MaxVarintLen64])
+		vecID, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 		pos += n
 
-		numDocs, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+		docID, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 		pos += n
-
-		if numDocs == 1 {
-			docID, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
-			pos += n
-			vecDocIDMap[int64(vecID)] = []uint32{uint32(docID)}
-			continue
-		}
-
-		bitMapLen, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
-		pos += n
-
-		roaringBytes := data[pos : pos+int(bitMapLen)]
-		pos += int(bitMapLen)
-
-		bitMap := roaring.NewBitmap()
-		_, err := bitMap.FromBuffer(roaringBytes)
-		if err != nil {
-			return 0, 0, nil, nil, err
-		}
-
-		vecDocIDMap[int64(vecID)] = bitMap.ToArray()
+		vecDocIDMap[vecID] = docID
 	}
 
 	vecIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)

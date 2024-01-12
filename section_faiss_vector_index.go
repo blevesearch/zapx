@@ -484,7 +484,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		// (which is to load a non-cacheable info like index). this could help the
 		// paging costs
 		for vecID, _ := range content.vecs {
-			docID := vo.vecIDMap[vecID].docIDs
+			docID := vo.vecIDMap[vecID].docID
 			// write the vecID
 			n = binary.PutVarint(tempBuf, vecID)
 			_, err = w.Write(tempBuf[:n])
@@ -492,7 +492,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 				return 0, err
 			}
 
-			n = binary.PutUvarint(tempBuf, docID)
+			n = binary.PutUvarint(tempBuf, uint64(docID))
 			_, err = w.Write(tempBuf[:n])
 			if err != nil {
 				return 0, err
@@ -531,7 +531,7 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 		subVecHash := hashCode(subVec)
 		if _, ok := vo.vecIDMap[subVecHash]; !ok {
 			vo.vecIDMap[subVecHash] = vecInfo{
-				docIDs: uint64(docNum),
+				docID: docNum,
 			}
 		}
 
@@ -563,7 +563,9 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 func hashCode(a []float32) int64 {
 	var rv, sum int64
 	for _, v := range a {
-		sum += int64(math.Float32bits(v))
+		// Weighing each element of the vector differently to minimise chance
+		// of collisions between non identical vectors.
+		sum = int64(math.Float32bits(v)) + sum*31
 	}
 
 	// Similar to getVectorCode(), this uses the first 32 bits for the vector sum
@@ -600,8 +602,8 @@ type indexContent struct {
 }
 
 type vecInfo struct {
-	vec    []float32
-	docIDs uint64
+	vec   []float32
+	docID uint32
 }
 
 type vectorIndexOpaque struct {
@@ -616,7 +618,7 @@ type vectorIndexOpaque struct {
 	fieldAddrs map[uint16]int
 
 	// maps the vecID to basic info involved around it such as
-	// the docIDs its present in and the vector itself
+	// the docID its present in and the vector itself
 	vecIDMap map[int64]vecInfo
 	// maps the field to information necessary for its vector
 	// index to be build.

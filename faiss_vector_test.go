@@ -6,6 +6,7 @@ package zap
 import (
 	"encoding/binary"
 	"math"
+	"math/rand"
 	"os"
 	"testing"
 
@@ -492,6 +493,23 @@ func TestVectorSegment(t *testing.T) {
 			hitCounter++
 		}
 		closeVectorIndex()
+	}
+}
+
+// Test to check if 2 identical vectors return unique hashes.
+func TestHashCode(t *testing.T) {
+	var v1 []float32
+	for i := 0; i < 10; i++ {
+		v1 = append(v1, rand.Float32())
+	}
+
+	h1 := hashCode(v1)
+
+	h2 := hashCode(v1)
+
+	if h1 == h2 {
+		t.Fatal("expected unique hashes for the same vector each time the " +
+			"hash is computed")
 	}
 }
 

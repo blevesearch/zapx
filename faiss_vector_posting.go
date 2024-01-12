@@ -275,7 +275,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 	segment.SearchVectorIndex, segment.CloseVectorIndex, error) {
 	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
-	vecDocIDMap := make(map[int64][]uint32)
+	vecDocIDMap := make(map[int64]uint32)
 
 	searchVectorIndex := func(field string, qVector []float32,
 		k int64, except *roaring.Bitmap) (segment.VecPostingsList, error) {
@@ -295,7 +295,17 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 			return rv, nil
 		}
 
-		scores, ids, err := vecIndex.Search(qVector, k)
+		var vectorIDsToExclude []int64
+		// iterate through the vector doc ID map and if the doc ID is one to be
+		// deleted, add it to the list
+		for vecID, docID := range vecDocIDMap {
+			if except != nil && except.Contains(docID) {
+				vectorIDsToExclude = append(vectorIDsToExclude, vecID)
+			}
+		}
+
+		scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k, vectorIDsToExclude)
+
 		if err != nil {
 			return nil, err
 		}
@@ -303,14 +313,11 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 		// docID and the score to the newly created vecPostingsList
 		for i := 0; i < len(ids); i++ {
 			vecID := ids[i]
-			docIDs := vecDocIDMap[vecID]
-			var code uint64
-			for _, docID := range docIDs {
-				if except != nil && except.Contains(docID) {
-					// ignore the deleted doc
-					continue
-				}
-				code = getVectorCode(docID, scores[i])
+			// Checking if it's present in the vecDocIDMap.
+			// If -1 is returned as an ID(insufficient vectors), this will ensure
+			// they it isn't added to the final postings list.
+			if docID, ok := vecDocIDMap[vecID]; ok {
+				code := getVectorCode(docID, scores[i])
 				rv.postings.Add(uint64(code))
 			}
 		}
@@ -360,27 +367,9 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 	for i := 0; i < int(numVecs); i++ {
 		vecID, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
-		numDocs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += n
-		bitMap := roaring.NewBitmap()
-		// if the number docs is more than one, load the bitmap containing the
-		// docIDs, else use the optimized format where the single docID is
-		// varint encoded.
-		if numDocs > 1 {
-			bitMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-			pos += n
-			roaringBytes := sb.mem[pos : pos+int(bitMapLen)]
-			pos += int(bitMapLen)
-			_, err = bitMap.FromBuffer(roaringBytes)
-			if err != nil {
-				return nil, nil, err
-			}
-			vecDocIDMap[vecID] = bitMap.ToArray()
-			continue
-		}
 		docID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
-		vecDocIDMap[vecID] = []uint32{uint32(docID)}
+		vecDocIDMap[vecID] = uint32(docID)
 	}
 
 	vecIndex, err = faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)

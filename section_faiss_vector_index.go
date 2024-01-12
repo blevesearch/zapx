@@ -557,9 +557,9 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 
 // todo: better hash function?
 // keep the perf aspects in mind with respect to the hash function.
-// Uses a time based seed to avoid 2 identical vectors in different
-// segments having the same hash -> could be an issue when merging those
-// segments
+// Uses a time based seed to prevent 2 identical vectors in different
+// segments from having the same hash (which otherwise could cause an
+// issue when merging those segments)
 func hashCode(a []float32) int64 {
 	var rv, sum int64
 	for _, v := range a {

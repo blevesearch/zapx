@@ -44,8 +44,6 @@ func (v *faissVectorIndexSection) Process(opaque map[int]resetable, docNum uint3
 		return
 	}
 
-	var _ index.Field = (index.VectorField)(nil)
-
 	if vf, ok := field.(index.VectorField); ok {
 		vo := v.getvectorIndexOpaque(opaque)
 		vo.process(vf, fieldID, docNum)
@@ -198,7 +196,7 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]uint64,
 		return 0, err
 	}
 
-	// n = binary.PutUvarint(tempBuf, uint64())
+	n = binary.PutUvarint(tempBuf, uint64(len(serializedIndex)))
 	_, err = w.Write(tempBuf[:n])
 	if err != nil {
 		return 0, err
@@ -234,6 +232,16 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]uint64,
 	}
 
 	return fieldStart, nil
+}
+
+// Calculates the nprobe count, given nlist(number of centroids) based on
+// the metric the index is optimized for.
+func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
+	nprobe := int32(math.Sqrt(float64(nlist)))
+	if indexOptimizedFor == index.IndexOptimizedForLatency {
+		nprobe /= 2
+	}
+	return nprobe
 }
 
 // todo: naive implementation. need to keep in mind the perf implications and improve on this.
@@ -322,10 +330,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			return err
 		}
 
-		nprobe := int32(math.Sqrt(float64(nlist)))
-		if indexOptimizedFor == index.IndexOptimizedForLatency {
-			nprobe /= 2
-		}
+		nprobe := calculateNprobe(nlist, indexOptimizedFor)
 		faissIndex.SetNProbe(nprobe)
 
 		// train the vector index, essentially performs k-means clustering to partition
@@ -447,11 +452,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 				return 0, err
 			}
 
-			nprobe := int32(math.Sqrt(float64(nlist)))
-			if content.indexOptimizedFor == index.IndexOptimizedForLatency {
-				nprobe /= 2
-			}
-
+			nprobe := calculateNprobe(nlist, content.indexOptimizedFor)
 			faissIndex.SetNProbe(nprobe)
 
 			err = faissIndex.Train(vecs)
@@ -552,7 +553,6 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 		return
 	}
 
-	fmt.Printf("processing doc num %d \n", docNum)
 	//process field
 	vec := field.Vector()
 	dim := field.Dims()

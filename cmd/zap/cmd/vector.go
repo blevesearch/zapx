@@ -119,14 +119,12 @@ func decodeSection(data []byte, start uint64) (int, int, map[int64]uint64, *fais
 	pos := int(start)
 	vecDocIDMap := make(map[int64]uint64)
 
+	// the below loop loads the following:
+	// 1. doc values - adhering to the sections format. never
+	// valid values for vector section
+	// 2. index optimization type.
 	for i := 0; i < 3; i++ {
 		_, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
-		pos += n
-
-		_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
-		pos += n
-
-		_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 		pos += n
 	}
 

@@ -70,12 +70,6 @@ type vecIndexMeta struct {
 	indexOptimizedFor string
 }
 
-// maps the index optimization type int to the string
-var indexOptimizationMap = map[int]string{
-	index.SupportedVectorIndexOptimizations[index.IndexOptimizedForRecall]:  index.IndexOptimizedForRecall,
-	index.SupportedVectorIndexOptimizations[index.IndexOptimizedForLatency]: index.IndexOptimizedForLatency,
-}
-
 // keep in mind with respect to update and delete operations with resepct to vectors
 func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
 	drops []*roaring.Bitmap, fieldsInv []string,
@@ -125,7 +119,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			indexes = append(indexes, &vecIndexMeta{
 				startOffset:       pos,
 				indexSize:         indexSize,
-				indexOptimizedFor: indexOptimizationMap[int(indexOptimizationTypeInt)],
+				indexOptimizedFor: index.IndexOptimizationMap[int(indexOptimizationTypeInt)],
 			})
 
 			pos += int(indexSize)
@@ -239,7 +233,11 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]uint64,
 func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 	nprobe := int32(math.Sqrt(float64(nlist)))
 	if indexOptimizedFor == index.IndexOptimizedForLatency {
-		nprobe /= 2
+		// If nprobe is 1, let it remain 1 since we need to search in at least
+		// 1 cluster.
+		if nprobe >= 2 {
+			nprobe /= 2
+		}
 	}
 	return nprobe
 }

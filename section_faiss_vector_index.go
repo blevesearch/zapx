@@ -119,7 +119,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			indexes = append(indexes, &vecIndexMeta{
 				startOffset:       pos,
 				indexSize:         indexSize,
-				indexOptimizedFor: index.IndexOptimizationMap[int(indexOptimizationTypeInt)],
+				indexOptimizedFor: index.VectorIndexOptimizationsReverseLookup[int(indexOptimizationTypeInt)],
 			})
 
 			pos += int(indexSize)

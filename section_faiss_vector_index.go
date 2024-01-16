@@ -228,15 +228,18 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]uint64,
 	return fieldStart, nil
 }
 
+// Divide the estimated nprobe with this value to optimize
+// for latency.
+const nprobeLatencyOptimization = 2
+
 // Calculates the nprobe count, given nlist(number of centroids) based on
 // the metric the index is optimized for.
 func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 	nprobe := int32(math.Sqrt(float64(nlist)))
 	if indexOptimizedFor == index.IndexOptimizedForLatency {
-		// If nprobe is 1, let it remain 1 since we need to search in at least
-		// 1 cluster.
-		if nprobe >= 2 {
-			nprobe /= 2
+		nprobe /= nprobeLatencyOptimization
+		if nprobe < 1 {
+			nprobe = 1
 		}
 	}
 	return nprobe

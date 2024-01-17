@@ -34,6 +34,12 @@ import (
 func init() {
 	rand.Seed(time.Now().UTC().UnixNano())
 	registerSegmentSection(SectionFaissVectorIndex, &faissVectorIndexSection{})
+	isInvalidInvertedIndexField = func(field index.Field) bool {
+		if _, ok := field.(index.VectorField); ok {
+			return true
+		}
+		return false
+	}
 }
 
 type faissVectorIndexSection struct {

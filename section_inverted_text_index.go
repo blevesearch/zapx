@@ -34,9 +34,16 @@ func init() {
 type invertedTextIndexSection struct {
 }
 
+// this function is something that tells the inverted index section whether to
+// process a particular field or not - since it might be processed by another
+// section this function helps in avoiding unnecessary work.
+var isInvalidInvertedIndexField func(field index.Field) bool
+
 func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint32, field index.Field, fieldID uint16) {
 	invIndexOpaque := i.getInvertedIndexOpaque(opaque)
-	invIndexOpaque.process(field, fieldID, docNum)
+	if isInvalidInvertedIndexField == nil || !isInvalidInvertedIndexField(field) {
+		invIndexOpaque.process(field, fieldID, docNum)
+	}
 }
 
 func (i *invertedTextIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
@@ -676,7 +683,6 @@ func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum
 				}
 			}
 		}
-
 		for i := 0; i < len(io.FieldsInv); i++ { // clear these for reuse
 			io.reusableFieldLens[i] = 0
 			io.reusableFieldTFs[i] = nil
@@ -685,7 +691,6 @@ func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum
 	}
 
 	io.reusableFieldLens[fieldID] += field.AnalyzedLength()
-
 	existingFreqs := io.reusableFieldTFs[fieldID]
 	if existingFreqs != nil {
 		existingFreqs.MergeAll(field.Name(), field.AnalyzedTokenFrequencies())

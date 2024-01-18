@@ -34,6 +34,10 @@ import (
 func init() {
 	rand.Seed(time.Now().UTC().UnixNano())
 	registerSegmentSection(SectionFaissVectorIndex, &faissVectorIndexSection{})
+	isInvalidInvertedIndexField = func(field index.Field) bool {
+		_, ok := field.(index.VectorField)
+		return ok
+	}
 }
 
 type faissVectorIndexSection struct {
@@ -66,7 +70,6 @@ type vecIndexMeta struct {
 	startOffset       int
 	indexSize         uint64
 	vecIds            []int64
-	deleted           []int64
 	indexOptimizedFor string
 }
 
@@ -76,10 +79,16 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
 	vo := v.getvectorIndexOpaque(opaque)
 
+	// the segments with valid vector sections in them
+	// preallocating the space over here, if there are too many fields
+	// in the segment this will help by avoiding multiple allocation
+	// calls.
+	vecSegs := make([]*SegmentBase, 0, len(segments))
+	indexes := make([]*vecIndexMeta, 0, len(segments))
+
 	for fieldID, fieldName := range fieldsInv {
-		indexes := make([]*vecIndexMeta, 0, len(segments))
-		// the segments with valid vector sections in them
-		vecSegs := make([]*SegmentBase, 0, len(segments))
+		indexes = indexes[:0] // resizing the slices
+		vecSegs = vecSegs[:0]
 		vecToDocID := make(map[int64]uint64)
 
 		// todo: would parallely fetching the following stuff from segments
@@ -147,13 +156,11 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 				}
 				// if the remapped doc ID is valid, track it
 				// as part of vecs to be reconstructed (for larger indexes).
-				// otherwise, since there are no docs present for this vecID,
-				// delete it from the specific vector index later on.
+				// this would account only the valid vector IDs, so the deleted
+				// ones won't be reconstructed in the final index.
 				if vecIDNotDeleted {
 					vecToDocID[vecID] = newDocID
 					indexes[curIdx].vecIds = append(indexes[curIdx].vecIds, vecID)
-				} else {
-					indexes[curIdx].deleted = append(indexes[curIdx].deleted, vecID)
 				}
 			}
 		}
@@ -267,8 +274,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		return nil
 	}
 
-	defer freeReconstructedIndexes(vecIndexes)
-
 	var mergedIndexBytes []byte
 
 	var finalVecIDs []int64
@@ -279,6 +284,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	var indexData []float32
 	for i := 0; i < len(vecIndexes); i++ {
 		if isClosed(closeCh) {
+			freeReconstructedIndexes(vecIndexes)
 			return seg.ErrClosed
 		}
 
@@ -289,6 +295,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			recons, err := vecIndexes[i].ReconstructBatch(int64(len(indexes[i].vecIds)),
 				indexes[i].vecIds)
 			if err != nil {
+				freeReconstructedIndexes(vecIndexes)
 				return err
 			}
 			indexData = append(indexData, recons...)
@@ -300,6 +307,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	if len(indexData) == 0 {
 		// no valid vectors for this index, so we don't even have to
 		// record it in the section
+		freeReconstructedIndexes(vecIndexes)
 		return nil
 	}
 
@@ -315,6 +323,12 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	dims := vecIndexes[0].D()
 	metric := vecIndexes[0].MetricType()
 	indexOptimizedFor := indexes[0].indexOptimizedFor
+
+	// freeing the reconstructed indexes immediately - waiting till the end
+	// to do the same is not needed because the following operations don't need
+	// the reconstructed ones anymore and doing so will hold up memory which can
+	// be detrimental while creating indexes during introduction.
+	freeReconstructedIndexes(vecIndexes)
 
 	faissIndex, err := faiss.IndexFactory(dims, indexDescription, metric)
 	if err != nil {

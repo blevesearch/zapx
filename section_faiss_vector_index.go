@@ -250,8 +250,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		return nil
 	}
 
-	defer freeReconstructedIndexes(vecIndexes)
-
 	var mergedIndexBytes []byte
 
 	var finalVecIDs []int64
@@ -262,6 +260,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	var indexData []float32
 	for i := 0; i < len(vecIndexes); i++ {
 		if isClosed(closeCh) {
+			freeReconstructedIndexes(vecIndexes)
 			return seg.ErrClosed
 		}
 
@@ -272,6 +271,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			recons, err := vecIndexes[i].ReconstructBatch(int64(len(indexes[i].vecIds)),
 				indexes[i].vecIds)
 			if err != nil {
+				freeReconstructedIndexes(vecIndexes)
 				return err
 			}
 			indexData = append(indexData, recons...)
@@ -283,6 +283,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	if len(indexData) == 0 {
 		// no valid vectors for this index, so we don't even have to
 		// record it in the section
+		freeReconstructedIndexes(vecIndexes)
 		return nil
 	}
 
@@ -297,6 +298,12 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	// that they are extracted from the field mapping info.
 	dims := vecIndexes[0].D()
 	metric := vecIndexes[0].MetricType()
+
+	// freeing the reconstructed indexes immediately - waiting till the end
+	// to do the same is not needed because the following operations don't need
+	// the reconstructed ones anymore and doing so will hold up memory which can
+	// be detrimental while creating indexes during introduction.
+	freeReconstructedIndexes(vecIndexes)
 
 	index, err := faiss.IndexFactory(dims, indexDescription, metric)
 	if err != nil {

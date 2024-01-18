@@ -70,6 +70,7 @@ type stubVecField struct {
 	similarity  string
 	encodedType byte
 	options     index.FieldIndexingOptions
+	optimizeFor string
 }
 
 // Vector is an implementation of the index.VectorField interface.
@@ -83,6 +84,10 @@ func (n *stubVecField) Similarity() string {
 
 func (n *stubVecField) Dims() int {
 	return n.dims
+}
+
+func (n *stubVecField) IndexOptimizedFor() string {
+	return n.optimizeFor
 }
 
 func (n *stubVecField) Size() int {
@@ -308,6 +313,9 @@ func getSectionContentOffsets(sb *SegmentBase, offset uint64) (
 	pos += uint64(n)
 
 	docValueEnd, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+
+	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
 	indexBytesLen, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])

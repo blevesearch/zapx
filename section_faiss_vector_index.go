@@ -81,10 +81,16 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
 	vo := v.getvectorIndexOpaque(opaque)
 
+	// the segments with valid vector sections in them
+	// preallocating the space over here, if there are too many fields
+	// in the segment this will help by avoiding multiple allocation
+	// calls.
+	vecSegs := make([]*SegmentBase, 0, len(segments))
+	indexes := make([]*vecIndexMeta, 0, len(segments))
+
 	for fieldID, fieldName := range fieldsInv {
-		indexes := make([]*vecIndexMeta, 0, len(segments))
-		// the segments with valid vector sections in them
-		vecSegs := make([]*SegmentBase, 0, len(segments))
+		indexes = indexes[:0] // resizing the slices
+		vecSegs = vecSegs[:0]
 		vecToDocID := make(map[int64]uint64)
 
 		// todo: would parallely fetching the following stuff from segments

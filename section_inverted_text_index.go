@@ -34,6 +34,9 @@ func init() {
 type invertedTextIndexSection struct {
 }
 
+// this function is something that tells the inverted index section whether to
+// process a particular field or not - since it might be processed by another
+// section this function helps in avoiding unnecessary work.
 var isInvalidInvertedIndexField func(field index.Field) bool
 
 func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint32, field index.Field, fieldID uint16) {

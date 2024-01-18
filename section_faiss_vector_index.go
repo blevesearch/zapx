@@ -35,10 +35,8 @@ func init() {
 	rand.Seed(time.Now().UTC().UnixNano())
 	registerSegmentSection(SectionFaissVectorIndex, &faissVectorIndexSection{})
 	isInvalidInvertedIndexField = func(field index.Field) bool {
-		if _, ok := field.(index.VectorField); ok {
-			return true
-		}
-		return false
+		_, ok := field.(index.VectorField)
+		return ok
 	}
 }
 
@@ -72,7 +70,6 @@ type vecIndexMeta struct {
 	startOffset int
 	indexSize   uint64
 	vecIds      []int64
-	deleted     []int64
 }
 
 // keep in mind with respect to update and delete operations with resepct to vectors
@@ -153,13 +150,11 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 				}
 				// if the remapped doc ID is valid, track it
 				// as part of vecs to be reconstructed (for larger indexes).
-				// otherwise, since there are no docs present for this vecID,
-				// delete it from the specific vector index later on.
+				// this would account only the valid vector IDs, so the deleted
+				// ones won't be reconstructed in the final index.
 				if vecIDNotDeleted {
 					vecToDocID[vecID] = newDocID
 					indexes[curIdx].vecIds = append(indexes[curIdx].vecIds, vecID)
-				} else {
-					indexes[curIdx].deleted = append(indexes[curIdx].deleted, vecID)
 				}
 			}
 		}

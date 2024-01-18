@@ -34,7 +34,7 @@ import (
 func init() {
 	rand.Seed(time.Now().UTC().UnixNano())
 	registerSegmentSection(SectionFaissVectorIndex, &faissVectorIndexSection{})
-	isInvalidInvertedIndexField = func(field index.Field) bool {
+	isFieldNotApplicableToInvertedTextSection = func(field index.Field) bool {
 		_, ok := field.(index.VectorField)
 		return ok
 	}

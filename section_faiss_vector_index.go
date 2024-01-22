@@ -438,9 +438,16 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 	//    2. its constituent vectorID -> {docID} mapping.
 	tempBuf := vo.grabBuf(binary.MaxVarintLen64)
 	for fieldID, content := range vo.vecFieldMap {
-
-		var vecs []float32
-		var ids []int64
+		// calculate the capacity of the vecs and ids slices
+		// to avoid multiple allocations.
+		vecsLen := 0
+		idsLen := 0
+		for _, vecInfo := range content.vecs {
+			vecsLen += len(vecInfo.vec)
+			idsLen++
+		}
+		vecs := make([]float32, 0, vecsLen)
+		ids := make([]int64, 0, idsLen)
 		for hash, vecInfo := range content.vecs {
 			vecs = append(vecs, vecInfo.vec...)
 			ids = append(ids, int64(hash))

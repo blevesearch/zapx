@@ -38,13 +38,13 @@ type invertedTextIndexSection struct {
 // process a particular field or not - since it might be processed by another
 // section this function helps in avoiding unnecessary work.
 // (only used by faiss vector section currently, will need a separate API for every
-//  section we introduce in the future or a better way forward - TODO)
+// section we introduce in the future or a better way forward - TODO)
 var isFieldNotApplicableToInvertedTextSection func(field index.Field) bool
 
 func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint32, field index.Field, fieldID uint16) {
-	invIndexOpaque := i.getInvertedIndexOpaque(opaque)
 	if isFieldNotApplicableToInvertedTextSection == nil ||
 		!isFieldNotApplicableToInvertedTextSection(field) {
+		invIndexOpaque := i.getInvertedIndexOpaque(opaque)
 		invIndexOpaque.process(field, fieldID, docNum)
 	}
 }
@@ -243,6 +243,11 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			err = enumerator.Next()
 		}
 		if err != vellum.ErrIteratorDone {
+			return nil, 0, err
+		}
+		// close the enumerator to free the underlying iterators
+		err = enumerator.Close()
+		if err != nil {
 			return nil, 0, err
 		}
 

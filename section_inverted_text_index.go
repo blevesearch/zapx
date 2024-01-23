@@ -92,12 +92,11 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 	// for each field
 	for fieldID, fieldName := range fieldsInv {
 		// collect FST iterators from all active segments for this field
-		var newDocNums [][]uint64
-		var drops []*roaring.Bitmap
-		var dicts []*Dictionary
-		var itrs []vellum.Iterator
-
-		var segmentsInFocus []*SegmentBase
+		newDocNums := make([][]uint64, 0, len(segments))
+		drops := make([]*roaring.Bitmap, 0, len(segments))
+		dicts := make([]*Dictionary, 0, len(segments))
+		itrs := make([]vellum.Iterator, 0, len(segments))
+		segmentsInFocus := make([]*SegmentBase, 0, len(segments))
 
 		for segmentI, segment := range segments {
 			// check for the closure in meantime

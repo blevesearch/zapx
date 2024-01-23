@@ -257,7 +257,7 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*SegmentBase,
 	vecToDocID map[int64]uint64, indexes []*vecIndexMeta, w *CountHashWriter, closeCh chan struct{}) error {
 
-	var vecIndexes []*faiss.IndexImpl
+	vecIndexes := make([]*faiss.IndexImpl, 0, len(sbs))
 	for segI, seg := range sbs {
 		// read the index bytes. todo: parallelize this
 		indexBytes := seg.mem[indexes[segI].startOffset : indexes[segI].startOffset+int(indexes[segI].indexSize)]
@@ -270,18 +270,22 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	}
 
 	// no vector indexes to merge
-	if vecIndexes == nil {
+	if len(vecIndexes) == 0 {
 		return nil
 	}
 
 	var mergedIndexBytes []byte
 
-	var finalVecIDs []int64
+	// capacities for the finalVecIDs and indexData slices
+	// to avoid multiple allocations, via append.
+	finalVecIDCap := len(vecIndexes) * len(indexes[0].vecIds)
+	indexDataCap := len(vecIndexes) * vecIndexes[0].D() * len(indexes[0].vecIds)
 
+	finalVecIDs := make([]int64, 0, finalVecIDCap)
 	// merging of indexes with reconstruction method.
 	// the indexes[i].vecIds has only the valid vecs of this vector
 	// index present in it, so we'd be reconstructing only those.
-	var indexData []float32
+	indexData := make([]float32, 0, indexDataCap)
 	for i := 0; i < len(vecIndexes); i++ {
 		if isClosed(closeCh) {
 			freeReconstructedIndexes(vecIndexes)

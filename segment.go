@@ -110,6 +110,8 @@ type SegmentBase struct {
 
 	m         sync.Mutex
 	fieldFSTs map[uint16]*vellum.FST
+
+	docIDMutex sync.Mutex
 	// cache the maximum docID seen in this segment
 	cachedMaxDocID string
 }
@@ -589,8 +591,8 @@ func (s *SegmentBase) getMaxDocID(idDict *Dictionary) (string, error) {
 		return s.cachedMaxDocID, nil
 	}
 	// max key is not cached, get it from the FST
-	s.m.Lock()
-	defer s.m.Unlock()
+	s.docIDMutex.Lock()
+	defer s.docIDMutex.Unlock()
 	// check again, in case another goroutine already cached it
 	if s.cachedMaxDocID != "" {
 		return s.cachedMaxDocID, nil
@@ -622,19 +624,14 @@ func (s *SegmentBase) DocNumbers(ids []string) (*roaring.Bitmap, error) {
 		if err != nil {
 			return nil, err
 		}
-		filteredIds := make([]string, 0, len(ids))
 		for _, id := range ids {
 			if id <= sMaxStr {
-				filteredIds = append(filteredIds, id)
+				postingsList, err = idDict.postingsList([]byte(id), nil, postingsList)
+				if err != nil {
+					return nil, err
+				}
+				postingsList.OrInto(rv)
 			}
-		}
-
-		for _, id := range filteredIds {
-			postingsList, err = idDict.postingsList([]byte(id), nil, postingsList)
-			if err != nil {
-				return nil, err
-			}
-			postingsList.OrInto(rv)
 		}
 	}
 

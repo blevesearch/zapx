@@ -592,11 +592,12 @@ func (s *SegmentBase) getDocIDinfo() (*Dictionary, string, error) {
 	s.docIDMutex.RLock()
 	cachedDocID := s.cachedMaxDocID
 	cachedDict := s.idDict
-	s.docIDMutex.RUnlock()
 	if cachedDocID != "" && cachedDict != nil {
+		s.docIDMutex.RUnlock()
 		// max doc ID and the id dict is cached, return it
 		return cachedDict, cachedDocID, nil
 	}
+	s.docIDMutex.RUnlock()
 	// not cached so obtain a write lock
 	// to create the _id dict and read the FST
 	// to get the max doc id and cache them

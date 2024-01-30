@@ -295,7 +295,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	recons := make([]float32, 0, reconsCap)
 	var err error
 	for i := 0; i < len(vecIndexes); i++ {
-		recons = recons[:0]
 		if isClosed(closeCh) {
 			freeReconstructedIndexes(vecIndexes)
 			return seg.ErrClosed

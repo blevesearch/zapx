@@ -38,13 +38,13 @@ type invertedTextIndexSection struct {
 // process a particular field or not - since it might be processed by another
 // section this function helps in avoiding unnecessary work.
 // (only used by faiss vector section currently, will need a separate API for every
-//  section we introduce in the future or a better way forward - TODO)
+// section we introduce in the future or a better way forward - TODO)
 var isFieldNotApplicableToInvertedTextSection func(field index.Field) bool
 
 func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint32, field index.Field, fieldID uint16) {
-	invIndexOpaque := i.getInvertedIndexOpaque(opaque)
 	if isFieldNotApplicableToInvertedTextSection == nil ||
 		!isFieldNotApplicableToInvertedTextSection(field) {
+		invIndexOpaque := i.getInvertedIndexOpaque(opaque)
 		invIndexOpaque.process(field, fieldID, docNum)
 	}
 }
@@ -88,17 +88,19 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 	}
 
 	newRoaring := roaring.NewBitmap()
-
+	newDocNums := make([][]uint64, 0, len(segments))
+	drops := make([]*roaring.Bitmap, 0, len(segments))
+	dicts := make([]*Dictionary, 0, len(segments))
+	itrs := make([]vellum.Iterator, 0, len(segments))
+	segmentsInFocus := make([]*SegmentBase, 0, len(segments))
 	// for each field
 	for fieldID, fieldName := range fieldsInv {
 		// collect FST iterators from all active segments for this field
-		var newDocNums [][]uint64
-		var drops []*roaring.Bitmap
-		var dicts []*Dictionary
-		var itrs []vellum.Iterator
-
-		var segmentsInFocus []*SegmentBase
-
+		newDocNums = newDocNums[:0]
+		drops = drops[:0]
+		dicts = dicts[:0]
+		itrs = itrs[:0]
+		segmentsInFocus = segmentsInFocus[:0]
 		for segmentI, segment := range segments {
 			// check for the closure in meantime
 			if isClosed(closeCh) {
@@ -243,6 +245,11 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			err = enumerator.Next()
 		}
 		if err != vellum.ErrIteratorDone {
+			return nil, 0, err
+		}
+		// close the enumerator to free the underlying iterators
+		err = enumerator.Close()
+		if err != nil {
 			return nil, 0, err
 		}
 

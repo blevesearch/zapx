@@ -172,7 +172,7 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32,
 		fieldsIndexOffset:   sectionsIndexOffset,
 		sectionsIndexOffset: sectionsIndexOffset,
 		fieldDvReaders:      make([]map[uint16]*docValueReader, len(segmentSections)),
-		docValueOffset:      0, // docvalueOffsets identified automicatically by the section
+		docValueOffset:      0, // docValueOffsets identified automatically by the section
 		dictLocs:            dictLocs,
 		fieldFSTs:           make(map[uint16]*vellum.FST),
 	}

@@ -307,8 +307,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			neededReconsLen := len(indexes[i].vecIds) * vecIndexes[i].D()
 			recons = recons[:neededReconsLen]
 			// todo: parallelize reconstruction
-			recons, err = vecIndexes[i].ReconstructBatch(int64(len(indexes[i].vecIds)),
-				indexes[i].vecIds, recons)
+			recons, err = vecIndexes[i].ReconstructBatch(indexes[i].vecIds, recons)
 			if err != nil {
 				freeReconstructedIndexes(vecIndexes)
 				return err

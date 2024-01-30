@@ -52,7 +52,7 @@ func writeRoaringWithLen(r *roaring.Bitmap, w io.Writer,
 
 func persistFieldsSection(fieldsInv []string, w *CountHashWriter, dictLocs []uint64, opaque map[int]resetable) (uint64, error) {
 	var rv uint64
-	var fieldsOffsets []uint64
+	fieldsOffsets := make([]uint64, 0, len(fieldsInv))
 
 	for fieldID, fieldName := range fieldsInv {
 		// record start of this field

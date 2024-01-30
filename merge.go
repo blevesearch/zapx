@@ -22,6 +22,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"sync"
 
 	"github.com/RoaringBitmap/roaring"
 	seg "github.com/blevesearch/scorch_segment_api/v2"
@@ -31,6 +32,12 @@ import (
 var DefaultFileMergerBufferSize = 1024 * 1024
 
 const docDropped = math.MaxUint64 // sentinel docNum to represent a deleted doc
+
+var mergeBufferPool = sync.Pool{
+	New: func() interface{} {
+		return bufio.NewWriterSize(nil, DefaultFileMergerBufferSize)
+	},
+}
 
 // Merge takes a slice of segments and bit masks describing which
 // documents may be dropped, and creates a new segment containing the
@@ -68,7 +75,8 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 	}
 
 	// buffer the output
-	br := bufio.NewWriterSize(f, DefaultFileMergerBufferSize)
+	br := mergeBufferPool.Get().(*bufio.Writer)
+	br.Reset(f)
 
 	// wrap it for counting (tracking offsets)
 	cr := NewCountHashWriterWithStatsReporter(br, s)
@@ -106,7 +114,9 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 		return nil, 0, err
 	}
 
-	return newDocNums, uint64(cr.Count()), nil
+	numBytesWritten := cr.Count()
+	mergeBufferPool.Put(br)
+	return newDocNums, uint64(numBytesWritten), nil
 }
 
 func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,

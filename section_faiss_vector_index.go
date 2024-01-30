@@ -257,7 +257,8 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*SegmentBase,
 	vecToDocID map[int64]uint64, indexes []*vecIndexMeta, w *CountHashWriter, closeCh chan struct{}) error {
 
-	var vecIndexes []*faiss.IndexImpl
+	vecIndexes := make([]*faiss.IndexImpl, 0, len(sbs))
+	reconsCap := 0
 	for segI, seg := range sbs {
 		// read the index bytes. todo: parallelize this
 		indexBytes := seg.mem[indexes[segI].startOffset : indexes[segI].startOffset+int(indexes[segI].indexSize)]
@@ -266,22 +267,33 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 			freeReconstructedIndexes(vecIndexes)
 			return err
 		}
+		indexReconsLen := len(indexes[segI].vecIds) * index.D()
+		if indexReconsLen > reconsCap {
+			reconsCap = indexReconsLen
+		}
 		vecIndexes = append(vecIndexes, index)
 	}
 
 	// no vector indexes to merge
-	if vecIndexes == nil {
+	if len(vecIndexes) == 0 {
 		return nil
 	}
 
 	var mergedIndexBytes []byte
 
-	var finalVecIDs []int64
+	// capacities for the finalVecIDs and indexData slices
+	// to avoid multiple allocations, via append.
+	finalVecIDCap := len(indexes[0].vecIds) * len(vecIndexes)
+	indexDataCap := finalVecIDCap * vecIndexes[0].D()
 
+	finalVecIDs := make([]int64, 0, finalVecIDCap)
 	// merging of indexes with reconstruction method.
 	// the indexes[i].vecIds has only the valid vecs of this vector
 	// index present in it, so we'd be reconstructing only those.
-	var indexData []float32
+	indexData := make([]float32, 0, indexDataCap)
+	// reusable buffer for reconstruction
+	recons := make([]float32, 0, reconsCap)
+	var err error
 	for i := 0; i < len(vecIndexes); i++ {
 		if isClosed(closeCh) {
 			freeReconstructedIndexes(vecIndexes)
@@ -291,9 +303,10 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 		// reconstruct the vectors only if present, it could be that
 		// some of the indexes had all of their vectors updated/deleted.
 		if len(indexes[i].vecIds) > 0 {
+			neededReconsLen := len(indexes[i].vecIds) * vecIndexes[i].D()
+			recons = recons[:neededReconsLen]
 			// todo: parallelize reconstruction
-			recons, err := vecIndexes[i].ReconstructBatch(int64(len(indexes[i].vecIds)),
-				indexes[i].vecIds)
+			recons, err = vecIndexes[i].ReconstructBatch(indexes[i].vecIds, recons)
 			if err != nil {
 				freeReconstructedIndexes(vecIndexes)
 				return err
@@ -438,9 +451,10 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 	//    2. its constituent vectorID -> {docID} mapping.
 	tempBuf := vo.grabBuf(binary.MaxVarintLen64)
 	for fieldID, content := range vo.vecFieldMap {
-
-		var vecs []float32
-		var ids []int64
+		// calculate the capacity of the vecs and ids slices
+		// to avoid multiple allocations.
+		vecs := make([]float32, 0, uint16(len(content.vecs))*content.dim)
+		ids := make([]int64, 0, len(content.vecs))
 		for hash, vecInfo := range content.vecs {
 			vecs = append(vecs, vecInfo.vec...)
 			ids = append(ids, int64(hash))

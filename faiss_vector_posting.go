@@ -271,8 +271,8 @@ type vectorIndexWrapper struct {
 	size   func() uint64
 }
 
-func (i *vectorIndexWrapper) Search(qVector []float32,
-	k int64, except *roaring.Bitmap) (segment.VecPostingsList, error) {
+func (i *vectorIndexWrapper) Search(qVector []float32, k int64, except *roaring.Bitmap) (
+	segment.VecPostingsList, error) {
 	return i.search(qVector, k, except)
 }
 
@@ -291,8 +291,7 @@ func (i *vectorIndexWrapper) Size() uint64 {
 // These function pointers may be nil, when InterpretVectorIndex return a non-nil err.
 // It is on the caller to ensure CloseVectorIndex is invoked (sync or async) after
 // their business with the attached vector index concludes.
-func (sb *SegmentBase) InterpretVectorIndex(field string) (
-	segment.VectorIndex, error) {
+func (sb *SegmentBase) InterpretVectorIndex(field string) (segment.VectorIndex, error) {
 	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
 	vecDocIDMap := make(map[int64]uint32)

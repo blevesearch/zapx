@@ -78,6 +78,8 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 	br := mergeBufferPool.Get().(*bufio.Writer)
 	br.Reset(f)
 
+	defer mergeBufferPool.Put(br)
+
 	// wrap it for counting (tracking offsets)
 	cr := NewCountHashWriterWithStatsReporter(br, s)
 
@@ -115,7 +117,6 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 	}
 
 	numBytesWritten := cr.Count()
-	mergeBufferPool.Put(br)
 	return newDocNums, uint64(numBytesWritten), nil
 }
 

@@ -264,27 +264,24 @@ func (vpl *VecPostingsIterator) BytesWritten() uint64 {
 	return 0
 }
 
-type searchVectorIndex func(qVector []float32, k int64, except *roaring.Bitmap) (segment.VecPostingsList, error)
-type closeVectorIndex func()
-type sizeVectorIndex func() uint64
-
-type vectorIndexImpl struct {
-	searchFn searchVectorIndex
-	closeFn  closeVectorIndex
-	sizeFn   sizeVectorIndex
+// vectorIndexWrapper conforms to scorch_segment_api's VectorIndex interface
+type vectorIndexWrapper struct {
+	search func(qVector []float32, k int64, except *roaring.Bitmap) (segment.VecPostingsList, error)
+	close  func()
+	size   func() uint64
 }
 
-func (i *vectorIndexImpl) Search(qVector []float32,
+func (i *vectorIndexWrapper) Search(qVector []float32,
 	k int64, except *roaring.Bitmap) (segment.VecPostingsList, error) {
-	return i.searchFn(qVector, k, except)
+	return i.search(qVector, k, except)
 }
 
-func (i *vectorIndexImpl) Close() {
-	i.closeFn()
+func (i *vectorIndexWrapper) Close() {
+	i.close()
 }
 
-func (i *vectorIndexImpl) Size() uint64 {
-	return i.sizeFn()
+func (i *vectorIndexWrapper) Size() uint64 {
+	return i.size()
 }
 
 // InterpretVectorIndex returns closures that will allow the caller to -
@@ -300,76 +297,79 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 	var vecIndex *faiss.IndexImpl
 	vecDocIDMap := make(map[int64]uint32)
 
-	searchVectorIndex := func(qVector []float32,
-		k int64, except *roaring.Bitmap) (segment.VecPostingsList, error) {
-		// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
-		// 2. both the values can be represented using roaring bitmaps.
-		// 3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
-		// 4. VecPostings would just have the docNum and the score. Every call of Next()
-		//    and Advance just returns the next VecPostings. The caller would do a vp.Number()
-		//    and the Score() to get the corresponding values
-		rv := &VecPostingsList{
-			except:   nil, // todo: handle the except bitmap within postings iterator.
-			postings: roaring64.New(),
+	var (
+		wrapVecIndex = &vectorIndexWrapper{
+			search: func(qVector []float32, k int64, except *roaring.Bitmap) (segment.VecPostingsList, error) {
+				// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
+				// 2. both the values can be represented using roaring bitmaps.
+				// 3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
+				// 4. VecPostings would just have the docNum and the score. Every call of Next()
+				//    and Advance just returns the next VecPostings. The caller would do a vp.Number()
+				//    and the Score() to get the corresponding values
+				rv := &VecPostingsList{
+					except:   nil, // todo: handle the except bitmap within postings iterator.
+					postings: roaring64.New(),
+				}
+
+				if vecIndex == nil || vecIndex.D() != len(qVector) {
+					// vector index not found or dimensionality mismatched
+					return rv, nil
+				}
+
+				var vectorIDsToExclude []int64
+				// iterate through the vector doc ID map and if the doc ID is one to be
+				// deleted, add it to the list
+				for vecID, docID := range vecDocIDMap {
+					if except != nil && except.Contains(docID) {
+						vectorIDsToExclude = append(vectorIDsToExclude, vecID)
+					}
+				}
+
+				scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k, vectorIDsToExclude)
+
+				if err != nil {
+					return nil, err
+				}
+				// for every similar vector returned by the Search() API, add the corresponding
+				// docID and the score to the newly created vecPostingsList
+				for i := 0; i < len(ids); i++ {
+					vecID := ids[i]
+					// Checking if it's present in the vecDocIDMap.
+					// If -1 is returned as an ID(insufficient vectors), this will ensure
+					// they it isn't added to the final postings list.
+					if docID, ok := vecDocIDMap[vecID]; ok {
+						code := getVectorCode(docID, scores[i])
+						rv.postings.Add(uint64(code))
+					}
+				}
+
+				return rv, nil
+			},
+			close: func() {
+				if vecIndex != nil {
+					vecIndex.Close()
+				}
+			},
+			size: func() uint64 {
+				if vecIndex != nil {
+					return vecIndex.Size()
+				}
+				return 0
+			},
 		}
 
-		if vecIndex == nil || vecIndex.D() != len(qVector) {
-			// vector index not found or dimensionality mismatched
-			return rv, nil
-		}
-
-		var vectorIDsToExclude []int64
-		// iterate through the vector doc ID map and if the doc ID is one to be
-		// deleted, add it to the list
-		for vecID, docID := range vecDocIDMap {
-			if except != nil && except.Contains(docID) {
-				vectorIDsToExclude = append(vectorIDsToExclude, vecID)
-			}
-		}
-
-		scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k, vectorIDsToExclude)
-
-		if err != nil {
-			return nil, err
-		}
-		// for every similar vector returned by the Search() API, add the corresponding
-		// docID and the score to the newly created vecPostingsList
-		for i := 0; i < len(ids); i++ {
-			vecID := ids[i]
-			// Checking if it's present in the vecDocIDMap.
-			// If -1 is returned as an ID(insufficient vectors), this will ensure
-			// they it isn't added to the final postings list.
-			if docID, ok := vecDocIDMap[vecID]; ok {
-				code := getVectorCode(docID, scores[i])
-				rv.postings.Add(uint64(code))
-			}
-		}
-
-		return rv, nil
-	}
-
-	closeVectorIndex := func() {
-		if vecIndex != nil {
-			vecIndex.Close()
-		}
-	}
-
-	var vectorIndexInterpret = &vectorIndexImpl{
-		searchFn: searchVectorIndex,
-		closeFn:  closeVectorIndex,
-	}
-
-	var err error
+		err error
+	)
 
 	fieldIDPlus1 := sb.fieldsMap[field]
 	if fieldIDPlus1 <= 0 {
-		return vectorIndexInterpret, nil
+		return wrapVecIndex, nil
 	}
 
 	vectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionFaissVectorIndex]
 	// check if the field has a vector section in the segment.
 	if vectorSection <= 0 {
-		return vectorIndexInterpret, nil
+		return wrapVecIndex, nil
 	}
 
 	pos := int(vectorSection)
@@ -402,12 +402,5 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (
 	}
 
 	vecIndex, err = faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
-
-	vectorIndexInterpret.sizeFn = func() uint64 {
-		if vecIndex != nil {
-			return vecIndex.Size()
-		}
-		return 0
-	}
-	return vectorIndexInterpret, err
+	return wrapVecIndex, err
 }

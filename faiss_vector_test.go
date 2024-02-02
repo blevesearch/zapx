@@ -464,14 +464,14 @@ func TestVectorSegment(t *testing.T) {
 	hitDocIDs := []uint64{2, 9, 9}
 	hitVecs := [][]float32{data[0], data[7][0:3], data[7][3:6]}
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
-		searchVectorIndex, closeVectorIndex, err := vecSeg.InterpretVectorIndex("stubVec")
+		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec")
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		pl, err := searchVectorIndex("stubVec", []float32{0.0, 0.0, 0.0}, 3, nil)
+		pl, err := vecIndex.Search([]float32{0.0, 0.0, 0.0}, 3, nil)
 		if err != nil {
-			closeVectorIndex()
+			vecIndex.Close()
 			t.Fatal(err)
 		}
 		itr := pl.Iterator(nil)
@@ -480,7 +480,7 @@ func TestVectorSegment(t *testing.T) {
 		for {
 			next, err := itr.Next()
 			if err != nil {
-				closeVectorIndex()
+				vecIndex.Close()
 				t.Fatal(err)
 			}
 			if next == nil {
@@ -489,18 +489,20 @@ func TestVectorSegment(t *testing.T) {
 
 			expectedDocID := hitDocIDs[hitCounter]
 			if next.Number() != expectedDocID {
+				vecIndex.Close()
 				t.Fatalf("expected %d got %d", expectedDocID, next.Number())
 			}
 
 			ok, expectedScore, gotScore := compareL2Scores(next.Score(),
 				queryVec, hitVecs[hitCounter], 3)
 			if !ok {
+				vecIndex.Close()
 				t.Fatalf("expected %d got %d", expectedScore, gotScore)
 			}
 
 			hitCounter++
 		}
-		closeVectorIndex()
+		vecIndex.Close()
 	}
 }
 
@@ -556,14 +558,14 @@ func TestPersistedVectorSegment(t *testing.T) {
 	hitDocIDs := []uint64{2, 9, 9}
 	hitVecs := [][]float32{data[0], data[7][0:3], data[7][3:6]}
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
-		searchVectorIndex, closeVectorIndex, err := vecSeg.InterpretVectorIndex("stubVec")
+		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec")
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		pl, err := searchVectorIndex("stubVec", []float32{0.0, 0.0, 0.0}, 3, nil)
+		pl, err := vecIndex.Search([]float32{0.0, 0.0, 0.0}, 3, nil)
 		if err != nil {
-			closeVectorIndex()
+			vecIndex.Close()
 			t.Fatal(err)
 		}
 
@@ -573,7 +575,7 @@ func TestPersistedVectorSegment(t *testing.T) {
 		for {
 			next, err := itr.Next()
 			if err != nil {
-				closeVectorIndex()
+				vecIndex.Close()
 				t.Fatal(err)
 			}
 			if next == nil {
@@ -582,17 +584,19 @@ func TestPersistedVectorSegment(t *testing.T) {
 
 			expectedDocID := hitDocIDs[hitCounter]
 			if next.Number() != expectedDocID {
+				vecIndex.Close()
 				t.Fatalf("expected %d got %d", expectedDocID, next.Number())
 			}
 
 			ok, expectedScore, gotScore := compareL2Scores(next.Score(),
 				queryVec, hitVecs[hitCounter], 3)
 			if !ok {
+				vecIndex.Close()
 				t.Fatalf("expected %d got %d", expectedScore, gotScore)
 			}
 
 			hitCounter++
 		}
-		closeVectorIndex()
+		vecIndex.Close()
 	}
 }

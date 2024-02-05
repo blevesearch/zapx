@@ -259,9 +259,16 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 
 	vecIndexes := make([]*faiss.IndexImpl, 0, len(sbs))
 	reconsCap := 0
-	for segI, seg := range sbs {
+	for segI, segBase := range sbs {
+		// Considering merge operations on vector indexes are expensive, it is
+		// worth including an early exit if the merge is aborted, saving us
+		// the resource spikes, even if temporary.
+		if isClosed(closeCh) {
+			freeReconstructedIndexes(vecIndexes)
+			return seg.ErrClosed
+		}
 		// read the index bytes. todo: parallelize this
-		indexBytes := seg.mem[indexes[segI].startOffset : indexes[segI].startOffset+int(indexes[segI].indexSize)]
+		indexBytes := segBase.mem[indexes[segI].startOffset : indexes[segI].startOffset+int(indexes[segI].indexSize)]
 		index, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
 		if err != nil {
 			freeReconstructedIndexes(vecIndexes)

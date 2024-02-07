@@ -266,14 +266,14 @@ func (vpl *VecPostingsIterator) BytesWritten() uint64 {
 
 // vectorIndexWrapper conforms to scorch_segment_api's VectorIndex interface
 type vectorIndexWrapper struct {
-	search func(qVector []float32, k int64, except *roaring.Bitmap) (segment.VecPostingsList, error)
+	search func(qVector []float32, k int64, except *roaring.Bitmap, distanceBuffer []float32, labelBuffer []int64) (segment.VecPostingsList, error)
 	close  func()
 	size   func() uint64
 }
 
-func (i *vectorIndexWrapper) Search(qVector []float32, k int64, except *roaring.Bitmap) (
+func (i *vectorIndexWrapper) Search(qVector []float32, k int64, except *roaring.Bitmap, distanceBuffer []float32, labelBuffer []int64) (
 	segment.VecPostingsList, error) {
-	return i.search(qVector, k, except)
+	return i.search(qVector, k, except, distanceBuffer, labelBuffer)
 }
 
 func (i *vectorIndexWrapper) Close() {
@@ -298,7 +298,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (segment.VectorIndex, 
 
 	var (
 		wrapVecIndex = &vectorIndexWrapper{
-			search: func(qVector []float32, k int64, except *roaring.Bitmap) (segment.VecPostingsList, error) {
+			search: func(qVector []float32, k int64, except *roaring.Bitmap, distanceBuffer []float32, labelBuffer []int64) (segment.VecPostingsList, error) {
 				// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
 				// 2. both the values can be represented using roaring bitmaps.
 				// 3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
@@ -324,7 +324,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (segment.VectorIndex, 
 					}
 				}
 
-				scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k, vectorIDsToExclude)
+				scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k, vectorIDsToExclude, distanceBuffer, labelBuffer)
 
 				if err != nil {
 					return nil, err

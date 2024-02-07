@@ -469,7 +469,12 @@ func TestVectorSegment(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		pl, err := vecIndex.Search([]float32{0.0, 0.0, 0.0}, 3, nil)
+		// since only one segment is present we just make the buffer of size K here itself
+		bufSize := 3
+		distanceBuffer := make([]float32, bufSize)
+		labelBuffer := make([]int64, bufSize)
+
+		pl, err := vecIndex.Search([]float32{0.0, 0.0, 0.0}, 3, nil, distanceBuffer, labelBuffer)
 		if err != nil {
 			vecIndex.Close()
 			t.Fatal(err)
@@ -562,8 +567,11 @@ func TestPersistedVectorSegment(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-
-		pl, err := vecIndex.Search([]float32{0.0, 0.0, 0.0}, 3, nil)
+		// since only one segment is present we just make the buffer of size K here itself
+		bufSize := 3
+		distanceBuffer := make([]float32, bufSize)
+		labelBuffer := make([]int64, bufSize)
+		pl, err := vecIndex.Search([]float32{0.0, 0.0, 0.0}, 3, nil, distanceBuffer, labelBuffer)
 		if err != nil {
 			vecIndex.Close()
 			t.Fatal(err)

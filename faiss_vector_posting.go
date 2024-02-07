@@ -382,12 +382,6 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (segment.VectorIndex, 
 		pos += n
 	}
 
-	// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
-	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += n
-	indexBytes := sb.mem[pos : pos+int(indexSize)]
-	pos += int(indexSize)
-
 	// read the number vectors indexed for this field and load the vector to docID mapping.
 	// todo: cache the vecID to docIDs mapping for a fieldID
 	numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
@@ -399,6 +393,12 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (segment.VectorIndex, 
 		pos += n
 		vecDocIDMap[vecID] = uint32(docID)
 	}
+
+	// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
+	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
+	indexBytes := sb.mem[pos : pos+int(indexSize)]
+	pos += int(indexSize)
 
 	vecIndex, err = faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
 	return wrapVecIndex, err

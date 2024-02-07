@@ -121,23 +121,16 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			indexOptimizationTypeInt, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
-			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
 			vecSegs = append(vecSegs, sb)
 			indexes = append(indexes, &vecIndexMeta{
-				startOffset:       pos,
-				indexSize:         indexSize,
+				vecIds:            make([]int64, 0, numVecs),
 				indexOptimizedFor: index.VectorIndexOptimizationsReverseLookup[int(indexOptimizationTypeInt)],
 			})
 
-			pos += int(indexSize)
-
-			numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-			pos += n
 			curIdx := len(indexes) - 1
-			indexes[curIdx].vecIds = make([]int64, 0, numVecs)
-
 			for i := 0; i < int(numVecs); i++ {
 				vecID, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
 				pos += n
@@ -163,8 +156,20 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 					indexes[curIdx].vecIds = append(indexes[curIdx].vecIds, vecID)
 				}
 			}
+
+			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+
+			indexes[curIdx].startOffset = pos
+			indexes[curIdx].indexSize = indexSize
+			pos += int(indexSize)
 		}
-		err := vo.mergeAndWriteVectorIndexes(fieldID, vecSegs, vecToDocID, indexes, w, closeCh)
+
+		err := vo.flushSectionMetadata(fieldID, w, vecToDocID, indexes)
+		if err != nil {
+			return err
+		}
+		err = vo.mergeAndWriteVectorIndexes(vecSegs, indexes, w, closeCh)
 		if err != nil {
 			return err
 		}
@@ -173,47 +178,38 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 	return nil
 }
 
-func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]uint64,
-	serializedIndex []byte, indexOptimizedFor string, w *CountHashWriter) (int, error) {
+func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter,
+	vecToDocID map[int64]uint64, indexes []*vecIndexMeta) error {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
-
+	if len(indexes) == 0 {
+		fmt.Println("its nil")
+		return nil
+	}
 	fieldStart := w.Count()
 	// marking the fact that for vector index, doc values isn't valid by
 	// storing fieldNotUniverted values.
 	n := binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
 	_, err := w.Write(tempBuf[:n])
 	if err != nil {
-		return 0, err
+		return err
 	}
 	n = binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
 	_, err = w.Write(tempBuf[:n])
 	if err != nil {
-		return 0, err
+		return err
 	}
 
-	n = binary.PutUvarint(tempBuf, uint64(index.SupportedVectorIndexOptimizations[indexOptimizedFor]))
+	n = binary.PutUvarint(tempBuf, uint64(index.SupportedVectorIndexOptimizations[indexes[0].indexOptimizedFor]))
 	_, err = w.Write(tempBuf[:n])
 	if err != nil {
-		return 0, err
-	}
-
-	n = binary.PutUvarint(tempBuf, uint64(len(serializedIndex)))
-	_, err = w.Write(tempBuf[:n])
-	if err != nil {
-		return 0, err
-	}
-
-	// write the vector index data
-	_, err = w.Write(serializedIndex)
-	if err != nil {
-		return 0, err
+		return err
 	}
 
 	// write the number of unique vectors
 	n = binary.PutUvarint(tempBuf, uint64(len(vecToDocID)))
 	_, err = w.Write(tempBuf[:n])
 	if err != nil {
-		return 0, err
+		return err
 	}
 
 	for vecID, docID := range vecToDocID {
@@ -221,18 +217,37 @@ func (v *vectorIndexOpaque) flushVectorSection(vecToDocID map[int64]uint64,
 		n = binary.PutVarint(tempBuf, vecID)
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
-			return 0, err
+			return err
 		}
 
 		// write the docID
 		n = binary.PutUvarint(tempBuf, docID)
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
-			return 0, err
+			return err
 		}
 	}
 
-	return fieldStart, nil
+	v.fieldAddrs[uint16(fieldID)] = fieldStart
+	return nil
+}
+
+func (v *vectorIndexOpaque) flushVectorIndex(indexBytes []byte, w *CountHashWriter) error {
+	tempBuf := v.grabBuf(binary.MaxVarintLen64)
+
+	n := binary.PutUvarint(tempBuf, uint64(len(indexBytes)))
+	_, err := w.Write(tempBuf[:n])
+	if err != nil {
+		return err
+	}
+
+	// write the vector index data
+	_, err = w.Write(indexBytes)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Divide the estimated nprobe with this value to optimize
@@ -254,8 +269,8 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 
 // todo: naive implementation. need to keep in mind the perf implications and improve on this.
 // perhaps, parallelized merging can help speed things up over here.
-func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*SegmentBase,
-	vecToDocID map[int64]uint64, indexes []*vecIndexMeta, w *CountHashWriter, closeCh chan struct{}) error {
+func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
+	indexes []*vecIndexMeta, w *CountHashWriter, closeCh chan struct{}) error {
 
 	vecIndexes := make([]*faiss.IndexImpl, 0, len(sbs))
 	reconsCap := 0
@@ -387,12 +402,11 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(fieldID int, sbs []*Segme
 	if err != nil {
 		return err
 	}
-	fieldStart, err := v.flushVectorSection(vecToDocID, mergedIndexBytes,
-		indexOptimizedFor, w)
+
+	err = v.flushVectorIndex(mergedIndexBytes, w)
 	if err != nil {
 		return err
 	}
-	v.fieldAddrs[uint16(fieldID)] = fieldStart
 
 	return nil
 }
@@ -528,21 +542,6 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			return 0, err
 		}
 
-		// record the fieldStart value for this section.
-		// write the vecID -> docID mapping
-		// write the index bytes and its length
-		n = binary.PutUvarint(tempBuf, uint64(len(buf)))
-		_, err = w.Write(tempBuf[:n])
-		if err != nil {
-			return 0, err
-		}
-
-		// write the vector index data
-		_, err = w.Write(buf)
-		if err != nil {
-			return 0, err
-		}
-
 		// write the number of unique vectors
 		n = binary.PutUvarint(tempBuf, uint64(faissIndex.Ntotal()))
 		_, err = w.Write(tempBuf[:n])
@@ -570,6 +569,21 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			if err != nil {
 				return 0, err
 			}
+		}
+
+		// record the fieldStart value for this section.
+		// write the vecID -> docID mapping
+		// write the index bytes and its length
+		n = binary.PutUvarint(tempBuf, uint64(len(buf)))
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return 0, err
+		}
+
+		// write the vector index data
+		_, err = w.Write(buf)
+		if err != nil {
+			return 0, err
 		}
 
 		// accounts for whatever data has been written out to the writer.
@@ -604,7 +618,7 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 		// NOTE: currently, indexing only unique vectors.
 		subVecHash := hashCode(subVec)
 		if _, ok := vo.vecIDMap[subVecHash]; !ok {
-			vo.vecIDMap[subVecHash] = vecInfo{
+			vo.vecIDMap[subVecHash] = &vecInfo{
 				docID: docNum,
 			}
 		}
@@ -612,9 +626,9 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 		// tracking the unique vectors for every field which will be used later
 		// to construct the vector index.
 		if _, ok := vo.vecFieldMap[fieldID]; !ok {
-			vo.vecFieldMap[fieldID] = indexContent{
-				vecs: map[int64]vecInfo{
-					subVecHash: {
+			vo.vecFieldMap[fieldID] = &indexContent{
+				vecs: map[int64]*vecInfo{
+					subVecHash: &vecInfo{
 						vec: subVec,
 					},
 				},
@@ -623,7 +637,7 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 				indexOptimizedFor: indexOptimizedFor,
 			}
 		} else {
-			vo.vecFieldMap[fieldID].vecs[subVecHash] = vecInfo{
+			vo.vecFieldMap[fieldID].vecs[subVecHash] = &vecInfo{
 				vec: subVec,
 			}
 		}
@@ -660,8 +674,8 @@ func (v *faissVectorIndexSection) getvectorIndexOpaque(opaque map[int]resetable)
 func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) resetable {
 	rv := &vectorIndexOpaque{
 		fieldAddrs:  make(map[uint16]int),
-		vecIDMap:    make(map[int64]vecInfo),
-		vecFieldMap: make(map[uint16]indexContent),
+		vecIDMap:    make(map[int64]*vecInfo),
+		vecFieldMap: make(map[uint16]*indexContent),
 	}
 	for k, v := range args {
 		rv.Set(k, v)
@@ -671,7 +685,7 @@ func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) reseta
 }
 
 type indexContent struct {
-	vecs              map[int64]vecInfo
+	vecs              map[int64]*vecInfo
 	dim               uint16
 	metric            string
 	indexOptimizedFor string
@@ -695,10 +709,10 @@ type vectorIndexOpaque struct {
 
 	// maps the vecID to basic info involved around it such as
 	// the docID its present in and the vector itself
-	vecIDMap map[int64]vecInfo
+	vecIDMap map[int64]*vecInfo
 	// maps the field to information necessary for its vector
 	// index to be build.
-	vecFieldMap map[uint16]indexContent
+	vecFieldMap map[uint16]*indexContent
 
 	tmp0 []byte
 }
@@ -707,8 +721,8 @@ func (v *vectorIndexOpaque) realloc() {
 	// when an opaque instance is reused, the two maps are pre-allocated
 	// with space before they were reset. this can be useful in continuous
 	// mutation scenarios, where the batch sizes are more or less same.
-	v.vecFieldMap = make(map[uint16]indexContent, v.lastNumFields)
-	v.vecIDMap = make(map[int64]vecInfo, v.lastNumVecs)
+	v.vecFieldMap = make(map[uint16]*indexContent, v.lastNumFields)
+	v.vecIDMap = make(map[int64]*vecInfo, v.lastNumVecs)
 	v.fieldAddrs = make(map[uint16]int, v.lastNumFields)
 }
 

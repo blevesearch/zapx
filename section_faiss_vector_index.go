@@ -182,7 +182,6 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter
 	vecToDocID map[int64]uint64, indexes []*vecIndexMeta) error {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 	if len(indexes) == 0 {
-		fmt.Println("its nil")
 		return nil
 	}
 	fieldStart := w.Count()

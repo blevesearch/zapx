@@ -128,14 +128,7 @@ func decodeSection(data []byte, start uint64) (int, int, map[int64]uint64, *fais
 		pos += n
 	}
 
-	// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
-	indexSize, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
-	pos += n
-	indexBytes := data[pos : pos+int(indexSize)]
-	pos += int(indexSize)
-
 	// read the number vectors indexed for this field and load the vector to docID mapping.
-	// todo: cache the vecID to docIDs mapping for a fieldID
 	numVecs, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += n
 	for i := 0; i < int(numVecs); i++ {
@@ -146,6 +139,12 @@ func decodeSection(data []byte, start uint64) (int, int, map[int64]uint64, *fais
 		pos += n
 		vecDocIDMap[vecID] = docID
 	}
+
+	// read the index bytes
+	indexSize, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+	pos += n
+	indexBytes := data[pos : pos+int(indexSize)]
+	pos += int(indexSize)
 
 	vecIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
 	if err != nil {

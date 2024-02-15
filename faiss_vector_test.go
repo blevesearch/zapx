@@ -10,6 +10,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
@@ -168,10 +169,18 @@ var stubVec1Data = [][]float32{
 	{0.321, 0.654, 0.987, 0.789, 0.456, 0.123},
 }
 
-func buildMultiDocDataset() []index.Document {
+var stubInvalidVecData = [][]float32{
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+	{},
+}
 
-	stubVecs := stubVecData
-	stubVecs1 := stubVec1Data
+func buildMultiDocDataset(stubVecs, stubVecs1 [][]float32) []index.Document {
 
 	doc1 := newStubDocument("a", []*stubField{
 		newStubFieldSplitString("_id", nil, "a", true, false, false),
@@ -412,7 +421,7 @@ func compareL2Scores(gotScore float32, qVec []float32, vec []float32,
 }
 
 func TestVectorSegment(t *testing.T) {
-	docs := buildMultiDocDataset()
+	docs := buildMultiDocDataset(stubVecData, stubVec1Data)
 
 	vecSegPlugin := &ZapPlugin{}
 	seg, _, err := vecSegPlugin.New(docs)
@@ -530,7 +539,7 @@ func TestHashCode(t *testing.T) {
 }
 
 func TestPersistedVectorSegment(t *testing.T) {
-	docs := buildMultiDocDataset()
+	docs := buildMultiDocDataset(stubVecData, stubVec1Data)
 
 	vecSegPlugin := &ZapPlugin{}
 	seg, _, err := vecSegPlugin.New(docs)
@@ -605,4 +614,126 @@ func TestPersistedVectorSegment(t *testing.T) {
 		}
 		vecIndex.Close()
 	}
+}
+
+func TestValidVectorMerge(t *testing.T) {
+	dataset1 := buildMultiDocDataset(stubVecData, stubVec1Data)
+	dataset2 := buildMultiDocDataset(stubInvalidVecData, stubVec1Data)
+
+	vecSegPlugin := &ZapPlugin{}
+	seg, _, err := vecSegPlugin.New(dataset1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path1 := "./test-seg-1"
+	if unPersistedSeg, ok := seg.(segment.UnpersistedSegment); ok {
+		err = unPersistedSeg.Persist(path1)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	segOnDisk1, err := vecSegPlugin.Open(path1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seg2, _, err := vecSegPlugin.New(dataset2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path2 := "./test-seg-2"
+	if unPersistedSeg, ok := seg2.(segment.UnpersistedSegment); ok {
+		err = unPersistedSeg.Persist(path2)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	segOnDisk2, err := vecSegPlugin.Open(path2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() {
+		cerr := segOnDisk1.Close()
+		if cerr != nil {
+			t.Fatalf("error closing segment: %v", cerr)
+		}
+		_ = os.RemoveAll(path1)
+
+		cerr = segOnDisk2.Close()
+		if cerr != nil {
+			t.Fatalf("error closing segment: %v", cerr)
+		}
+		_ = os.RemoveAll(path2)
+
+	}()
+
+	docsToDrop := make([]*roaring.Bitmap, 2)
+	docsToDrop[0] = roaring.NewBitmap()
+
+	for i := 0; i < len(dataset1); i++ {
+		docsToDrop[0].AddInt(i) // ith doc of the first segment was updated in the 2nd one
+	}
+
+	mergedSegPath := "./test-merge-seg"
+
+	_, _, err = vecSegPlugin.Merge([]segment.Segment{segOnDisk1, segOnDisk2}, docsToDrop, mergedSegPath, nil, nil)
+	if err != nil {
+		t.Fatalf("merge failed, err: %v", err)
+	}
+
+	mergedSeg, err := zapPlugin.Open(mergedSegPath)
+	if err != nil {
+		t.Fatalf("error while opening merged seg, err: %v", err)
+	}
+
+	defer func() {
+		cerr := mergedSeg.Close()
+		if cerr != nil {
+			t.Fatalf("error closing segment: %v", cerr)
+		}
+		_ = os.RemoveAll(mergedSegPath)
+	}()
+
+	seg3, _, err := vecSegPlugin.New(dataset1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path3 := "./test-seg-3"
+	if unPersistedSeg, ok := seg3.(segment.UnpersistedSegment); ok {
+		err = unPersistedSeg.Persist(path3)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	segOnDisk3, err := vecSegPlugin.Open(path3)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() {
+		cerr := segOnDisk3.Close()
+		if cerr != nil {
+			t.Fatalf("error closing segment: %v", cerr)
+		}
+		_ = os.RemoveAll(path3)
+	}()
+
+	docsToDrop = make([]*roaring.Bitmap, 2)
+
+	mergedSegPath1 := "./test-merge-seg-1"
+	_, _, err = vecSegPlugin.Merge([]segment.Segment{mergedSeg, segOnDisk3}, docsToDrop, mergedSegPath1, nil, nil)
+	if err != nil {
+		t.Fatalf("merge failed, err: %v", err)
+	}
+
+	defer func() {
+		_ = os.RemoveAll(mergedSegPath1)
+	}()
 }

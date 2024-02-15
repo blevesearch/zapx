@@ -181,7 +181,10 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter,
 	vecToDocID map[int64]uint64, indexes []*vecIndexMeta) error {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
-	if len(indexes) == 0 {
+
+	// early exit if there are absolutely no valid vectors present in the segment
+	// and crucially don't store the section start offset in it
+	if len(indexes) == 0 || len(vecToDocID) == 0 {
 		return nil
 	}
 	fieldStart := w.Count()

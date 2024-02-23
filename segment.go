@@ -110,12 +110,6 @@ type SegmentBase struct {
 
 	m         sync.Mutex
 	fieldFSTs map[uint16]*vellum.FST
-
-	docIDMutex sync.RWMutex
-	// cache the maximum docID seen in this segment
-	cachedMaxDocID string
-	//cache the dictionary for the _id field
-	idDict *Dictionary
 }
 
 func (sb *SegmentBase) Size() int {

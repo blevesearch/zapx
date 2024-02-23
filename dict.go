@@ -16,7 +16,6 @@ package zap
 
 import (
 	"fmt"
-	"sync"
 
 	"github.com/RoaringBitmap/roaring"
 	index "github.com/blevesearch/bleve_index_api"
@@ -31,10 +30,6 @@ type Dictionary struct {
 	fieldID uint16
 	fst     *vellum.FST
 
-	// if the dictionary is shared across multiple threads
-	// we need to protect the fstReader with a mutex
-	// since it is not thread safe
-	m         sync.Mutex
 	fstReader *vellum.Reader
 
 	bytesRead uint64
@@ -62,9 +57,8 @@ func (d *Dictionary) postingsList(term []byte, except *roaring.Bitmap, rv *Posti
 		return d.postingsListInit(rv, except), nil
 	}
 
-	d.m.Lock()
 	postingsOffset, exists, err := d.fstReader.Get(term)
-	d.m.Unlock()
+
 	if err != nil {
 		return nil, fmt.Errorf("vellum err: %v", err)
 	}

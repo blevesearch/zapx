@@ -110,12 +110,6 @@ type SegmentBase struct {
 
 	m         sync.Mutex
 	fieldFSTs map[uint16]*vellum.FST
-
-	docIDMutex sync.RWMutex
-	// cache the maximum docID seen in this segment
-	cachedMaxDocID string
-	//cache the dictionary for the _id field
-	idDict *Dictionary
 }
 
 func (sb *SegmentBase) Size() int {
@@ -587,57 +581,26 @@ func (s *SegmentBase) Count() uint64 {
 	return s.numDocs
 }
 
-func (s *SegmentBase) getDocIDinfo() (*Dictionary, string, error) {
-	// obtain a read lock to check if the max doc ID and dict for _id is cached
-	s.docIDMutex.RLock()
-	cachedDocID := s.cachedMaxDocID
-	cachedDict := s.idDict
-	if cachedDocID != "" && cachedDict != nil {
-		s.docIDMutex.RUnlock()
-		// max doc ID and the id dict is cached, return it
-		return cachedDict, cachedDocID, nil
-	}
-	s.docIDMutex.RUnlock()
-	// not cached so obtain a write lock
-	// to create the _id dict and read the FST
-	// to get the max doc id and cache them
-	s.docIDMutex.Lock()
-	defer s.docIDMutex.Unlock()
-	// check if the info is cached again
-	// by some other thread to avoid unnecessary
-	// ops.
-	if s.idDict != nil && s.cachedMaxDocID != "" {
-		return s.idDict, s.cachedMaxDocID, nil
-	}
-	// create the _id dict
-	idDict, err := s.dictionary("_id")
-	if err != nil {
-		return nil, "", err
-	}
-	s.idDict = idDict
-	// max doc ID is not cached, get it from the FST
-	sMax, err := idDict.fst.GetMaxKey()
-	if err != nil {
-		return nil, "", err
-	}
-	// cache it
-	s.cachedMaxDocID = string(sMax)
-	return s.idDict, s.cachedMaxDocID, nil
-}
-
 // DocNumbers returns a bitset corresponding to the doc numbers of all the
 // provided _id strings
 func (s *SegmentBase) DocNumbers(ids []string) (*roaring.Bitmap, error) {
 	rv := roaring.New()
 
 	if len(s.fieldsMap) > 0 {
-		postingsList := emptyPostingsList
-		idDict, maxDocID, err := s.getDocIDinfo()
+		idDict, err := s.dictionary("_id")
 		if err != nil {
 			return nil, err
 		}
+
+		postingsList := emptyPostingsList
+
+		sMax, err := idDict.fst.GetMaxKey()
+		if err != nil {
+			return nil, err
+		}
+		sMaxStr := string(sMax)
 		for _, id := range ids {
-			if id <= maxDocID {
+			if id <= sMaxStr {
 				postingsList, err = idDict.postingsList([]byte(id), nil, postingsList)
 				if err != nil {
 					return nil, err

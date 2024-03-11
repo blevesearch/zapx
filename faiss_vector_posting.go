@@ -403,3 +403,25 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (segment.VectorIndex, 
 	vecIndex, err = faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
 	return wrapVecIndex, err
 }
+
+func (sb *SegmentBase) UpdateFieldStats(stats map[string]map[string]int) {
+
+	for _, fieldName := range sb.fieldsInv {
+
+		pos := int(sb.fieldsSectionsMap[sb.fieldsMap[fieldName]-1][SectionFaissVectorIndex])
+		if pos == 0 {
+			continue
+		}
+
+		_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += n
+		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += n
+		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += n
+
+		numVecs, _ := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+
+		stats["num_vectors"][fieldName] = int(numVecs)
+	}
+}

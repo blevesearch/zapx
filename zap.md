@@ -1,13 +1,13 @@
-# ZAP File Format 
+# ZAP File Format
 
 ## Legend
 
-### Sections
+### File Sections
 
     |========|
-    |        | section
+    |        | file section
     |========|
-    
+
 ### Fixed-size fields
 
     |--------|        |----|        |--|        |-|
@@ -36,33 +36,35 @@
 
 Footer section describes the configuration of particular ZAP file. The format of footer is version-dependent, so it is necessary to check `V` field before the parsing.
 
-            |==================================================|
+            +==================================================+
             | Stored Fields                                    |
             |==================================================|
-    |-----> | Stored Fields Index                              |
-    |       |==================================================|   
-    |       | Dictionaries + Postings + DocValues              | 
+    +-----> | Stored Fields Index                              |
     |       |==================================================|
-    | |---> | DocValues Index                                  |
-    | |     |==================================================|   
-    | |     | Fields                                           |
-    | |     |==================================================|
-    | | |-> | Fields Index                                     |
-    | | |   |========|========|========|========|====|====|====|
-    | | |   |     D# |     SF |      F |    FDV | CF |  V | CC | (Footer)
-    | | |   |========|====|===|====|===|====|===|====|====|====|
-    | | |                 |        |        |
-    |-+-+-----------------|        |        |
-      | |--------------------------|        |
-      |-------------------------------------|
+    |       | Inverted Text Index Section                      |
+    |       |==================================================|
+    |       | Vector Index Section                             |
+    |       |==================================================|
+    |       | Sections Info                                    |
+    |       |==================================================|
+    |   +-> | Sections Index                                   |
+    |   |   |========+========+====+=====+======+====+====+====|
+    |   |   |     D# |     SF |  F |  S  |  FDV | CF |  V | CC | (Footer)
+    |   |   +========+====+===+====+==+==+======+====+====+====+
+    |   |                 |           |
+    +---------------------+           |
+        |-----------------------------+
+
 
      D#. Number of Docs.
      SF. Stored Fields Index Offset.
       F. Field Index Offset.
+      S. Sections Index Offset
     FDV. Field DocValue Offset.
      CF. Chunk Factor.
       V. Version.
      CC. CRC32.
+
 
 ## Stored Fields
 
@@ -86,83 +88,96 @@ Stored Fields Data is an arbitrary size record, which consists of metadata and [
     |~~~~~~~~|~~~~~~~~|~~~~~~~~...~~~~~~~~|~~~~~~~~...~~~~~~~~|
     |    MDS |    CDS |                MD |                CD |
     |~~~~~~~~|~~~~~~~~|~~~~~~~~...~~~~~~~~|~~~~~~~~...~~~~~~~~|
-    
+
     MDS. Metadata size.
     CDS. Compressed data size.
     MD. Metadata.
     CD. Snappy-compressed data.
 
-## Fields
+## Index Sections
 
-Fields Index section located between addresses `F` and `len(file) - len(footer)` and consist of `uint64` values (`F1`, `F2`, ...) which are offsets to records in Fields section. We have `F# = (len(file) - len(footer) - F) / sizeof(uint64)` fields.
+Sections Index is a set of NF uint64 addresses (0 through F# - 1) each of which are offsets to the records in the Sections Info. Inside the sections info, we have further offsets to specific type of index section for that particular field in the segment file. For example, field 0 may correspond to Vector Indexing and its records would have offsets to the Vector Index Section whereas a field 1 may correspond to Text Indexing and its records would rather point to somewhere within the Inverted Text Index Section.
+
+       (...)                                                                        [F]                           [F + F#]
+       + Sections Info                                                              + Sections Index                      +
+       |============================================================================|=====================================|
+       |                                                                            |                                     |
+       | +---------+---------+-----+---------+---------+~~~~~~~~+~~~~~~~~+--+...+-+ | +-------+--------+...+------+-----+ |
+    +----> S1 Addr | S1 Type | ... | Sn Addr | Sn Type |   NS   | Length |  Name  | | |     0 |      1 |   | F#-1 | NF  | |
+    |  | +---------+---------+-----+---------+---------+~~~~~~~~+~~~~~~~~+--+...+-+ | +-------+----+---+...+------+-----+ |
+    |  |                                                                            |              |                      |
+    |  +============================================================================+==============|======================+
+    |                                                                                              |
+    +----------------------------------------------------------------------------------------------+
+
+     NF. Number of fields
+     NS. Number of index sections
+     Sn. nth index section
 
 
-    (...)                            [F]                       [F + F#]
-    | Fields                         | Fields Index.                  |
-    |================================|================================|
-    |                                |                                |
-    |   |~~~~~~~~|~~~~~~~~|---...---|||--------|--------|...|--------||
-    ||->|   Dict | Length |    Name |||      0 |      1 |   | F# - 1 ||
-    ||  |~~~~~~~~|~~~~~~~~|---...---|||--------|----|---|...|--------||
-    ||                               |              |                 |
-    ||===============================|==============|=================|
-     |                                              |
-     |----------------------------------------------|
-        
+## Inverted Text Index Section
 
-## Dictionaries + Postings
+Each fields has its own types of indexes in separate sections as indicated above. This can be a vector index or inverted text index.
 
-Each of fields has its own dictionary, encoded in [Vellum](https://github.com/couchbase/vellum) format. Dictionary consists of pairs `(term, offset)`, where `offset` indicates the position of postings (list of documents) for this particular term.
+In case of inverted text index, the dictionary is encoded in [Vellum](https://github.com/couchbase/vellum) format. Dictionary consists of pairs `(term, offset)`, where `offset` indicates the position of postings (list of documents) for this particular term.
 
-	|================================================================|- Dictionaries + 
-	|                                                                |   Postings +
-	|                                                                |    DocValues
-	|    Freq/Norm (chunked)                                         |
-	|    [~~~~~~|~~~~~~~~~~~~~~~~~~~~~~~~~~~~~]                      |
-	| |->[ Freq | Norm (float32 under varint) ]                      |
-	| |  [~~~~~~|~~~~~~~~~~~~~~~~~~~~~~~~~~~~~]                      |
-	| |                                                              |
-	| |------------------------------------------------------------| |
-	|    Location Details (chunked)                                | |
-	|    [~~~~~~|~~~~~|~~~~~~~|~~~~~|~~~~~~|~~~~~~~~|~~~~~]        | |
-	| |->[ Size | Pos | Start | End | Arr# | ArrPos | ... ]        | |
-	| |  [~~~~~~|~~~~~|~~~~~~~|~~~~~|~~~~~~|~~~~~~~~|~~~~~]        | |
-	| |                                                            | |
-	| |----------------------|                                     | |
-	|          Postings List |                                     | |
-	|         |~~~~~~~~|~~~~~|~~|~~~~~~~~|-----------...--|        | |
-	|      |->|    F/N |     LD | Length | ROARING BITMAP |        | |
-	|      |  |~~~~~|~~|~~~~~~~~|~~~~~~~~|-----------...--|        | |
-	|      |        |----------------------------------------------| |
-	|      |--------------------------------------|                  |
-	|          Dictionary                         |                  |
-	|         |~~~~~~~~|--------------------------|-...-|            |
-	|      |->| Length | VELLUM DATA : (TERM -> OFFSET) |            |
-	|      |  |~~~~~~~~|----------------------------...-|            |
-	|      |                                                         |
-	|======|=========================================================|- DocValues Index
-	|      |                                                         |
-	|======|=========================================================|- Fields
-	|      |                                                         |
-	| |~~~~|~~~|~~~~~~~~|---...---|                                  |
-	| |   Dict | Length |    Name |                                  |
-	| |~~~~~~~~|~~~~~~~~|---...---|                                  |
-	|                                                                |
-	|================================================================|
+        +================================================================+- Inverted Text
+        |                                                                |  Index Section
+        |                                                                |
+        |    Freq/Norm (chunked)                                         |
+        |    [~~~~~~+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~]                      |
+        | +->[ Freq | Norm (float32 under varint) ]                      |
+        | |  [~~~~~~+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~]                      |
+        | |                                                              |
+        | +------------------------------------------------------------+ |
+        |    Location Details (chunked)                                | |
+        |    [~~~~~~+~~~~~+~~~~~~~+~~~~~+~~~~~~+~~~~~~~~+~~~~~]        | |
+        | +->[ Size | Pos | Start | End | Arr# | ArrPos | ... ]        | |
+        | |  [~~~~~~+~~~~~+~~~~~~~+~~~~~+~~~~~~+~~~~~~~~+~~~~~]        | |
+        | |                                                            | |
+        | +----------------------+                                     | |
+        |          Postings List |                                     | |
+        |         +~~~~~~~~+~~~~~+~~+~~~~~~~~+----------+...+-+        | |
+        |      +->+    F/N |     LD | Length | ROARING BITMAP |        | |
+        |      |  +~~~~~+~~|~~~~~~~~|~~~~~~~~+----------+...+-+        | |
+        |      |        +----------------------------------------------+ |
+        |      +-------------------------------------------------+       |
+        |                                                        |       |
+        |                     Dictionary                         |       |
+        | +~~~~~~~~~~+~~~~~~~+~~~~~~~~+--------------------------+-...-+ |
+    +-----> DV Start | DV End| Length | VELLUM DATA : (TERM -> OFFSET) | |
+    |   | +~~~~~~~~~~+~~~~~~~+~~~~~~~~+----------------------------...-+ |
+    |   |                                                                |
+    |   |                                                                |
+    |   |================================================================+- Vector Index Section
+    |   |                                                                |
+    |   |================================================================+- Sections Info
+    +-----------------------------+                                      |
+        |                         |                                      |
+        |     +-------+-----+-----+------+~~~~~~~~+~~~~~~~~+--+...+--+   |
+        |     |  ...  | ITI | ITI ADDR   |   NS   | Length |    Name |   |
+        |     +-------+-----+------------+~~~~~~~~+~~~~~~~~+--+...+--+   |
+        +================================================================+
 
-## DocValues
 
-DocValues Index is `F#` pairs of varints, one pair per field. Each pair of varints indicates start and end point of DocValues slice.
+         ITI - Inverted Text Index
 
-	|================================================================|
-	|     |------...--|                                              |
-	|  |->| DocValues |<-|                                           |
-	|  |  |------...--|  |                                           |
-	|==|=================|===========================================|- DocValues Index
-	||~|~~~~~~~~~|~~~~~~~|~~|           |~~~~~~~~~~~~~~|~~~~~~~~~~~~||
-	|| DV1 START | DV1 STOP | . . . . . | DV(F#) START | DV(F#) END ||
-	||~~~~~~~~~~~|~~~~~~~~~~|           |~~~~~~~~~~~~~~|~~~~~~~~~~~~||
-	|================================================================|
+
+## Doc Values
+
+DocValue start and end offsets are stored within the section content of each field. This allows each field having its own type of index to choose whether to store the doc values or not. For example, it may not make sense to store doc values for vector indexing and so, the offsets can be invalid ones for it whereas the fields having text indexing may have valid doc values offsets.
+
+
+	+================================================================+
+	|     +------...--+                                              |
+	|  +->+ DocValues +<-+                                           |
+	|  |  +------...--+  |                                           |
+	|==|=================|===========================================+- Inverted Text
+	++~+~~~~~~~~~+~~~~~~~+~~+~~~~~~~~+-----------------------...--+  |  Index Section
+	|| DV START  |  DV END  | LENGTH | VELLUM DATA: TERM -> OFFSET|  |
+	++~~~~~~~~~~~+~~~~~~~~~~+~~~~~~~~+-----------------------...--+  |
+	+================================================================+
+
 
 DocValues is chunked Snappy-compressed values for each document and field.
 

@@ -405,9 +405,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (segment.VectorIndex, 
 }
 
 func (sb *SegmentBase) UpdateFieldStats(stats segment.FieldStats) {
-
 	for _, fieldName := range sb.fieldsInv {
-
 		pos := int(sb.fieldsSectionsMap[sb.fieldsMap[fieldName]-1][SectionFaissVectorIndex])
 		if pos == 0 {
 			continue
@@ -417,9 +415,8 @@ func (sb *SegmentBase) UpdateFieldStats(stats segment.FieldStats) {
 			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 		}
-
 		numVecs, _ := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 
-		stats.AddStat("num_vectors", fieldName, numVecs)
+		stats.Store(segment.NumVecsStat, fieldName, numVecs)
 	}
 }

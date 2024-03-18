@@ -417,6 +417,6 @@ func (sb *SegmentBase) UpdateFieldStats(stats segment.FieldStats) {
 		}
 		numVecs, _ := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 
-		stats.Store(segment.NumVecsStat, fieldName, numVecs)
+		stats.Store("num_vectors", fieldName, numVecs)
 	}
 }

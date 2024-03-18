@@ -7,7 +7,7 @@ require (
 	github.com/blevesearch/bleve_index_api v1.1.6
 	github.com/blevesearch/go-faiss v1.0.13
 	github.com/blevesearch/mmap-go v1.0.4
-	github.com/blevesearch/scorch_segment_api/v2 v2.2.8
+	github.com/blevesearch/scorch_segment_api/v2 v2.2.9
 	github.com/blevesearch/vellum v1.0.10
 	github.com/golang/snappy v0.0.1
 	github.com/spf13/cobra v1.7.0

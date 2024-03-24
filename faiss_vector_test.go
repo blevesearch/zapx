@@ -309,44 +309,6 @@ func newVecStubDocument(id string, fields []index.Field) *stubVecDocument {
 	}
 }
 
-func getSectionContentOffsets(sb *SegmentBase, offset uint64) (
-	docValueStart uint64,
-	docValueEnd uint64,
-	indexBytesLen uint64,
-	indexBytesOffset uint64,
-	numVecs uint64,
-	vecDocIDsMappingOffset uint64,
-) {
-	pos := offset
-	docValueStart, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += uint64(n)
-
-	docValueEnd, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += uint64(n)
-
-	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += uint64(n)
-
-	numVecs, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += uint64(n)
-
-	vecDocIDsMappingOffset = pos
-	for i := 0; i < int(numVecs); i++ {
-		_, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += uint64(n)
-		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += uint64(n)
-	}
-
-	indexBytesLen, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += uint64(n)
-
-	indexBytesOffset = pos
-	pos += indexBytesLen
-
-	return docValueStart, docValueEnd, indexBytesLen, indexBytesOffset, numVecs, vecDocIDsMappingOffset
-}
-
 func serializeVecs(dataset [][]float32) []float32 {
 	var vecs []float32
 	for _, vec := range dataset {
@@ -447,7 +409,7 @@ func TestVectorSegment(t *testing.T) {
 	fieldsSectionsMap := vecSegBase.fieldsSectionsMap
 	stubVecFieldStartAddr := fieldsSectionsMap[vecSegBase.fieldsMap["stubVec"]-1][SectionFaissVectorIndex]
 	docValueStart, docValueEnd, indexBytesLen, _,
-		numVecs, _ := getSectionContentOffsets(vecSegBase, stubVecFieldStartAddr)
+		numVecs, _ := getVectorSectionContentOffsets(vecSegBase, stubVecFieldStartAddr)
 
 	if docValueStart != fieldNotUninverted {
 		t.Fatal("vector field doesn't support doc values")

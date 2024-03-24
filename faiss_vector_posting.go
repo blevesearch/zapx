@@ -404,17 +404,13 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 
 func (sb *SegmentBase) UpdateFieldStats(stats segment.FieldStats) {
 	for _, fieldName := range sb.fieldsInv {
-		pos := int(sb.fieldsSectionsMap[sb.fieldsMap[fieldName]-1][SectionFaissVectorIndex])
+		pos := sb.fieldsSectionsMap[sb.fieldsMap[fieldName]-1][SectionFaissVectorIndex]
 		if pos == 0 {
 			continue
 		}
 
-		for i := 0; i < 3; i++ {
-			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-			pos += n
-		}
-		numVecs, _ := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-
+		_, _, indexBytesLen, _, numVecs, _ := getVectorSectionContentOffsets(sb, pos)
 		stats.Store("num_vectors", fieldName, numVecs)
+		stats.Store("vec_byte_size", fieldName, indexBytesLen)
 	}
 }

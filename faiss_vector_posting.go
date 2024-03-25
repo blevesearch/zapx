@@ -382,13 +382,14 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 		docID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
 
-		if except != nil && except.Contains(uint32(docID)) {
+		docIDUint32 := uint32(docID)
+		if except != nil && except.Contains(docIDUint32) {
 			// populate the list of vector IDs to be ignored on search
 			vectorIDsToExclude = append(vectorIDsToExclude, vecID)
 			// also, skip adding entry to vecDocIDMap
 			continue
 		}
-		vecDocIDMap[vecID] = uint32(docID)
+		vecDocIDMap[vecID] = docIDUint32
 	}
 
 	// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.

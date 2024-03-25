@@ -385,6 +385,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 		if except != nil && except.Contains(uint32(docID)) {
 			// populate the list of vector IDs to be ignored on search
 			vectorIDsToExclude = append(vectorIDsToExclude, vecID)
+			// also, skip adding entry to vecDocIDMap
 			continue
 		}
 		vecDocIDMap[vecID] = uint32(docID)

@@ -767,12 +767,12 @@ func (v *vectorIndexOpaque) Set(key string, val interface{}) {
 //   - SegmentBase
 //   - offset to the start of the vector section for the field
 func getVectorSectionContentOffsets(sb *SegmentBase, offset uint64) (
-	docValueStart uint64,
-	docValueEnd uint64,
-	indexBytesLen uint64,
+	docValueStart,
+	docValueEnd,
+	numVecs,
+	vecDocIDsMappingOffset,
+	indexBytesLen,
 	indexBytesOffset uint64,
-	numVecs uint64,
-	vecDocIDsMappingOffset uint64,
 ) {
 	pos := offset
 	docValueStart, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
@@ -802,6 +802,5 @@ func getVectorSectionContentOffsets(sb *SegmentBase, offset uint64) (
 	indexBytesOffset = pos
 	pos += indexBytesLen
 
-	return docValueStart, docValueEnd, indexBytesLen, indexBytesOffset, numVecs,
-		vecDocIDsMappingOffset
+	return
 }

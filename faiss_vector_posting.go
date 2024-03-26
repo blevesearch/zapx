@@ -409,8 +409,8 @@ func (sb *SegmentBase) UpdateFieldStats(stats segment.FieldStats) {
 			continue
 		}
 
-		_, _, indexBytesLen, _, numVecs, _ := getVectorSectionContentOffsets(sb, pos)
+		_, _, numVecs, _, indexBytesLen, _ := getVectorSectionContentOffsets(sb, pos)
 		stats.Store("num_vectors", fieldName, numVecs)
-		stats.Store("vec_byte_size", fieldName, indexBytesLen)
+		stats.Store("vectors_index_size", fieldName, indexBytesLen)
 	}
 }

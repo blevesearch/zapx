@@ -4,7 +4,6 @@
 package zap
 
 import (
-	"encoding/binary"
 	"math"
 	"math/rand"
 	"os"
@@ -408,8 +407,8 @@ func TestVectorSegment(t *testing.T) {
 
 	fieldsSectionsMap := vecSegBase.fieldsSectionsMap
 	stubVecFieldStartAddr := fieldsSectionsMap[vecSegBase.fieldsMap["stubVec"]-1][SectionFaissVectorIndex]
-	docValueStart, docValueEnd, indexBytesLen, _,
-		numVecs, _ := getVectorSectionContentOffsets(vecSegBase, stubVecFieldStartAddr)
+	docValueStart, docValueEnd, numVecs, _, indexBytesLen,
+		_ := getVectorSectionContentOffsets(vecSegBase, stubVecFieldStartAddr)
 
 	if docValueStart != fieldNotUninverted {
 		t.Fatal("vector field doesn't support doc values")

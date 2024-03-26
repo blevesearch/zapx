@@ -763,3 +763,47 @@ func (v *vectorIndexOpaque) Reset() (err error) {
 
 func (v *vectorIndexOpaque) Set(key string, val interface{}) {
 }
+
+// -----------------------------------------------------------------------------
+
+// params:
+//   - SegmentBase
+//   - offset to the start of the vector section for the field
+func getVectorSectionContentOffsets(sb *SegmentBase, offset uint64) (
+	docValueStart,
+	docValueEnd,
+	numVecs,
+	vecDocIDsMappingOffset,
+	indexBytesLen,
+	indexBytesOffset uint64,
+) {
+	pos := offset
+	docValueStart, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+
+	docValueEnd, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+
+	// Index Optimization type
+	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+
+	numVecs, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+
+	vecDocIDsMappingOffset = pos
+	for i := 0; i < int(numVecs); i++ {
+		_, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += uint64(n)
+		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += uint64(n)
+	}
+
+	indexBytesLen, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+
+	indexBytesOffset = pos
+	pos += indexBytesLen
+
+	return
+}

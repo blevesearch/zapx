@@ -266,14 +266,14 @@ func (vpl *VecPostingsIterator) BytesWritten() uint64 {
 
 // vectorIndexWrapper conforms to scorch_segment_api's VectorIndex interface
 type vectorIndexWrapper struct {
-	search func(qVector []float32, k int64, except *roaring.Bitmap) (segment.VecPostingsList, error)
+	search func(qVector []float32, k int64) (segment.VecPostingsList, error)
 	close  func()
 	size   func() uint64
 }
 
-func (i *vectorIndexWrapper) Search(qVector []float32, k int64, except *roaring.Bitmap) (
+func (i *vectorIndexWrapper) Search(qVector []float32, k int64) (
 	segment.VecPostingsList, error) {
-	return i.search(qVector, k, except)
+	return i.search(qVector, k)
 }
 
 func (i *vectorIndexWrapper) Close() {
@@ -284,21 +284,21 @@ func (i *vectorIndexWrapper) Size() uint64 {
 	return i.size()
 }
 
-// InterpretVectorIndex returns closures that will allow the caller to -
-// (1) SearchVectorIndex - search within an attached vector index
-// (2) CloseVectorIndex - close attached vector index
-//
-// These function pointers may be nil, when InterpretVectorIndex return a non-nil err.
-// It is on the caller to ensure CloseVectorIndex is invoked (sync or async) after
-// their business with the attached vector index concludes.
-func (sb *SegmentBase) InterpretVectorIndex(field string) (segment.VectorIndex, error) {
+// InterpretVectorIndex returns a construct of closures (vectorIndexWrapper)
+// that will allow the caller to -
+// (1) search within an attached vector index
+// (2) close attached vector index
+// (3) get the size of the attached vector index
+func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap) (
+	segment.VectorIndex, error) {
 	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
 	vecDocIDMap := make(map[int64]uint32)
+	var vectorIDsToExclude []int64
 
 	var (
 		wrapVecIndex = &vectorIndexWrapper{
-			search: func(qVector []float32, k int64, except *roaring.Bitmap) (segment.VecPostingsList, error) {
+			search: func(qVector []float32, k int64) (segment.VecPostingsList, error) {
 				// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
 				// 2. both the values can be represented using roaring bitmaps.
 				// 3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
@@ -315,17 +315,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (segment.VectorIndex, 
 					return rv, nil
 				}
 
-				var vectorIDsToExclude []int64
-				// iterate through the vector doc ID map and if the doc ID is one to be
-				// deleted, add it to the list
-				for vecID, docID := range vecDocIDMap {
-					if except != nil && except.Contains(docID) {
-						vectorIDsToExclude = append(vectorIDsToExclude, vecID)
-					}
-				}
-
 				scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k, vectorIDsToExclude)
-
 				if err != nil {
 					return nil, err
 				}
@@ -335,7 +325,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (segment.VectorIndex, 
 					vecID := ids[i]
 					// Checking if it's present in the vecDocIDMap.
 					// If -1 is returned as an ID(insufficient vectors), this will ensure
-					// they it isn't added to the final postings list.
+					// it isn't added to the final postings list.
 					if docID, ok := vecDocIDMap[vecID]; ok {
 						code := getVectorCode(docID, scores[i])
 						rv.postings.Add(uint64(code))
@@ -391,7 +381,15 @@ func (sb *SegmentBase) InterpretVectorIndex(field string) (segment.VectorIndex, 
 		pos += n
 		docID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
-		vecDocIDMap[vecID] = uint32(docID)
+
+		docIDUint32 := uint32(docID)
+		if except != nil && except.Contains(docIDUint32) {
+			// populate the list of vector IDs to be ignored on search
+			vectorIDsToExclude = append(vectorIDsToExclude, vecID)
+			// also, skip adding entry to vecDocIDMap
+			continue
+		}
+		vecDocIDMap[vecID] = docIDUint32
 	}
 
 	// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.

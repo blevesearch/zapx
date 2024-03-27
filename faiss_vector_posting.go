@@ -335,9 +335,8 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 				return rv, nil
 			},
 			close: func() {
-				if vecIndex != nil {
-					vecIndex.Close()
-				}
+				// skipping the closing for now because the index is cached
+				// todo: subjected to change based on a optimization type flag
 			},
 			size: func() uint64 {
 				if vecIndex != nil {
@@ -392,13 +391,14 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 		vecDocIDMap[vecID] = docIDUint32
 	}
 
-	// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
 	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
-	indexBytes := sb.mem[pos : pos+int(indexSize)]
+
+	// todo: whether to cache the index or not can be determined by using the
+	// index optimization type flag.
+	vecIndex, err = sb.vectorCache.checkCacheForVecIndex(fieldIDPlus1, sb.mem[pos:pos+int(indexSize)])
 	pos += int(indexSize)
 
-	vecIndex, err = faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
 	return wrapVecIndex, err
 }
 

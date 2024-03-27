@@ -53,11 +53,9 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 
 	rv := &Segment{
 		SegmentBase: SegmentBase{
-			fieldsMap: make(map[string]uint16),
-			fieldFSTs: make(map[uint16]*vellum.FST),
-			vectorCache: &vecCache{
-				cache: make(map[uint16]*cacheEntry),
-			},
+			fieldsMap:      make(map[string]uint16),
+			fieldFSTs:      make(map[uint16]*vellum.FST),
+			vectorCache:    newVectorCache(),
 			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
 		},
 		f:    f,

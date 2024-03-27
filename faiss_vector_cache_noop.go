@@ -17,15 +17,11 @@
 
 package zap
 
-import (
-	"sync"
-)
-
 type vecCache struct {
-	m     sync.RWMutex
-	cache map[uint16]*cacheEntry
+}
+
+func newVectorCache() *vecCache {
+	return nil
 }
 
 func (v *vecCache) Clear() {}
-
-type cacheEntry struct{}

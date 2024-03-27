@@ -44,6 +44,12 @@ type cacheEntry struct {
 	index *faiss.IndexImpl
 }
 
+func newVectorCache() *vecCache {
+	return &vecCache{
+		cache: make(map[uint16]*cacheEntry),
+	}
+}
+
 func (vc *vecCache) Clear() {
 	vc.m.Lock()
 	defer vc.m.Unlock()

@@ -117,8 +117,7 @@ func (vc *vecCache) update(fieldIDPlus1 uint16, index *faiss.IndexImpl) {
 		// this makes the average to be kept above the threshold value for a
 		// longer time and thereby the index to be resident in the cache
 		// for longer time.
-		// todo: alpha to be experimented with different values
-		vc.cache[fieldIDPlus1] = initCacheEntry(index, 0.3)
+		vc.cache[fieldIDPlus1] = initCacheEntry(index, 0.4)
 	}
 	vc.m.Unlock()
 }
@@ -142,9 +141,7 @@ func initCacheEntry(index *faiss.IndexImpl, alpha float64) *cacheEntry {
 	vc.cacheMonitor.alpha = alpha
 	go vc.monitor()
 
-	// initing the sample to be 16 for now. more like a cold start to the monitor
-	// with a large enough value so that we don't immediately evict the index
-	atomic.StoreUint64(&vc.cacheMonitor.sample, 16)
+	atomic.StoreUint64(&vc.cacheMonitor.sample, 1)
 	return vc
 }
 

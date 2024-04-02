@@ -407,7 +407,7 @@ func TestVectorSegment(t *testing.T) {
 
 	fieldsSectionsMap := vecSegBase.fieldsSectionsMap
 	stubVecFieldStartAddr := fieldsSectionsMap[vecSegBase.fieldsMap["stubVec"]-1][SectionFaissVectorIndex]
-	docValueStart, docValueEnd, numVecs, _, indexBytesLen,
+	docValueStart, docValueEnd, numVecs, _, _, _, indexBytesLen,
 		_ := getVectorSectionContentOffsets(vecSegBase, stubVecFieldStartAddr)
 
 	if docValueStart != fieldNotUninverted {

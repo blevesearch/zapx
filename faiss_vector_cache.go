@@ -26,8 +26,9 @@ import (
 )
 
 type vecCache struct {
-	m     sync.RWMutex
-	cache map[uint16]*cacheEntry
+	closeCh chan struct{}
+	m       sync.RWMutex
+	cache   map[uint16]*cacheEntry
 }
 
 type ewma struct {
@@ -37,8 +38,7 @@ type ewma struct {
 }
 
 type cacheEntry struct {
-	cacheMonitor *ewma
-	closeCh      chan struct{}
+	tracker *ewma
 
 	m     sync.RWMutex
 	index *faiss.IndexImpl
@@ -52,13 +52,10 @@ func newVectorCache() *vecCache {
 
 func (vc *vecCache) Clear() {
 	vc.m.Lock()
-	defer vc.m.Unlock()
+	close(vc.closeCh)
+	vc.cache = nil
+	vc.m.Unlock()
 
-	// close every cache monitor in the cache, thereby closing the index
-	// cached as well.
-	for _, c := range vc.cache {
-		close(c.closeCh)
-	}
 }
 
 func (vc *vecCache) checkCacheForVecIndex(fieldID uint16,
@@ -88,15 +85,6 @@ func (vc *vecCache) isVecIndexCached(fieldID uint16) (*faiss.IndexImpl, bool) {
 	rv := entry.index
 	entry.m.RUnlock()
 
-	// the following cleanup is when the index is closed as part of cacheEntry.closeIndex()
-	// but the corresponding field entry in the vecCache is not cleaned up
-	// fixme: this looks ugly must be refactored in a better way.
-	if rv == nil {
-		vc.m.Lock()
-		delete(vc.cache, fieldID)
-		vc.m.Unlock()
-	}
-
 	return rv, present && (rv != nil)
 }
 
@@ -108,15 +96,74 @@ func (vc *vecCache) addRef(fieldIDPlus1 uint16) {
 	entry.addRef()
 }
 
+func (vc *vecCache) clearField(fieldIDPlus1 uint16) {
+	vc.m.Lock()
+	delete(vc.cache, fieldIDPlus1)
+	vc.m.Unlock()
+}
+
+func (vc *vecCache) refreshEntries() (rv int) {
+	vc.m.RLock()
+	cache := vc.cache
+	vc.m.RUnlock()
+
+	defer func() {
+		vc.m.RLock()
+		rv = len(vc.cache)
+		vc.m.RUnlock()
+	}()
+
+	// for every field reconcile the average with the current sample values
+	for fieldIDPlus1, entry := range cache {
+		sample := atomic.LoadUint64(&entry.tracker.sample)
+		entry.tracker.add(sample)
+		// the comparison threshold as of now is (1 - a). mathematically it
+		// means that there is only 1 query per second on average as per history.
+		// and in the current second, there were no queries performed against
+		// this index.
+		if entry.tracker.avg <= (1 - entry.tracker.alpha) {
+			atomic.StoreUint64(&entry.tracker.sample, 0)
+			entry.closeIndex()
+			vc.clearField(fieldIDPlus1)
+			continue
+		}
+		atomic.StoreUint64(&entry.tracker.sample, 0)
+	}
+	return
+}
+
+func (vc *vecCache) monitor() {
+	ticker := time.NewTicker(1 * time.Second)
+	for {
+		select {
+		case <-vc.closeCh:
+			return
+		case <-ticker.C:
+			numEntries := vc.refreshEntries()
+			if numEntries == 0 {
+				// no entries to be monitored, exit
+				return
+			}
+		}
+	}
+}
+
 func (vc *vecCache) update(fieldIDPlus1 uint16, index *faiss.IndexImpl) {
 	vc.m.Lock()
+
+	// the first time we've hit the cache, try to spawn a monitoring routine
+	// which will reconcile the moving averages for all the fields being hit
+	if len(vc.cache) == 0 {
+		go vc.monitor()
+	}
+
 	_, ok := vc.cache[fieldIDPlus1]
 	if !ok {
-		// initializing the alpha with 0.3 essentially means that we are favoring
-		// the history a little bit more relative to the current sample value.
-		// this makes the average to be kept above the threshold value for a
-		// longer time and thereby the index to be resident in the cache
-		// for longer time.
+		//  initializing the alpha with 0.4 essentially means that we are favoring
+		// 	the history a little bit more relative to the current sample value.
+		// 	this makes the average to be kept above the threshold value for a
+		// 	longer time and thereby the index to be resident in the cache
+		// 	for longer time.
 		vc.cache[fieldIDPlus1] = initCacheEntry(index, 0.4)
 	}
 	vc.m.Unlock()
@@ -134,14 +181,12 @@ func (e *ewma) add(val uint64) {
 
 func initCacheEntry(index *faiss.IndexImpl, alpha float64) *cacheEntry {
 	vc := &cacheEntry{
-		index:        index,
-		closeCh:      make(chan struct{}),
-		cacheMonitor: &ewma{},
+		index:   index,
+		tracker: &ewma{},
 	}
-	vc.cacheMonitor.alpha = alpha
-	go vc.monitor()
+	vc.tracker.alpha = alpha
 
-	atomic.StoreUint64(&vc.cacheMonitor.sample, 1)
+	atomic.StoreUint64(&vc.tracker.sample, 1)
 	return vc
 }
 
@@ -149,7 +194,7 @@ func (vc *cacheEntry) addRef() {
 	// every access to the cache entry is accumulated as part of a sample
 	// which will be used to calculate the average in the next cycle of average
 	// computation
-	atomic.AddUint64(&vc.cacheMonitor.sample, 1)
+	atomic.AddUint64(&vc.tracker.sample, 1)
 }
 
 func (vc *cacheEntry) closeIndex() {
@@ -157,33 +202,4 @@ func (vc *cacheEntry) closeIndex() {
 	vc.index.Close()
 	vc.index = nil
 	vc.m.Unlock()
-}
-
-func (vc *cacheEntry) monitor() {
-	// a timer to determing the frequency at which exponentially weighted
-	// moving average is computed
-	ticker := time.NewTicker(1 * time.Second)
-	var sample uint64
-	for {
-		select {
-		case <-vc.closeCh:
-			vc.closeIndex()
-			return
-		case <-ticker.C:
-			sample = atomic.LoadUint64(&vc.cacheMonitor.sample)
-			vc.cacheMonitor.add(sample)
-			// the comparison threshold as of now is (1 - a). mathematically it
-			// means that there is only 1 query per second on average as per history.
-			// and in the current second, there were no queries performed against
-			// this index.
-			// todo: threshold needs better experimentation. affects the time for
-			// which the index is resident in the cache.
-			if vc.cacheMonitor.avg <= (1 - vc.cacheMonitor.alpha) {
-				atomic.StoreUint64(&vc.cacheMonitor.sample, 0)
-				vc.closeIndex()
-				return
-			}
-			atomic.StoreUint64(&vc.cacheMonitor.sample, 0)
-		}
-	}
 }

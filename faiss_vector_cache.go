@@ -46,7 +46,8 @@ type cacheEntry struct {
 
 func newVectorCache() *vecCache {
 	return &vecCache{
-		cache: make(map[uint16]*cacheEntry),
+		cache:   make(map[uint16]*cacheEntry),
+		closeCh: make(chan struct{}),
 	}
 }
 

@@ -293,7 +293,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 	segment.VectorIndex, error) {
 	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
-	vecDocIDMap := make(map[int64]uint32)
+	var vecDocIDMap map[int64]uint32
 	var vectorIDsToExclude []int64
 	var fieldIDPlus1 uint16
 
@@ -373,31 +373,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 		pos += n
 	}
 
-	// read the number vectors indexed for this field and load the vector to docID mapping.
-	// todo: cache the vecID to docIDs mapping for a fieldID
-	numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += n
-	for i := 0; i < int(numVecs); i++ {
-		vecID, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += n
-		docID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += n
-
-		docIDUint32 := uint32(docID)
-		if except != nil && except.Contains(docIDUint32) {
-			// populate the list of vector IDs to be ignored on search
-			vectorIDsToExclude = append(vectorIDsToExclude, vecID)
-			// also, skip adding entry to vecDocIDMap
-			continue
-		}
-		vecDocIDMap[vecID] = docIDUint32
-	}
-
-	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += n
-
-	vecIndex, err = sb.vectorCache.loadVectorIndex(fieldIDPlus1, sb.mem[pos:pos+int(indexSize)])
-	pos += int(indexSize)
+	vecDocIDMap, vectorIDsToExclude, vecIndex, err = sb.vectorCache.loadFromCache(fieldIDPlus1, sb.mem[pos:], except)
 
 	return wrapVecIndex, err
 }

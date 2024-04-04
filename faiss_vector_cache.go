@@ -18,10 +18,12 @@
 package zap
 
 import (
+	"encoding/binary"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/RoaringBitmap/roaring"
 	faiss "github.com/blevesearch/go-faiss"
 )
 
@@ -39,8 +41,12 @@ type ewma struct {
 
 type cacheEntry struct {
 	tracker *ewma
-	refs    int64
-	index   *faiss.IndexImpl
+
+	refs          int64
+	index         *faiss.IndexImpl
+	vecDocIDMap   map[int64]uint32
+	docIDExcluded map[uint32]struct{}
+	vecExcluded   []int64
 }
 
 func newVectorIndexCache() *vecIndexCache {
@@ -57,21 +63,26 @@ func (vc *vecIndexCache) Clear() {
 	vc.m.Unlock()
 }
 
-func (vc *vecIndexCache) loadVectorIndex(fieldID uint16,
-	indexBytes []byte) (vecIndex *faiss.IndexImpl, err error) {
-	cachedIndex, present := vc.isIndexCached(fieldID)
+func (vc *vecIndexCache) loadFromCache(fieldID uint16, mem []byte, except *roaring.Bitmap) (map[int64]uint32, []int64, *faiss.IndexImpl, error) {
+	cachedEntry, present := vc.checkEntry(fieldID)
+
+	var vecIndex *faiss.IndexImpl
+	var vecDocIDMap map[int64]uint32
+	var vecExcluded []int64
+	var err error
+
 	if present {
-		vecIndex = cachedIndex
-		vc.incHit(fieldID)
+		vecIndex, vecDocIDMap, vecExcluded = cachedEntry.load(except)
 	} else {
-		vecIndex, err = vc.createAndCacheVectorIndex(fieldID, indexBytes)
+		vecIndex, vecDocIDMap, vecExcluded, err = vc.createAndCacheEntry(fieldID, mem, except)
 	}
+
 	vc.addRef(fieldID)
-	return vecIndex, err
+	return vecDocIDMap, vecExcluded, vecIndex, err
 }
 
-func (vc *vecIndexCache) createAndCacheVectorIndex(fieldID uint16,
-	indexBytes []byte) (*faiss.IndexImpl, error) {
+func (vc *vecIndexCache) createAndCacheEntry(fieldID uint16,
+	mem []byte, except *roaring.Bitmap) (*faiss.IndexImpl, map[int64]uint32, []int64, error) {
 	vc.m.Lock()
 	defer vc.m.Unlock()
 
@@ -80,18 +91,46 @@ func (vc *vecIndexCache) createAndCacheVectorIndex(fieldID uint16,
 	// cached.
 	entry, present := vc.cache[fieldID]
 	if present {
-		rv := entry.index
-		entry.incHit()
-		return rv, nil
+		vecIndex, vecDocIDMap, vecExcluded := entry.load(except)
+		return vecIndex, vecDocIDMap, vecExcluded, nil
 	}
 
-	// if the cache doesn't have vector index, just construct it out of the
-	// index bytes and update the cache under lock.
-	vecIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
-	vc.updateLOCKED(fieldID, vecIndex)
-	return vecIndex, err
+	pos := 0
+	numVecs, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
+	vecExcluded := make([]int64, 0)
+	docIDExcluded := make(map[uint32]struct{})
+	vecDocIDMap := make(map[int64]uint32)
+	for i := 0; i < int(numVecs); i++ {
+		vecID, n := binary.Varint(mem[pos : pos+binary.MaxVarintLen64])
+		pos += n
+		docID, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+		pos += n
+
+		docIDUint32 := uint32(docID)
+		if except != nil && except.Contains(docIDUint32) {
+			// populate the list of vector IDs to be ignored on search
+			vecExcluded = append(vecExcluded, vecID)
+			docIDExcluded[docIDUint32] = struct{}{}
+			// also, skip adding entry to vecDocIDMap
+			continue
+		}
+		vecDocIDMap[vecID] = docIDUint32
+	}
+
+	indexSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
+	vecIndex, err := faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faiss.IOFlagReadOnly)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	vc.updateLOCKED(fieldID, vecIndex, vecDocIDMap, docIDExcluded, vecExcluded)
+	return vecIndex, vecDocIDMap, vecExcluded, nil
 }
-func (vc *vecIndexCache) updateLOCKED(fieldIDPlus1 uint16, index *faiss.IndexImpl) {
+func (vc *vecIndexCache) updateLOCKED(fieldIDPlus1 uint16, index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, docIDExcluded map[uint32]struct{}, vecExcluded []int64) {
 	// the first time we've hit the cache, try to spawn a monitoring routine
 	// which will reconcile the moving averages for all the fields being hit
 	if len(vc.cache) == 0 {
@@ -109,7 +148,7 @@ func (vc *vecIndexCache) updateLOCKED(fieldIDPlus1 uint16, index *faiss.IndexImp
 	}
 }
 
-func (vc *vecIndexCache) isIndexCached(fieldID uint16) (*faiss.IndexImpl, bool) {
+func (vc *vecIndexCache) checkEntry(fieldID uint16) (*cacheEntry, bool) {
 	vc.m.RLock()
 	entry, present := vc.cache[fieldID]
 	vc.m.RUnlock()
@@ -117,8 +156,7 @@ func (vc *vecIndexCache) isIndexCached(fieldID uint16) (*faiss.IndexImpl, bool) 
 		return nil, false
 	}
 
-	rv := entry.index
-	return rv, present && (rv != nil)
+	return entry, present && (entry != nil)
 }
 
 func (vc *vecIndexCache) incHit(fieldIDPlus1 uint16) {
@@ -186,6 +224,27 @@ func (vc *vecIndexCache) monitor() {
 	}
 }
 
+func (vc *vecIndexCache) update(fieldIDPlus1 uint16, index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, docIDExcluded map[uint32]struct{}, vecExcluded []int64) {
+	vc.m.Lock()
+
+	// the first time we've hit the cache, try to spawn a monitoring routine
+	// which will reconcile the moving averages for all the fields being hit
+	if len(vc.cache) == 0 {
+		go vc.monitor()
+	}
+
+	_, ok := vc.cache[fieldIDPlus1]
+	if !ok {
+		//  initializing the alpha with 0.4 essentially means that we are favoring
+		// 	the history a little bit more relative to the current sample value.
+		// 	this makes the average to be kept above the threshold value for a
+		// 	longer time and thereby the index to be resident in the cache
+		// 	for longer time.
+		vc.cache[fieldIDPlus1] = initCacheEntry(vecIndex, vecDocIDMap, docIDExcluded, vecExcluded, 0.4)
+	}
+	vc.m.Unlock()
+}
+
 func (e *ewma) add(val uint64) {
 	if e.avg == 0.0 {
 		e.avg = float64(val)
@@ -196,10 +255,13 @@ func (e *ewma) add(val uint64) {
 	}
 }
 
-func initCacheEntry(index *faiss.IndexImpl, alpha float64) *cacheEntry {
+func initCacheEntry(vecIndex *faiss.IndexImpl, vecDocIDMap map[int64]uint32, docIDExcluded map[uint32]struct{}, vecExcluded []int64, alpha float64) *cacheEntry {
 	vc := &cacheEntry{
-		index:   index,
-		tracker: &ewma{},
+		index:         vecIndex,
+		vecDocIDMap:   vecDocIDMap,
+		docIDExcluded: docIDExcluded,
+		vecExcluded:   vecExcluded,
+		tracker:       &ewma{},
 	}
 	vc.tracker.alpha = alpha
 
@@ -225,4 +287,46 @@ func (vc *cacheEntry) decRef() {
 func (vc *cacheEntry) closeIndex() {
 	vc.index.Close()
 	vc.index = nil
+	vc.docIDExcluded = nil
+	vc.vecDocIDMap = nil
+	vc.vecExcluded = nil
+}
+
+func (vc *cacheEntry) load(except *roaring.Bitmap) (*faiss.IndexImpl, map[int64]uint32, []int64) {
+
+	vc.m.RLock()
+	vecIndex := vc.index
+	vecDocIDMap := vc.vecDocIDMap
+	docIDExcluded := vc.docIDExcluded
+	vecExcluded := vc.vecExcluded
+	vc.m.RUnlock()
+
+	if except != nil {
+		newExcluded := false
+		vc.m.Lock()
+		it := except.Iterator()
+		for it.HasNext() {
+			docID := it.Next()
+			if _, exists := docIDExcluded[docID]; !exists {
+				docIDExcluded[docID] = struct{}{}
+				newExcluded = true
+			}
+		}
+
+		if newExcluded {
+			for vecID, docID := range vecDocIDMap {
+				if _, exists := docIDExcluded[docID]; exists {
+					delete(vecDocIDMap, vecID)
+					vecExcluded = append(vecExcluded, vecID)
+				}
+			}
+			vc.vecDocIDMap = vecDocIDMap
+			vc.docIDExcluded = docIDExcluded
+			vc.vecExcluded = vecExcluded
+		}
+		vc.m.Unlock()
+	}
+
+	vc.incHit()
+	return vecIndex, vecDocIDMap, vecExcluded
 }

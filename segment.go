@@ -55,7 +55,7 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 		SegmentBase: SegmentBase{
 			fieldsMap:      make(map[string]uint16),
 			fieldFSTs:      make(map[uint16]*vellum.FST),
-			vectorCache:    newVectorCache(),
+			vectorCache:    newVectorIndexCache(),
 			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
 		},
 		f:    f,
@@ -113,7 +113,7 @@ type SegmentBase struct {
 
 	// fixme: although the operations and APIs of the vecCache is hidden under
 	// the vectors tag, the type should also perhaps be under the vectors tag.
-	vectorCache *vecCache
+	vectorCache *vecIndexCache
 }
 
 func (sb *SegmentBase) Size() int {

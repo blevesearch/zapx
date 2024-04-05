@@ -25,7 +25,7 @@ import (
 	faiss "github.com/blevesearch/go-faiss"
 )
 
-type vecCache struct {
+type vecIndexCache struct {
 	closeCh chan struct{}
 	m       sync.RWMutex
 	cache   map[uint16]*cacheEntry
@@ -44,24 +44,23 @@ type cacheEntry struct {
 	index *faiss.IndexImpl
 }
 
-func newVectorCache() *vecCache {
-	return &vecCache{
+func newVectorIndexCache() *vecIndexCache {
+	return &vecIndexCache{
 		cache:   make(map[uint16]*cacheEntry),
 		closeCh: make(chan struct{}),
 	}
 }
 
-func (vc *vecCache) Clear() {
+func (vc *vecIndexCache) Clear() {
 	vc.m.Lock()
 	close(vc.closeCh)
 	vc.cache = nil
 	vc.m.Unlock()
-
 }
 
-func (vc *vecCache) checkCacheForVecIndex(fieldID uint16,
+func (vc *vecIndexCache) loadVectorIndex(fieldID uint16,
 	indexBytes []byte) (vecIndex *faiss.IndexImpl, err error) {
-	cachedIndex, present := vc.isVecIndexCached(fieldID)
+	cachedIndex, present := vc.isIndexCached(fieldID)
 	if present {
 		vecIndex = cachedIndex
 		vc.addRef(fieldID)
@@ -74,7 +73,7 @@ func (vc *vecCache) checkCacheForVecIndex(fieldID uint16,
 	return vecIndex, err
 }
 
-func (vc *vecCache) isVecIndexCached(fieldID uint16) (*faiss.IndexImpl, bool) {
+func (vc *vecIndexCache) isIndexCached(fieldID uint16) (*faiss.IndexImpl, bool) {
 	vc.m.RLock()
 	entry, present := vc.cache[fieldID]
 	vc.m.RUnlock()
@@ -89,7 +88,7 @@ func (vc *vecCache) isVecIndexCached(fieldID uint16) (*faiss.IndexImpl, bool) {
 	return rv, present && (rv != nil)
 }
 
-func (vc *vecCache) addRef(fieldIDPlus1 uint16) {
+func (vc *vecIndexCache) addRef(fieldIDPlus1 uint16) {
 	vc.m.RLock()
 	entry := vc.cache[fieldIDPlus1]
 	vc.m.RUnlock()
@@ -97,22 +96,9 @@ func (vc *vecCache) addRef(fieldIDPlus1 uint16) {
 	entry.addRef()
 }
 
-func (vc *vecCache) clearField(fieldIDPlus1 uint16) {
+func (vc *vecIndexCache) refresh() (rv int) {
 	vc.m.Lock()
-	delete(vc.cache, fieldIDPlus1)
-	vc.m.Unlock()
-}
-
-func (vc *vecCache) refreshEntries() (rv int) {
-	vc.m.RLock()
 	cache := vc.cache
-	vc.m.RUnlock()
-
-	defer func() {
-		vc.m.RLock()
-		rv = len(vc.cache)
-		vc.m.RUnlock()
-	}()
 
 	// for every field reconcile the average with the current sample values
 	for fieldIDPlus1, entry := range cache {
@@ -125,22 +111,25 @@ func (vc *vecCache) refreshEntries() (rv int) {
 		if entry.tracker.avg <= (1 - entry.tracker.alpha) {
 			atomic.StoreUint64(&entry.tracker.sample, 0)
 			entry.closeIndex()
-			vc.clearField(fieldIDPlus1)
+			delete(vc.cache, fieldIDPlus1)
 			continue
 		}
 		atomic.StoreUint64(&entry.tracker.sample, 0)
 	}
-	return
+
+	rv = len(vc.cache)
+	vc.m.Unlock()
+	return rv
 }
 
-func (vc *vecCache) monitor() {
+func (vc *vecIndexCache) monitor() {
 	ticker := time.NewTicker(1 * time.Second)
 	for {
 		select {
 		case <-vc.closeCh:
 			return
 		case <-ticker.C:
-			numEntries := vc.refreshEntries()
+			numEntries := vc.refresh()
 			if numEntries == 0 {
 				// no entries to be monitored, exit
 				return
@@ -149,7 +138,7 @@ func (vc *vecCache) monitor() {
 	}
 }
 
-func (vc *vecCache) update(fieldIDPlus1 uint16, index *faiss.IndexImpl) {
+func (vc *vecIndexCache) update(fieldIDPlus1 uint16, index *faiss.IndexImpl) {
 	vc.m.Lock()
 
 	// the first time we've hit the cache, try to spawn a monitoring routine

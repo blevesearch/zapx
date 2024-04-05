@@ -286,7 +286,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		}
 		// read the index bytes. todo: parallelize this
 		indexBytes := segBase.mem[indexes[segI].startOffset : indexes[segI].startOffset+int(indexes[segI].indexSize)]
-		index, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
+		index, err := faiss.ReadIndexFromBuffer(indexBytes,
+			faiss.IOFlagReadMmap|faiss.IOFlagSkipPrefetch)
 		if err != nil {
 			freeReconstructedIndexes(vecIndexes)
 			return err

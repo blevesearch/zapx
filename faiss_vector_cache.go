@@ -39,10 +39,10 @@ type ewma struct {
 
 type cacheEntry struct {
 	tracker *ewma
+	refs    int64
 
-	m        sync.RWMutex
-	useCount int64
-	index    *faiss.IndexImpl
+	m     sync.RWMutex
+	index *faiss.IndexImpl
 }
 
 func newVectorIndexCache() *vecIndexCache {
@@ -66,13 +66,51 @@ func (vc *vecIndexCache) loadVectorIndex(fieldID uint16,
 		vecIndex = cachedIndex
 		vc.incHit(fieldID)
 	} else {
-		// if the cache doesn't have vector index, just construct it out of the
-		// index bytes and update the cache.
-		vecIndex, err = faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
-		vc.update(fieldID, vecIndex)
+		vecIndex, err = vc.createAndCacheVectorIndex(fieldID, indexBytes)
 	}
 	vc.addRef(fieldID)
 	return vecIndex, err
+}
+
+func (vc *vecIndexCache) createAndCacheVectorIndex(fieldID uint16,
+	indexBytes []byte) (*faiss.IndexImpl, error) {
+	vc.m.Lock()
+	defer vc.m.Unlock()
+
+	// when there are multiple threads trying to build the index, guard redundant
+	// index creation by doing a double check and return if already created and
+	// cached.
+	entry, present := vc.cache[fieldID]
+	if present {
+		entry.m.RLock()
+		rv := entry.index
+		entry.incHit()
+		entry.m.RUnlock()
+		return rv, nil
+	}
+
+	// if the cache doesn't have vector index, just construct it out of the
+	// index bytes and update the cache under lock.
+	vecIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
+	vc.updateLOCKED(fieldID, vecIndex)
+	return vecIndex, err
+}
+func (vc *vecIndexCache) updateLOCKED(fieldIDPlus1 uint16, index *faiss.IndexImpl) {
+	// the first time we've hit the cache, try to spawn a monitoring routine
+	// which will reconcile the moving averages for all the fields being hit
+	if len(vc.cache) == 0 {
+		go vc.monitor()
+	}
+
+	_, ok := vc.cache[fieldIDPlus1]
+	if !ok {
+		//  initializing the alpha with 0.4 essentially means that we are favoring
+		// 	the history a little bit more relative to the current sample value.
+		// 	this makes the average to be kept above the threshold value for a
+		// 	longer time and thereby the index to be resident in the cache
+		// 	for longer time.
+		vc.cache[fieldIDPlus1] = initCacheEntry(index, 0.4)
+	}
 }
 
 func (vc *vecIndexCache) isIndexCached(fieldID uint16) (*faiss.IndexImpl, bool) {
@@ -93,25 +131,22 @@ func (vc *vecIndexCache) isIndexCached(fieldID uint16) (*faiss.IndexImpl, bool) 
 func (vc *vecIndexCache) incHit(fieldIDPlus1 uint16) {
 	vc.m.RLock()
 	entry := vc.cache[fieldIDPlus1]
-	vc.m.RUnlock()
-
 	entry.incHit()
+	vc.m.RUnlock()
 }
 
 func (vc *vecIndexCache) addRef(fieldIDPlus1 uint16) {
 	vc.m.RLock()
 	entry := vc.cache[fieldIDPlus1]
-	vc.m.RUnlock()
-
 	entry.addRef()
+	vc.m.RUnlock()
 }
 
 func (vc *vecIndexCache) decRef(fieldIDPlus1 uint16) {
 	vc.m.RLock()
 	entry := vc.cache[fieldIDPlus1]
-	vc.m.RUnlock()
-
 	entry.decRef()
+	vc.m.RUnlock()
 }
 
 func (vc *vecIndexCache) refresh() (rv int) {
@@ -123,7 +158,7 @@ func (vc *vecIndexCache) refresh() (rv int) {
 		sample := atomic.LoadUint64(&entry.tracker.sample)
 		entry.tracker.add(sample)
 
-		refCount := atomic.LoadInt64(&entry.useCount)
+		refCount := atomic.LoadInt64(&entry.refs)
 		// the comparison threshold as of now is (1 - a). mathematically it
 		// means that there is only 1 query per second on average as per history.
 		// and in the current second, there were no queries performed against
@@ -158,27 +193,6 @@ func (vc *vecIndexCache) monitor() {
 	}
 }
 
-func (vc *vecIndexCache) update(fieldIDPlus1 uint16, index *faiss.IndexImpl) {
-	vc.m.Lock()
-
-	// the first time we've hit the cache, try to spawn a monitoring routine
-	// which will reconcile the moving averages for all the fields being hit
-	if len(vc.cache) == 0 {
-		go vc.monitor()
-	}
-
-	_, ok := vc.cache[fieldIDPlus1]
-	if !ok {
-		//  initializing the alpha with 0.4 essentially means that we are favoring
-		// 	the history a little bit more relative to the current sample value.
-		// 	this makes the average to be kept above the threshold value for a
-		// 	longer time and thereby the index to be resident in the cache
-		// 	for longer time.
-		vc.cache[fieldIDPlus1] = initCacheEntry(index, 0.4)
-	}
-	vc.m.Unlock()
-}
-
 func (e *ewma) add(val uint64) {
 	if e.avg == 0.0 {
 		e.avg = float64(val)
@@ -208,11 +222,11 @@ func (vc *cacheEntry) incHit() {
 }
 
 func (vc *cacheEntry) addRef() {
-	atomic.AddInt64(&vc.useCount, 1)
+	atomic.AddInt64(&vc.refs, 1)
 }
 
 func (vc *cacheEntry) decRef() {
-	atomic.AddInt64(&vc.useCount, -1)
+	atomic.AddInt64(&vc.refs, -1)
 }
 
 func (vc *cacheEntry) closeIndex() {

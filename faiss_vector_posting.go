@@ -295,6 +295,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 	var vecIndex *faiss.IndexImpl
 	vecDocIDMap := make(map[int64]uint32)
 	var vectorIDsToExclude []int64
+	var fieldIDPlus1 uint16
 
 	var (
 		wrapVecIndex = &vectorIndexWrapper{
@@ -337,6 +338,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 			close: func() {
 				// skipping the closing because the index is cached and it's being
 				// deferred to a later point of time.
+				sb.vectorCache.decRef(fieldIDPlus1)
 			},
 			size: func() uint64 {
 				if vecIndex != nil {
@@ -349,7 +351,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 		err error
 	)
 
-	fieldIDPlus1 := sb.fieldsMap[field]
+	fieldIDPlus1 = sb.fieldsMap[field]
 	if fieldIDPlus1 <= 0 {
 		return wrapVecIndex, nil
 	}

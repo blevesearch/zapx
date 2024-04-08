@@ -149,7 +149,7 @@ func (vc *vecIndexCache) decRef(fieldIDPlus1 uint16) {
 	vc.m.RUnlock()
 }
 
-func (vc *vecIndexCache) refresh() (rv int) {
+func (vc *vecIndexCache) refresh() bool {
 	vc.m.Lock()
 	cache := vc.cache
 
@@ -172,7 +172,7 @@ func (vc *vecIndexCache) refresh() (rv int) {
 		atomic.StoreUint64(&entry.tracker.sample, 0)
 	}
 
-	rv = len(vc.cache)
+	rv := len(vc.cache) == 0
 	vc.m.Unlock()
 	return rv
 }
@@ -184,8 +184,8 @@ func (vc *vecIndexCache) monitor() {
 		case <-vc.closeCh:
 			return
 		case <-ticker.C:
-			numEntries := vc.refresh()
-			if numEntries == 0 {
+			exit := vc.refresh()
+			if exit {
 				// no entries to be monitored, exit
 				return
 			}

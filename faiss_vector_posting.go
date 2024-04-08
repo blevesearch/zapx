@@ -409,14 +409,9 @@ func (sb *SegmentBase) UpdateFieldStats(stats segment.FieldStats) {
 			continue
 		}
 
-		_, _, numVecs, _, minDocID, maxDocID, indexBytesLen, _ := getVectorSectionContentOffsets(sb, pos)
+		_, _, numVecs, _, indexBytesLen, _ := getVectorSectionContentOffsets(sb, pos)
 
 		stats.Store("num_vectors", fieldName, numVecs)
 		stats.Store("vector_index_bytes", fieldName, indexBytesLen)
-
-		if minDocID != math.MaxUint64 && maxDocID != 0 {
-			stats.Store("vector_min_doc_id", fieldName, minDocID)
-			stats.Store("vector_max_doc_id", fieldName, maxDocID)
-		}
 	}
 }

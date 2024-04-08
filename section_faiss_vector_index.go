@@ -771,8 +771,6 @@ func getVectorSectionContentOffsets(sb *SegmentBase, offset uint64) (
 	docValueEnd,
 	numVecs,
 	vecDocIDsMappingOffset,
-	minDocID,
-	maxDocID,
 	indexBytesLen,
 	indexBytesOffset uint64,
 ) {
@@ -791,19 +789,15 @@ func getVectorSectionContentOffsets(sb *SegmentBase, offset uint64) (
 	pos += uint64(n)
 
 	vecDocIDsMappingOffset = pos
-	minDocID = uint64(math.MaxUint64)
-	maxDocID = uint64(0)
-	var docID uint64
+	// Just based on the number of vectors, we can't skip the vecID:docID mapping
+	// This is because the vectorIDs and docIDs are encoded in a variable length
+	// format, exact size of which varies based on the value of the ID.
+	// So, we need to iterate over the vectorID:docID mapping to determine the
+	// exact offset of the index bytes.
 	for i := 0; i < int(numVecs); i++ {
 		_, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
-		docID, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		if docID < minDocID {
-			minDocID = docID
-		}
-		if docID > maxDocID {
-			maxDocID = docID
-		}
+		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
 	}
 

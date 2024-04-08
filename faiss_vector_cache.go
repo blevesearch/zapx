@@ -40,8 +40,9 @@ type ewma struct {
 type cacheEntry struct {
 	tracker *ewma
 
-	m     sync.RWMutex
-	index *faiss.IndexImpl
+	m        sync.RWMutex
+	useCount int64
+	index    *faiss.IndexImpl
 }
 
 func newVectorIndexCache() *vecIndexCache {
@@ -63,13 +64,14 @@ func (vc *vecIndexCache) loadVectorIndex(fieldID uint16,
 	cachedIndex, present := vc.isIndexCached(fieldID)
 	if present {
 		vecIndex = cachedIndex
-		vc.addRef(fieldID)
+		vc.incHit(fieldID)
 	} else {
 		// if the cache doesn't have vector index, just construct it out of the
 		// index bytes and update the cache.
 		vecIndex, err = faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
 		vc.update(fieldID, vecIndex)
 	}
+	vc.addRef(fieldID)
 	return vecIndex, err
 }
 
@@ -88,12 +90,28 @@ func (vc *vecIndexCache) isIndexCached(fieldID uint16) (*faiss.IndexImpl, bool) 
 	return rv, present && (rv != nil)
 }
 
+func (vc *vecIndexCache) incHit(fieldIDPlus1 uint16) {
+	vc.m.RLock()
+	entry := vc.cache[fieldIDPlus1]
+	vc.m.RUnlock()
+
+	entry.incHit()
+}
+
 func (vc *vecIndexCache) addRef(fieldIDPlus1 uint16) {
 	vc.m.RLock()
 	entry := vc.cache[fieldIDPlus1]
 	vc.m.RUnlock()
 
 	entry.addRef()
+}
+
+func (vc *vecIndexCache) decRef(fieldIDPlus1 uint16) {
+	vc.m.RLock()
+	entry := vc.cache[fieldIDPlus1]
+	vc.m.RUnlock()
+
+	entry.decRef()
 }
 
 func (vc *vecIndexCache) refresh() (rv int) {
@@ -104,11 +122,13 @@ func (vc *vecIndexCache) refresh() (rv int) {
 	for fieldIDPlus1, entry := range cache {
 		sample := atomic.LoadUint64(&entry.tracker.sample)
 		entry.tracker.add(sample)
+
+		refCount := atomic.LoadInt64(&entry.useCount)
 		// the comparison threshold as of now is (1 - a). mathematically it
 		// means that there is only 1 query per second on average as per history.
 		// and in the current second, there were no queries performed against
 		// this index.
-		if entry.tracker.avg <= (1 - entry.tracker.alpha) {
+		if entry.tracker.avg <= (1-entry.tracker.alpha) && refCount <= 0 {
 			atomic.StoreUint64(&entry.tracker.sample, 0)
 			entry.closeIndex()
 			delete(vc.cache, fieldIDPlus1)
@@ -180,11 +200,19 @@ func initCacheEntry(index *faiss.IndexImpl, alpha float64) *cacheEntry {
 	return vc
 }
 
-func (vc *cacheEntry) addRef() {
+func (vc *cacheEntry) incHit() {
 	// every access to the cache entry is accumulated as part of a sample
 	// which will be used to calculate the average in the next cycle of average
 	// computation
 	atomic.AddUint64(&vc.tracker.sample, 1)
+}
+
+func (vc *cacheEntry) addRef() {
+	atomic.AddInt64(&vc.useCount, 1)
+}
+
+func (vc *cacheEntry) decRef() {
+	atomic.AddInt64(&vc.useCount, -1)
 }
 
 func (vc *cacheEntry) closeIndex() {

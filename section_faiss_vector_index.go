@@ -350,8 +350,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 
 	nvecs := len(finalVecIDs)
 
-	// index type to be created after merge based on the number of vectors
-	// in indexData added into the index and chosen optimization.
+	// index type to be created after merge based on the number of vectors in
+	// indexData added into the index.
 	nlist := determineCentroids(nvecs)
 	indexDescription, indexClass := determineIndexToUse(nvecs, nlist)
 
@@ -458,11 +458,14 @@ const (
 // Returns a description string for the index and quantizer type
 // and an index type.
 func determineIndexToUse(nvecs, nlist int) (string, int) {
-	if nvecs < 1000 {
+	switch {
+	case nvecs >= 10000:
+		return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF
+	case nvecs >= 1000:
+		return fmt.Sprintf("IVF%d,Flat", nlist), IndexTypeIVF
+	default:
 		return "IDMap2,Flat", IndexTypeFlat
 	}
-
-	return fmt.Sprintf("IVF%d_HNSW32,SQ8", nlist), IndexTypeIVF
 }
 
 func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint64, err error) {

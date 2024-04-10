@@ -40,9 +40,7 @@ type ewma struct {
 type cacheEntry struct {
 	tracker *ewma
 	refs    int64
-
-	m     sync.RWMutex
-	index *faiss.IndexImpl
+	index   *faiss.IndexImpl
 }
 
 func newVectorIndexCache() *vecIndexCache {
@@ -82,10 +80,8 @@ func (vc *vecIndexCache) createAndCacheVectorIndex(fieldID uint16,
 	// cached.
 	entry, present := vc.cache[fieldID]
 	if present {
-		entry.m.RLock()
 		rv := entry.index
 		entry.incHit()
-		entry.m.RUnlock()
 		return rv, nil
 	}
 
@@ -121,10 +117,7 @@ func (vc *vecIndexCache) isIndexCached(fieldID uint16) (*faiss.IndexImpl, bool) 
 		return nil, false
 	}
 
-	entry.m.RLock()
 	rv := entry.index
-	entry.m.RUnlock()
-
 	return rv, present && (rv != nil)
 }
 
@@ -230,8 +223,6 @@ func (vc *cacheEntry) decRef() {
 }
 
 func (vc *cacheEntry) closeIndex() {
-	vc.m.Lock()
 	vc.index.Close()
 	vc.index = nil
-	vc.m.Unlock()
 }

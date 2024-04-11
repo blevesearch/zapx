@@ -55,7 +55,7 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 		SegmentBase: SegmentBase{
 			fieldsMap:      make(map[string]uint16),
 			fieldFSTs:      make(map[uint16]*vellum.FST),
-			vectorCache:    newVectorIndexCache(),
+			vecIndexCache:  newVectorIndexCache(),
 			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
 		},
 		f:    f,
@@ -111,9 +111,8 @@ type SegmentBase struct {
 	m         sync.Mutex
 	fieldFSTs map[uint16]*vellum.FST
 
-	// fixme: although the operations and APIs of the vecCache is hidden under
-	// the vectors tag, the type should also perhaps be under the vectors tag.
-	vectorCache *vecIndexCache
+	// this cache comes into play when vectors are supported in builds.
+	vecIndexCache *vectorIndexCache
 }
 
 func (sb *SegmentBase) Size() int {
@@ -150,7 +149,7 @@ func (sb *SegmentBase) updateSize() {
 
 func (sb *SegmentBase) AddRef()             {}
 func (sb *SegmentBase) DecRef() (err error) { return nil }
-func (sb *SegmentBase) Close() (err error)  { sb.vectorCache.Clear(); return nil }
+func (sb *SegmentBase) Close() (err error)  { sb.vecIndexCache.Clear(); return nil }
 
 // Segment implements a persisted segment.Segment interface, by
 // embedding an mmap()'ed SegmentBase.
@@ -644,7 +643,7 @@ func (s *Segment) closeActual() (err error) {
 			err = err2
 		}
 	}
-	s.vectorCache.Clear()
+	s.vecIndexCache.Clear()
 	return
 }
 

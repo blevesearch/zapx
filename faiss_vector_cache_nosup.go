@@ -17,11 +17,11 @@
 
 package zap
 
-type vecIndexCache struct {
+type vectorIndexCache struct {
 }
 
-func newVectorIndexCache() *vecIndexCache {
+func newVectorIndexCache() *vectorIndexCache {
 	return nil
 }
 
-func (v *vecIndexCache) Clear() {}
+func (v *vectorIndexCache) Clear() {}

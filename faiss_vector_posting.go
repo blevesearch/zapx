@@ -339,7 +339,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 			close: func() {
 				// skipping the closing because the index is cached and it's being
 				// deferred to a later point of time.
-				sb.vectorCache.decRef(fieldIDPlus1)
+				sb.vecIndexCache.decRef(fieldIDPlus1)
 			},
 			size: func() uint64 {
 				return vecIndexSize
@@ -394,7 +394,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
-	vecIndex, err = sb.vectorCache.loadVectorIndex(fieldIDPlus1, sb.mem[pos:pos+int(indexSize)])
+	vecIndex, err = sb.vecIndexCache.loadVectorIndex(fieldIDPlus1, sb.mem[pos:pos+int(indexSize)])
 	pos += int(indexSize)
 
 	if vecIndex != nil {

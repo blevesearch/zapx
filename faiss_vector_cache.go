@@ -25,7 +25,7 @@ import (
 	faiss "github.com/blevesearch/go-faiss"
 )
 
-type vecIndexCache struct {
+type vectorIndexCache struct {
 	closeCh chan struct{}
 	m       sync.RWMutex
 	cache   map[uint16]*cacheEntry
@@ -50,14 +50,14 @@ type cacheEntry struct {
 	index *faiss.IndexImpl
 }
 
-func newVectorIndexCache() *vecIndexCache {
-	return &vecIndexCache{
+func newVectorIndexCache() *vectorIndexCache {
+	return &vectorIndexCache{
 		cache:   make(map[uint16]*cacheEntry),
 		closeCh: make(chan struct{}),
 	}
 }
 
-func (vc *vecIndexCache) Clear() {
+func (vc *vectorIndexCache) Clear() {
 	vc.m.Lock()
 	close(vc.closeCh)
 
@@ -69,7 +69,7 @@ func (vc *vecIndexCache) Clear() {
 	vc.m.Unlock()
 }
 
-func (vc *vecIndexCache) loadVectorIndex(fieldID uint16,
+func (vc *vectorIndexCache) loadVectorIndex(fieldID uint16,
 	indexBytes []byte) (vecIndex *faiss.IndexImpl, err error) {
 	cachedIndex, present := vc.isIndexCached(fieldID)
 	if present {
@@ -82,7 +82,7 @@ func (vc *vecIndexCache) loadVectorIndex(fieldID uint16,
 	return vecIndex, err
 }
 
-func (vc *vecIndexCache) createAndCacheVectorIndex(fieldID uint16,
+func (vc *vectorIndexCache) createAndCacheVectorIndex(fieldID uint16,
 	indexBytes []byte) (*faiss.IndexImpl, error) {
 	vc.m.Lock()
 	defer vc.m.Unlock()
@@ -103,7 +103,7 @@ func (vc *vecIndexCache) createAndCacheVectorIndex(fieldID uint16,
 	vc.updateLOCKED(fieldID, vecIndex)
 	return vecIndex, err
 }
-func (vc *vecIndexCache) updateLOCKED(fieldIDPlus1 uint16, index *faiss.IndexImpl) {
+func (vc *vectorIndexCache) updateLOCKED(fieldIDPlus1 uint16, index *faiss.IndexImpl) {
 	// the first time we've hit the cache, try to spawn a monitoring routine
 	// which will reconcile the moving averages for all the fields being hit
 	if len(vc.cache) == 0 {
@@ -121,7 +121,7 @@ func (vc *vecIndexCache) updateLOCKED(fieldIDPlus1 uint16, index *faiss.IndexImp
 	}
 }
 
-func (vc *vecIndexCache) isIndexCached(fieldID uint16) (*faiss.IndexImpl, bool) {
+func (vc *vectorIndexCache) isIndexCached(fieldID uint16) (*faiss.IndexImpl, bool) {
 	vc.m.RLock()
 	entry, present := vc.cache[fieldID]
 	vc.m.RUnlock()
@@ -133,28 +133,28 @@ func (vc *vecIndexCache) isIndexCached(fieldID uint16) (*faiss.IndexImpl, bool) 
 	return rv, present && (rv != nil)
 }
 
-func (vc *vecIndexCache) incHit(fieldIDPlus1 uint16) {
+func (vc *vectorIndexCache) incHit(fieldIDPlus1 uint16) {
 	vc.m.RLock()
 	entry := vc.cache[fieldIDPlus1]
 	entry.incHit()
 	vc.m.RUnlock()
 }
 
-func (vc *vecIndexCache) addRef(fieldIDPlus1 uint16) {
+func (vc *vectorIndexCache) addRef(fieldIDPlus1 uint16) {
 	vc.m.RLock()
 	entry := vc.cache[fieldIDPlus1]
 	entry.addRef()
 	vc.m.RUnlock()
 }
 
-func (vc *vecIndexCache) decRef(fieldIDPlus1 uint16) {
+func (vc *vectorIndexCache) decRef(fieldIDPlus1 uint16) {
 	vc.m.RLock()
 	entry := vc.cache[fieldIDPlus1]
 	entry.decRef()
 	vc.m.RUnlock()
 }
 
-func (vc *vecIndexCache) cleanup() bool {
+func (vc *vectorIndexCache) cleanup() bool {
 	vc.m.Lock()
 	cache := vc.cache
 
@@ -184,7 +184,7 @@ func (vc *vecIndexCache) cleanup() bool {
 
 var monitorFreq = 1 * time.Second
 
-func (vc *vecIndexCache) monitor() {
+func (vc *vectorIndexCache) monitor() {
 	ticker := time.NewTicker(monitorFreq)
 	for {
 		select {

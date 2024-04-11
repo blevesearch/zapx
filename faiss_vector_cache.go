@@ -32,15 +32,22 @@ type vecIndexCache struct {
 }
 
 type ewma struct {
-	alpha  float64
-	avg    float64
+	alpha float64
+	avg   float64
+	// every hit to the cache entry is recorded as part of a sample
+	// which will be used to calculate the average in the next cycle of average
+	// computation (which is average traffic for the field till now). this is
+	// used to track the per second hits to the cache entries.
 	sample uint64
 }
 
 type cacheEntry struct {
 	tracker *ewma
-	refs    int64
-	index   *faiss.IndexImpl
+	// this is used to track the live references to the cache entry,
+	// such that while we do a cleanup() and we see that the avg is below a
+	// threshold we close/cleanup only if the live refs to the cache entry is 0.
+	refs  int64
+	index *faiss.IndexImpl
 }
 
 func newVectorIndexCache() *vecIndexCache {
@@ -53,6 +60,11 @@ func newVectorIndexCache() *vecIndexCache {
 func (vc *vecIndexCache) Clear() {
 	vc.m.Lock()
 	close(vc.closeCh)
+
+	// forcing a close on all indexes to avoid memory leaks.
+	for _, entry := range vc.cache {
+		entry.closeIndex()
+	}
 	vc.cache = nil
 	vc.m.Unlock()
 }
@@ -142,7 +154,7 @@ func (vc *vecIndexCache) decRef(fieldIDPlus1 uint16) {
 	vc.m.RUnlock()
 }
 
-func (vc *vecIndexCache) refresh() bool {
+func (vc *vecIndexCache) cleanup() bool {
 	vc.m.Lock()
 	cache := vc.cache
 
@@ -170,14 +182,16 @@ func (vc *vecIndexCache) refresh() bool {
 	return rv
 }
 
+var monitorFreq = 1 * time.Second
+
 func (vc *vecIndexCache) monitor() {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(monitorFreq)
 	for {
 		select {
 		case <-vc.closeCh:
 			return
 		case <-ticker.C:
-			exit := vc.refresh()
+			exit := vc.cleanup()
 			if exit {
 				// no entries to be monitored, exit
 				return
@@ -208,9 +222,6 @@ func initCacheEntry(index *faiss.IndexImpl, alpha float64) *cacheEntry {
 }
 
 func (vc *cacheEntry) incHit() {
-	// every access to the cache entry is accumulated as part of a sample
-	// which will be used to calculate the average in the next cycle of average
-	// computation
 	atomic.AddUint64(&vc.tracker.sample, 1)
 }
 
@@ -223,6 +234,8 @@ func (vc *cacheEntry) decRef() {
 }
 
 func (vc *cacheEntry) closeIndex() {
-	vc.index.Close()
-	vc.index = nil
+	go func() {
+		vc.index.Close()
+		vc.index = nil
+	}()
 }

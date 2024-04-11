@@ -296,6 +296,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 	vecDocIDMap := make(map[int64]uint32)
 	var vectorIDsToExclude []int64
 	var fieldIDPlus1 uint16
+	var vecIndexSize uint64
 
 	var (
 		wrapVecIndex = &vectorIndexWrapper{
@@ -341,10 +342,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 				sb.vectorCache.decRef(fieldIDPlus1)
 			},
 			size: func() uint64 {
-				if vecIndex != nil {
-					return vecIndex.Size()
-				}
-				return 0
+				return vecIndexSize
 			},
 		}
 
@@ -399,6 +397,9 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 	vecIndex, err = sb.vectorCache.loadVectorIndex(fieldIDPlus1, sb.mem[pos:pos+int(indexSize)])
 	pos += int(indexSize)
 
+	if vecIndex != nil {
+		vecIndexSize = vecIndex.Size()
+	}
 	return wrapVecIndex, err
 }
 

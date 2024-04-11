@@ -112,12 +112,12 @@ func (vc *vecIndexCache) updateLOCKED(fieldIDPlus1 uint16, index *faiss.IndexImp
 
 	_, ok := vc.cache[fieldIDPlus1]
 	if !ok {
-		//  initializing the alpha with 0.4 essentially means that we are favoring
-		// 	the history a little bit more relative to the current sample value.
-		// 	this makes the average to be kept above the threshold value for a
-		// 	longer time and thereby the index to be resident in the cache
-		// 	for longer time.
-		vc.cache[fieldIDPlus1] = initCacheEntry(index, 0.4)
+		// initializing the alpha with 0.4 essentially means that we are favoring
+		// the history a little bit more relative to the current sample value.
+		// this makes the average to be kept above the threshold value for a
+		// longer time and thereby the index to be resident in the cache
+		// for longer time.
+		vc.cache[fieldIDPlus1] = createCacheEntry(index, 0.4)
 	}
 }
 
@@ -210,32 +210,31 @@ func (e *ewma) add(val uint64) {
 	}
 }
 
-func initCacheEntry(index *faiss.IndexImpl, alpha float64) *cacheEntry {
-	vc := &cacheEntry{
-		index:   index,
-		tracker: &ewma{},
+func createCacheEntry(index *faiss.IndexImpl, alpha float64) *cacheEntry {
+	return &cacheEntry{
+		index: index,
+		tracker: &ewma{
+			alpha:  alpha,
+			sample: 1,
+		},
 	}
-	vc.tracker.alpha = alpha
-
-	atomic.StoreUint64(&vc.tracker.sample, 1)
-	return vc
 }
 
-func (vc *cacheEntry) incHit() {
-	atomic.AddUint64(&vc.tracker.sample, 1)
+func (ce *cacheEntry) incHit() {
+	atomic.AddUint64(&ce.tracker.sample, 1)
 }
 
-func (vc *cacheEntry) addRef() {
-	atomic.AddInt64(&vc.refs, 1)
+func (ce *cacheEntry) addRef() {
+	atomic.AddInt64(&ce.refs, 1)
 }
 
-func (vc *cacheEntry) decRef() {
-	atomic.AddInt64(&vc.refs, -1)
+func (ce *cacheEntry) decRef() {
+	atomic.AddInt64(&ce.refs, -1)
 }
 
-func (vc *cacheEntry) closeIndex() {
+func (ce *cacheEntry) closeIndex() {
 	go func() {
-		vc.index.Close()
-		vc.index = nil
+		ce.index.Close()
+		ce.index = nil
 	}()
 }

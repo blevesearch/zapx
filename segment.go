@@ -632,6 +632,9 @@ func (s *Segment) Close() (err error) {
 }
 
 func (s *Segment) closeActual() (err error) {
+	// clear contents from the vector index cache before un-mmapping
+	s.vecIndexCache.Clear()
+
 	if s.mm != nil {
 		err = s.mm.Unmap()
 	}
@@ -643,7 +646,7 @@ func (s *Segment) closeActual() (err error) {
 			err = err2
 		}
 	}
-	s.vecIndexCache.Clear()
+
 	return
 }
 

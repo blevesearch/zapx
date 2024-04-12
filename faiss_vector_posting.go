@@ -295,6 +295,8 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 	var vecIndex *faiss.IndexImpl
 	vecDocIDMap := make(map[int64]uint32)
 	var vectorIDsToExclude []int64
+	var fieldIDPlus1 uint16
+	var vecIndexSize uint64
 
 	var (
 		wrapVecIndex = &vectorIndexWrapper{
@@ -335,22 +337,19 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 				return rv, nil
 			},
 			close: func() {
-				if vecIndex != nil {
-					vecIndex.Close()
-				}
+				// skipping the closing because the index is cached and it's being
+				// deferred to a later point of time.
+				sb.vecIndexCache.decRef(fieldIDPlus1)
 			},
 			size: func() uint64 {
-				if vecIndex != nil {
-					return vecIndex.Size()
-				}
-				return 0
+				return vecIndexSize
 			},
 		}
 
 		err error
 	)
 
-	fieldIDPlus1 := sb.fieldsMap[field]
+	fieldIDPlus1 = sb.fieldsMap[field]
 	if fieldIDPlus1 <= 0 {
 		return wrapVecIndex, nil
 	}
@@ -392,13 +391,15 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 		vecDocIDMap[vecID] = docIDUint32
 	}
 
-	// todo: not a good idea to cache the vector index perhaps, since it could be quite huge.
 	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
-	indexBytes := sb.mem[pos : pos+int(indexSize)]
+
+	vecIndex, err = sb.vecIndexCache.loadVectorIndex(fieldIDPlus1, sb.mem[pos:pos+int(indexSize)])
 	pos += int(indexSize)
 
-	vecIndex, err = faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
+	if vecIndex != nil {
+		vecIndexSize = vecIndex.Size()
+	}
 	return wrapVecIndex, err
 }
 

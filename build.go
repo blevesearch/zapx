@@ -175,6 +175,7 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32,
 		docValueOffset:      0, // docValueOffsets identified automatically by the section
 		dictLocs:            dictLocs,
 		fieldFSTs:           make(map[uint16]*vellum.FST),
+		vecIndexCache:       newVectorIndexCache(),
 	}
 	sb.updateSize()
 

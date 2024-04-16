@@ -293,7 +293,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 	segment.VectorIndex, error) {
 	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
-	vecDocIDMap := make(map[int64]uint32)
+	var vecDocIDMap map[int64]uint32
 	var vectorIDsToExclude []int64
 	var fieldIDPlus1 uint16
 	var vecIndexSize uint64
@@ -371,18 +371,11 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 		pos += n
 	}
 
-	vecIndex, vecDocIDMap, err = sb.vecIndexCache.loadFromCache(fieldIDPlus1, sb.mem[pos:])
+	vecIndex, vecDocIDMap, vectorIDsToExclude, err =
+		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], except)
 
 	if vecIndex != nil {
 		vecIndexSize = vecIndex.Size()
-	}
-
-	if except != nil {
-		for vecID, docID := range vecDocIDMap {
-			if except.Contains(docID) {
-				vectorIDsToExclude = append(vectorIDsToExclude, vecID)
-			}
-		}
 	}
 
 	return wrapVecIndex, err

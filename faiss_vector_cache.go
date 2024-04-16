@@ -70,6 +70,19 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, except *roa
 	return index, vecDocIDMap, vecIDsToExclude, err
 }
 
+func (vc *vectorIndexCache) fetch(fieldID uint16) *cacheEntry {
+	vc.m.RLock()
+	defer vc.m.RUnlock()
+
+	entry, ok := vc.cache[fieldID]
+	if !ok {
+		return nil
+	}
+
+	entry.addRef()
+	return entry
+}
+
 func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte, except *roaring.Bitmap) (
 	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, vecIDsToExclude []int64, err error) {
 	vc.m.Lock()
@@ -78,8 +91,8 @@ func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte, except *r
 	// when there are multiple threads trying to build the index, guard redundant
 	// index creation by doing a double check and return if already created and
 	// cached.
-	entry, exists := vc.cache[fieldID]
-	if exists {
+	entry, ok := vc.cache[fieldID]
+	if ok {
 		entry.addRef()
 		index, vecDocIDMap = entry.load()
 		if except != nil && !except.IsEmpty() {
@@ -123,11 +136,11 @@ func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte, except *r
 		return nil, nil, nil, err
 	}
 
-	vc.upsertLOCKED(fieldID, index, vecDocIDMap)
+	vc.insertLOCKED(fieldID, index, vecDocIDMap)
 	return index, vecDocIDMap, vecIDsToExclude, nil
 }
 
-func (vc *vectorIndexCache) upsertLOCKED(fieldIDPlus1 uint16,
+func (vc *vectorIndexCache) insertLOCKED(fieldIDPlus1 uint16,
 	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32) {
 	// the first time we've hit the cache, try to spawn a monitoring routine
 	// which will reconcile the moving averages for all the fields being hit
@@ -146,30 +159,19 @@ func (vc *vectorIndexCache) upsertLOCKED(fieldIDPlus1 uint16,
 	}
 }
 
-func (vc *vectorIndexCache) fetch(fieldID uint16) *cacheEntry {
-	vc.m.RLock()
-	defer vc.m.RUnlock()
-
-	entry, exists := vc.cache[fieldID]
-	if !exists || entry == nil || entry.index == nil {
-		return nil
-	}
-
-	entry.addRef()
-	return entry
-}
-
 func (vc *vectorIndexCache) incHit(fieldIDPlus1 uint16) {
 	vc.m.RLock()
-	entry := vc.cache[fieldIDPlus1]
-	entry.incHit()
+	entry, ok := vc.cache[fieldIDPlus1]
+	if ok {
+		entry.incHit()
+	}
 	vc.m.RUnlock()
 }
 
 func (vc *vectorIndexCache) decRef(fieldIDPlus1 uint16) {
 	vc.m.RLock()
-	entry := vc.cache[fieldIDPlus1]
-	if entry != nil {
+	entry, ok := vc.cache[fieldIDPlus1]
+	if ok {
 		entry.decRef()
 	}
 	vc.m.RUnlock()
@@ -191,8 +193,8 @@ func (vc *vectorIndexCache) cleanup() bool {
 		// this index.
 		if entry.tracker.avg <= (1-entry.tracker.alpha) && refCount <= 0 {
 			atomic.StoreUint64(&entry.tracker.sample, 0)
-			entry.close()
 			delete(vc.cache, fieldIDPlus1)
+			entry.close()
 			continue
 		}
 		atomic.StoreUint64(&entry.tracker.sample, 0)

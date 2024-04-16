@@ -18,6 +18,7 @@
 package zap
 
 import (
+	"encoding/binary"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,8 +47,10 @@ type cacheEntry struct {
 	// this is used to track the live references to the cache entry,
 	// such that while we do a cleanup() and we see that the avg is below a
 	// threshold we close/cleanup only if the live refs to the cache entry is 0.
-	refs  int64
-	index *faiss.IndexImpl
+	refs int64
+
+	index       *faiss.IndexImpl
+	vecDocIDMap map[int64]uint32
 }
 
 func newVectorIndexCache() *vectorIndexCache {
@@ -63,27 +66,26 @@ func (vc *vectorIndexCache) Clear() {
 
 	// forcing a close on all indexes to avoid memory leaks.
 	for _, entry := range vc.cache {
-		entry.closeIndex()
+		entry.close()
 	}
 	vc.cache = nil
 	vc.m.Unlock()
 }
 
-func (vc *vectorIndexCache) loadVectorIndex(fieldID uint16,
-	indexBytes []byte) (vecIndex *faiss.IndexImpl, err error) {
-	cachedIndex, present := vc.isIndexCached(fieldID)
+func (vc *vectorIndexCache) loadFromCache(fieldID uint16, mem []byte) (
+	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, err error) {
+	entry, present := vc.checkEntry(fieldID)
 	if present {
-		vecIndex = cachedIndex
-		vc.incHit(fieldID)
+		index, vecDocIDMap = entry.load()
 	} else {
-		vecIndex, err = vc.createAndCacheVectorIndex(fieldID, indexBytes)
+		index, vecDocIDMap, err = vc.createAndCacheEntry(fieldID, mem)
 	}
 	vc.addRef(fieldID)
-	return vecIndex, err
+	return index, vecDocIDMap, err
 }
 
-func (vc *vectorIndexCache) createAndCacheVectorIndex(fieldID uint16,
-	indexBytes []byte) (*faiss.IndexImpl, error) {
+func (vc *vectorIndexCache) createAndCacheEntry(fieldID uint16, mem []byte) (
+	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, err error) {
 	vc.m.Lock()
 	defer vc.m.Unlock()
 
@@ -92,18 +94,40 @@ func (vc *vectorIndexCache) createAndCacheVectorIndex(fieldID uint16,
 	// cached.
 	entry, present := vc.cache[fieldID]
 	if present {
-		rv := entry.index
-		entry.incHit()
-		return rv, nil
+		index, vecDocIDMap = entry.load()
+		return index, vecDocIDMap, nil
 	}
 
-	// if the cache doesn't have vector index, just construct it out of the
-	// index bytes and update the cache under lock.
-	vecIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
-	vc.updateLOCKED(fieldID, vecIndex)
-	return vecIndex, err
+	// if the cache doesn't have entry, construct the vector to doc id map and the
+	// vector index out of the mem bytes and update the cache under lock.
+	pos := 0
+	numVecs, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
+	vecDocIDMap = make(map[int64]uint32)
+
+	for i := 0; i < int(numVecs); i++ {
+		vecID, n := binary.Varint(mem[pos : pos+binary.MaxVarintLen64])
+		pos += n
+		docID, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+		pos += n
+		vecDocIDMap[vecID] = uint32(docID)
+	}
+
+	indexSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
+	index, err = faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faiss.IOFlagReadOnly)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	vc.updateLOCKED(fieldID, index, vecDocIDMap)
+	return index, vecDocIDMap, nil
 }
-func (vc *vectorIndexCache) updateLOCKED(fieldIDPlus1 uint16, index *faiss.IndexImpl) {
+
+func (vc *vectorIndexCache) updateLOCKED(fieldIDPlus1 uint16,
+	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32) {
 	// the first time we've hit the cache, try to spawn a monitoring routine
 	// which will reconcile the moving averages for all the fields being hit
 	if len(vc.cache) == 0 {
@@ -117,11 +141,11 @@ func (vc *vectorIndexCache) updateLOCKED(fieldIDPlus1 uint16, index *faiss.Index
 		// this makes the average to be kept above the threshold value for a
 		// longer time and thereby the index to be resident in the cache
 		// for longer time.
-		vc.cache[fieldIDPlus1] = createCacheEntry(index, 0.4)
+		vc.cache[fieldIDPlus1] = createCacheEntry(index, vecDocIDMap, 0.4)
 	}
 }
 
-func (vc *vectorIndexCache) isIndexCached(fieldID uint16) (*faiss.IndexImpl, bool) {
+func (vc *vectorIndexCache) checkEntry(fieldID uint16) (*cacheEntry, bool) {
 	vc.m.RLock()
 	entry, present := vc.cache[fieldID]
 	vc.m.RUnlock()
@@ -129,8 +153,7 @@ func (vc *vectorIndexCache) isIndexCached(fieldID uint16) (*faiss.IndexImpl, boo
 		return nil, false
 	}
 
-	rv := entry.index
-	return rv, present && (rv != nil)
+	return entry, present && (entry.index != nil)
 }
 
 func (vc *vectorIndexCache) incHit(fieldIDPlus1 uint16) {
@@ -170,7 +193,7 @@ func (vc *vectorIndexCache) cleanup() bool {
 		// this index.
 		if entry.tracker.avg <= (1-entry.tracker.alpha) && refCount <= 0 {
 			atomic.StoreUint64(&entry.tracker.sample, 0)
-			entry.closeIndex()
+			entry.close()
 			delete(vc.cache, fieldIDPlus1)
 			continue
 		}
@@ -210,9 +233,10 @@ func (e *ewma) add(val uint64) {
 	}
 }
 
-func createCacheEntry(index *faiss.IndexImpl, alpha float64) *cacheEntry {
+func createCacheEntry(index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, alpha float64) *cacheEntry {
 	return &cacheEntry{
-		index: index,
+		index:       index,
+		vecDocIDMap: vecDocIDMap,
 		tracker: &ewma{
 			alpha:  alpha,
 			sample: 1,
@@ -232,9 +256,15 @@ func (ce *cacheEntry) decRef() {
 	atomic.AddInt64(&ce.refs, -1)
 }
 
-func (ce *cacheEntry) closeIndex() {
+func (ce *cacheEntry) load() (*faiss.IndexImpl, map[int64]uint32) {
+	ce.incHit()
+	return ce.index, ce.vecDocIDMap
+}
+
+func (ce *cacheEntry) close() {
 	go func() {
 		ce.index.Close()
 		ce.index = nil
+		ce.vecDocIDMap = nil
 	}()
 }

@@ -371,35 +371,20 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 		pos += n
 	}
 
-	// read the number vectors indexed for this field and load the vector to docID mapping.
-	// todo: cache the vecID to docIDs mapping for a fieldID
-	numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += n
-	for i := 0; i < int(numVecs); i++ {
-		vecID, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += n
-		docID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += n
-
-		docIDUint32 := uint32(docID)
-		if except != nil && except.Contains(docIDUint32) {
-			// populate the list of vector IDs to be ignored on search
-			vectorIDsToExclude = append(vectorIDsToExclude, vecID)
-			// also, skip adding entry to vecDocIDMap
-			continue
-		}
-		vecDocIDMap[vecID] = docIDUint32
-	}
-
-	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += n
-
-	vecIndex, err = sb.vecIndexCache.loadVectorIndex(fieldIDPlus1, sb.mem[pos:pos+int(indexSize)])
-	pos += int(indexSize)
+	vecIndex, vecDocIDMap, err = sb.vecIndexCache.loadFromCache(fieldIDPlus1, sb.mem[pos:])
 
 	if vecIndex != nil {
 		vecIndexSize = vecIndex.Size()
 	}
+
+	if except != nil {
+		for vecID, docID := range vecDocIDMap {
+			if except.Contains(docID) {
+				vectorIDsToExclude = append(vectorIDsToExclude, vecID)
+			}
+		}
+	}
+
 	return wrapVecIndex, err
 }
 

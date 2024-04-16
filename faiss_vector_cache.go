@@ -27,27 +27,17 @@ import (
 	faiss "github.com/blevesearch/go-faiss"
 )
 
-type vectorIndexCache struct {
-	closeCh chan struct{}
-	m       sync.RWMutex
-	cache   map[uint16]*cacheEntry
-}
-
-type ewma struct {
-	alpha float64
-	avg   float64
-	// every hit to the cache entry is recorded as part of a sample
-	// which will be used to calculate the average in the next cycle of average
-	// computation (which is average traffic for the field till now). this is
-	// used to track the per second hits to the cache entries.
-	sample uint64
-}
-
 func newVectorIndexCache() *vectorIndexCache {
 	return &vectorIndexCache{
 		cache:   make(map[uint16]*cacheEntry),
 		closeCh: make(chan struct{}),
 	}
+}
+
+type vectorIndexCache struct {
+	closeCh chan struct{}
+	m       sync.RWMutex
+	cache   map[uint16]*cacheEntry
 }
 
 func (vc *vectorIndexCache) Clear() {
@@ -231,6 +221,18 @@ func (vc *vectorIndexCache) monitor() {
 	}
 }
 
+// -----------------------------------------------------------------------------
+
+type ewma struct {
+	alpha float64
+	avg   float64
+	// every hit to the cache entry is recorded as part of a sample
+	// which will be used to calculate the average in the next cycle of average
+	// computation (which is average traffic for the field till now). this is
+	// used to track the per second hits to the cache entries.
+	sample uint64
+}
+
 func (e *ewma) add(val uint64) {
 	if e.avg == 0.0 {
 		e.avg = float64(val)
@@ -240,6 +242,8 @@ func (e *ewma) add(val uint64) {
 		e.avg = e.alpha*float64(val) + (1-e.alpha)*e.avg
 	}
 }
+
+// -----------------------------------------------------------------------------
 
 func createCacheEntry(index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, alpha float64) *cacheEntry {
 	return &cacheEntry{

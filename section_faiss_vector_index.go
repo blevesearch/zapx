@@ -275,9 +275,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	indexes []*vecIndexMeta, w *CountHashWriter, closeCh chan struct{}) error {
 
 	vecIndexes := make([]*faiss.IndexImpl, 0, len(sbs))
-	finalVecIDCap := 0
-	indexDataCap := 0
-	reconsCap := 0
+	var finalVecIDCap, indexDataCap, reconsCap int
 	for segI, segBase := range sbs {
 		// Considering merge operations on vector indexes are expensive, it is
 		// worth including an early exit if the merge is aborted, saving us

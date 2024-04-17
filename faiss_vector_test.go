@@ -438,6 +438,13 @@ func TestVectorSegment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() {
+		cerr := vecSegBase.Close()
+		if cerr != nil {
+			t.Fatalf("error closing segment: %v", cerr)
+		}
+		_ = os.RemoveAll(path)
+	}()
 
 	segOnDisk, err := vecSegPlugin.Open(path)
 	if err != nil {

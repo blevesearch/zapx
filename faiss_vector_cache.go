@@ -54,25 +54,28 @@ func (vc *vectorIndexCache) Clear() {
 
 func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, except *roaring.Bitmap) (
 	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, vecIDsToExclude []int64, err error) {
-	entry := vc.fetch(fieldID)
-	if entry != nil {
-		index, vecDocIDMap = entry.load()
-		vecIDsToExclude = getInvalidVecs(vecDocIDMap, except)
-	} else {
+	var found bool
+	index, vecDocIDMap, vecIDsToExclude, found = vc.loadFromCache(fieldID, except)
+	if !found {
 		index, vecDocIDMap, vecIDsToExclude, err = vc.createAndCache(fieldID, mem, except)
 	}
 	return index, vecDocIDMap, vecIDsToExclude, err
 }
 
-func (vc *vectorIndexCache) fetch(fieldID uint16) *cacheEntry {
+func (vc *vectorIndexCache) loadFromCache(fieldID uint16, except *roaring.Bitmap) (
+	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, vecIDsToExclude []int64, found bool) {
 	vc.m.RLock()
 	defer vc.m.RUnlock()
 
 	entry, ok := vc.cache[fieldID]
 	if !ok {
-		return nil
+		return nil, nil, nil, false
 	}
-	return entry
+
+	index, vecDocIDMap = entry.load()
+	vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
+
+	return index, vecDocIDMap, vecIDsToExclude, true
 }
 
 func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte, except *roaring.Bitmap) (
@@ -86,7 +89,7 @@ func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte, except *r
 	entry, ok := vc.cache[fieldID]
 	if ok {
 		index, vecDocIDMap = entry.load()
-		vecIDsToExclude = getInvalidVecs(vecDocIDMap, except)
+		vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
 		return index, vecDocIDMap, vecIDsToExclude, nil
 	}
 
@@ -281,7 +284,9 @@ func (ce *cacheEntry) close() {
 	}()
 }
 
-func getInvalidVecs(vecDocIDMap map[int64]uint32, except *roaring.Bitmap) (vecIDsToExclude []int64) {
+// -----------------------------------------------------------------------------
+
+func getVecIDsToExclude(vecDocIDMap map[int64]uint32, except *roaring.Bitmap) (vecIDsToExclude []int64) {
 	if except != nil && !except.IsEmpty() {
 		for vecID, docID := range vecDocIDMap {
 			if except.Contains(docID) {

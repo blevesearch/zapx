@@ -57,13 +57,7 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, except *roa
 	entry := vc.fetch(fieldID)
 	if entry != nil {
 		index, vecDocIDMap = entry.load()
-		if except != nil && !except.IsEmpty() {
-			for vecID, docID := range vecDocIDMap {
-				if except.Contains(docID) {
-					vecIDsToExclude = append(vecIDsToExclude, vecID)
-				}
-			}
-		}
+		vecIDsToExclude = getInvalidVecs(vecDocIDMap, except)
 	} else {
 		index, vecDocIDMap, vecIDsToExclude, err = vc.createAndCache(fieldID, mem, except)
 	}
@@ -78,8 +72,6 @@ func (vc *vectorIndexCache) fetch(fieldID uint16) *cacheEntry {
 	if !ok {
 		return nil
 	}
-
-	entry.addRef()
 	return entry
 }
 
@@ -93,16 +85,8 @@ func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte, except *r
 	// cached.
 	entry, ok := vc.cache[fieldID]
 	if ok {
-		entry.addRef()
 		index, vecDocIDMap = entry.load()
-		if except != nil && !except.IsEmpty() {
-			for vecID, docID := range vecDocIDMap {
-				if except.Contains(docID) {
-					vecIDsToExclude = append(vecIDsToExclude, vecID)
-				}
-			}
-		}
-
+		vecIDsToExclude = getInvalidVecs(vecDocIDMap, except)
 		return index, vecDocIDMap, vecIDsToExclude, nil
 	}
 
@@ -285,6 +269,7 @@ func (ce *cacheEntry) decRef() {
 
 func (ce *cacheEntry) load() (*faiss.IndexImpl, map[int64]uint32) {
 	ce.incHit()
+	ce.addRef()
 	return ce.index, ce.vecDocIDMap
 }
 
@@ -294,4 +279,15 @@ func (ce *cacheEntry) close() {
 		ce.index = nil
 		ce.vecDocIDMap = nil
 	}()
+}
+
+func getInvalidVecs(vecDocIDMap map[int64]uint32, except *roaring.Bitmap) (vecIDsToExclude []int64) {
+	if except != nil && !except.IsEmpty() {
+		for vecID, docID := range vecDocIDMap {
+			if except.Contains(docID) {
+				vecIDsToExclude = append(vecIDsToExclude, vecID)
+			}
+		}
+	}
+	return vecIDsToExclude
 }

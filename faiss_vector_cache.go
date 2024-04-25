@@ -229,6 +229,11 @@ func (e *ewma) add(val uint64) {
 		// the exponentially weighted moving average
 		// X(t) = a.v + (1 - a).X(t-1)
 		e.avg = e.alpha*float64(val) + (1-e.alpha)*e.avg
+		// Limit avg value to ensure cache is cleared within
+		// 5 seconds after the last query hit
+		if e.avg > 20 {
+			e.avg = 20
+		}
 	}
 }
 

@@ -99,7 +99,7 @@ func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte, except *r
 	numVecs, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
-	vecDocIDMap = make(map[int64]uint32)
+	vecDocIDMap = make(map[int64]uint32, numVecs)
 	isExceptNotEmpty := except != nil && !except.IsEmpty()
 	for i := 0; i < int(numVecs); i++ {
 		vecID, n := binary.Varint(mem[pos : pos+binary.MaxVarintLen64])

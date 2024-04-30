@@ -348,8 +348,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 
 	nvecs := len(finalVecIDs)
 
-	// index type to be created after merge based on the number of vectors in
-	// indexData added into the index.
+	// index type to be created after merge based on the number of vectors
+	// in indexData added into the index.
 	nlist := determineCentroids(nvecs)
 	indexDescription, indexClass := determineIndexToUse(nvecs, nlist)
 
@@ -437,10 +437,7 @@ func determineCentroids(nvecs int) int {
 	var nlist int
 
 	switch {
-	// At 1M vectors, nlist = 4k gave a reasonably high recall with the right nprobe,
-	// whereas 1M/100 = 10000 centroids would increase training time without
-	// corresponding increase in recall
-	case nvecs >= 1000000:
+	case nvecs >= 200000:
 		nlist = int(4 * math.Sqrt(float64(nvecs)))
 	case nvecs >= 1000:
 		// 100 points per cluster is a reasonable default, considering the default

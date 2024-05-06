@@ -196,6 +196,7 @@ var monitorFreq = 1 * time.Second
 
 func (vc *vectorIndexCache) monitor() {
 	ticker := time.NewTicker(monitorFreq)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-vc.closeCh:

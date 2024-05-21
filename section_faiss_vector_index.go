@@ -349,16 +349,16 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 
 	nvecs := len(finalVecIDs)
 
-	// index type to be created after merge based on the number of vectors
-	// in indexData added into the index.
-	nlist := determineCentroids(nvecs)
-	indexDescription, indexClass := determineIndexToUse(nvecs, nlist)
-
 	// safe to assume that all the indexes are of the same config values, given
 	// that they are extracted from the field mapping info.
 	dims := vecIndexes[0].D()
 	metric := vecIndexes[0].MetricType()
 	indexOptimizedFor := indexes[0].indexOptimizedFor
+
+	// index type to be created after merge based on the number of vectors
+	// in indexData added into the index.
+	nlist := determineCentroids(nvecs)
+	indexDescription, indexClass := determineIndexToUse(nvecs, nlist, indexOptimizedFor)
 
 	// freeing the reconstructed indexes immediately - waiting till the end
 	// to do the same is not needed because the following operations don't need
@@ -457,7 +457,16 @@ const (
 
 // Returns a description string for the index and quantizer type
 // and an index type.
-func determineIndexToUse(nvecs, nlist int) (string, int) {
+func determineIndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, int) {
+	if indexOptimizedFor == index.IndexOptimizedForMemory {
+		switch {
+		case nvecs >= 1000:
+			return fmt.Sprintf("IVF%d,SQ4", nlist), IndexTypeIVF
+		default:
+			return "IDMap2,Flat", IndexTypeFlat
+		}
+	}
+
 	switch {
 	case nvecs >= 10000:
 		return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF
@@ -490,7 +499,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 
 		nvecs := len(ids)
 		nlist := determineCentroids(nvecs)
-		indexDescription, indexClass := determineIndexToUse(nvecs, nlist)
+		indexDescription, indexClass := determineIndexToUse(nvecs, nlist,
+			content.indexOptimizedFor)
 		faissIndex, err := faiss.IndexFactory(int(content.dim), indexDescription, metric)
 		if err != nil {
 			return 0, err

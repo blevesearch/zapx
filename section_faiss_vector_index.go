@@ -458,7 +458,7 @@ const (
 // Returns a description string for the index and quantizer type
 // and an index type.
 func determineIndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, int) {
-	if indexOptimizedFor == index.IndexOptimizedForMemory {
+	if indexOptimizedFor == index.IndexOptimizedForMemoryEfficient {
 		switch {
 		case nvecs >= 1000:
 			return fmt.Sprintf("IVF%d,SQ4", nlist), IndexTypeIVF

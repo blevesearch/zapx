@@ -118,8 +118,7 @@ func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte, except *r
 	indexSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
-	index, err = faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)],
-		faiss.IOFlagReadMmap|faiss.IOFlagSkipPrefetch)
+	index, err = faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], vectorIndexIOFlags)
 	if err != nil {
 		return nil, nil, nil, err
 	}

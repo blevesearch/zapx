@@ -19,4 +19,4 @@ package zap
 
 import faiss "github.com/blevesearch/go-faiss"
 
-const vectorIndexIOFlags = faiss.IOFlagReadMmap | faiss.IOFlagSkipPrefetch
+const faissIOFlags = faiss.IOFlagReadMmap | faiss.IOFlagSkipPrefetch

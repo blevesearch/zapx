@@ -31,6 +31,8 @@ import (
 	seg "github.com/blevesearch/scorch_segment_api/v2"
 )
 
+const defaultFaissOMPThreads = 1
+
 func init() {
 	rand.Seed(time.Now().UTC().UnixNano())
 	registerSegmentSection(SectionFaissVectorIndex, &faissVectorIndexSection{})
@@ -38,6 +40,7 @@ func init() {
 		_, ok := field.(index.VectorField)
 		return ok
 	}
+	faiss.SetOMPThreads(defaultFaissOMPThreads)
 }
 
 type faissVectorIndexSection struct {

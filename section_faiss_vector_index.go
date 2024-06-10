@@ -359,6 +359,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	nlist := determineCentroids(nvecs)
 	indexDescription, indexClass := determineIndexToUse(nvecs, nlist, indexOptimizedFor)
 
+	fmt.Println("indexDescription is ", indexDescription, " indexClass is ", indexClass, " dims is ", dims, " metric is ", metric, " indexOptimizedFor is ", indexOptimizedFor)
+
 	// freeing the reconstructed indexes immediately - waiting till the end
 	// to do the same is not needed because the following operations don't need
 	// the reconstructed ones anymore and doing so will hold up memory which can
@@ -393,6 +395,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 			return err
 		}
 	}
+
+	fmt.Printf("Adding %d vectors to the index\n len indexData is %d, len finalVecIDs is %d, faissIndex is %+v\n", nvecs, len(finalVecIDs), len(indexData), faissIndex)
 
 	err = faissIndex.AddWithIDs(indexData, finalVecIDs)
 	if err != nil {

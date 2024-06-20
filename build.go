@@ -20,6 +20,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"time"
 
 	"github.com/blevesearch/vellum"
 )
@@ -58,13 +59,15 @@ func PersistSegmentBase(sb *SegmentBase, path string) error {
 		_ = os.Remove(path)
 	}
 
-	_, err = persistSegmentBaseToWriter(sb, f)
+	numBytes, err := persistSegmentBaseToWriter(sb, f)
 	if err != nil {
 		cleanup()
 		return err
 	}
 
+	temp := time.Now()
 	err = f.Sync()
+	fmt.Printf("Num Bytes - %d\tTime for fsync - %s\n", numBytes, time.Since(temp))
 	if err != nil {
 		cleanup()
 		return err

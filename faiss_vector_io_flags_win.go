@@ -44,6 +44,6 @@ func trainFaissIndex(index *faiss.IndexImpl, indexData []float32) error {
 	defer func() {
 		trainMutex.Unlock()
 		runtime.UnlockOSThread()
-	}
+	}()
 	return index.Train(indexData)
 }

@@ -18,6 +18,7 @@
 package zap
 
 import (
+	"runtime"
 	"sync"
 
 	faiss "github.com/blevesearch/go-faiss"
@@ -38,7 +39,11 @@ const faissIOFlags = faiss.IOFlagReadOnly
 var trainMutex sync.Mutex
 
 func trainFaissIndex(index *faiss.IndexImpl, indexData []float32) error {
+	runtime.LockOSThread()
 	trainMutex.Lock()
-	defer trainMutex.Unlock()
+	defer func() {
+		trainMutex.Unlock()
+		runtime.UnlockOSThread()
+	}
 	return index.Train(indexData)
 }

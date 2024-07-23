@@ -386,7 +386,7 @@ func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
 			return nil, err
 		}
 
-		err = idx.Train(vecs)
+		err = trainFaissIndex(idx, vecs)
 		if err != nil {
 			return nil, err
 		}

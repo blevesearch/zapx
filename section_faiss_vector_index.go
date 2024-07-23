@@ -391,7 +391,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		// the data space of indexData such that during the search time, we probe
 		// only a subset of vectors -> non-exhaustive search. could be a time
 		// consuming step when the indexData is large.
-		err = faissIndex.Train(indexData)
+		err = trainFaissIndex(faissIndex, indexData)
 		if err != nil {
 			return err
 		}
@@ -519,7 +519,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			nprobe := calculateNprobe(nlist, content.indexOptimizedFor)
 			faissIndex.SetNProbe(nprobe)
 
-			err = faissIndex.Train(vecs)
+			err = trainFaissIndex(faissIndex, vecs)
 			if err != nil {
 				return 0, err
 			}

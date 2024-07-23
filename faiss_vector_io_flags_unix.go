@@ -20,3 +20,7 @@ package zap
 import faiss "github.com/blevesearch/go-faiss"
 
 const faissIOFlags = faiss.IOFlagReadMmap | faiss.IOFlagSkipPrefetch
+
+func trainFaissIndex(index *faiss.IndexImpl, indexData []float32) error {
+	return index.Train(indexData)
+}

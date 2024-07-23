@@ -17,6 +17,28 @@
 
 package zap
 
-import faiss "github.com/blevesearch/go-faiss"
+import (
+	"sync"
+
+	faiss "github.com/blevesearch/go-faiss"
+)
 
 const faissIOFlags = faiss.IOFlagReadOnly
+
+// This is a workaround for the issue that the faiss library does not support
+// concurrent training on Windows. The training is serialized by using a mutex.
+// Details:
+//  1. Faiss uses openBLAS for matrix operations, and openBLAS can be built in either
+//     single-threaded mode or multi-threaded mode.
+//  2. Single threaded openBLAS is not performant, and can lead to an exponential increase
+//     in training time, especially during segment merge.
+//  3. openBLAS must hence be built in multi-threaded mode to be performant, but this
+//     makes openBLAS to be not thread-safe on windows, where one of its backing pthreads
+//     can get leaked.
+var trainMutex sync.Mutex
+
+func trainFaissIndex(index *faiss.IndexImpl, indexData []float32) error {
+	trainMutex.Lock()
+	defer trainMutex.Unlock()
+	return index.Train(indexData)
+}

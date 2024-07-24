@@ -322,8 +322,20 @@ func (s *SegmentBase) loadFieldsNew() error {
 		return s.loadFields()
 	}
 
+	fmt.Println("pos:", pos, "pos+binary.MaxVarintLen64:", pos+binary.MaxVarintLen64, "capacity of buffer:", cap(s.mem))
+
+	seek := pos + binary.MaxVarintLen64
+	if seek > uint64(len(s.mem)) {
+		// handling a buffer overflow case.
+		// a rare case where the backing buffer is not large enough to be read directly via
+		// a pos+binary.MaxVarinLen64 seek. For eg, this can happen when there is only
+		// one field to be indexed in the entire batch of data and while writing out
+		// these fields metadata, you write 1 + 8 bytes whereas the MaxVarintLen64 = 10.
+		seek = uint64(len(s.mem))
+	}
+
 	// read the number of fields
-	numFields, sz := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])
+	numFields, sz := binary.Uvarint(s.mem[pos:seek])
 	pos += uint64(sz)
 	s.incrementBytesRead(uint64(sz))
 

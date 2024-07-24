@@ -59,7 +59,9 @@ func (v *faissVectorIndexSection) Process(opaque map[int]resetable, docNum uint3
 
 func (v *faissVectorIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
 	vo := v.getvectorIndexOpaque(opaque)
+	fmt.Println("the writer count", w.Count(), w.Sum32())
 	vo.writeVectorIndexes(w)
+	fmt.Println("the writer count after", w.Count(), w.Sum32())
 	return 0, nil
 }
 
@@ -753,6 +755,10 @@ func (v *vectorIndexOpaque) BytesRead() uint64 {
 }
 
 func (v *vectorIndexOpaque) ResetBytesRead(uint64) {
+}
+
+func (v *vectorIndexOpaque) Type() string {
+	return "vector"
 }
 
 // cleanup stuff over here for reusability

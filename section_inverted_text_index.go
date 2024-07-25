@@ -1014,7 +1014,3 @@ func (i *invertedIndexOpaque) Set(key string, val interface{}) {
 		i.numDocs = val.(uint64)
 	}
 }
-
-func (v *invertedIndexOpaque) Type() string {
-	return "text"
-}

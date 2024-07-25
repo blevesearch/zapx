@@ -17,7 +17,6 @@ package zap
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"math"
 	"sort"
 	"sync"
@@ -51,29 +50,27 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 	s := interimPool.Get().(*interim)
 
 	var br bytes.Buffer
-	// if s.lastNumDocs > 0 {
-	// 	// use previous results to initialize the buf with an estimate
-	// 	// size, but note that the interim instance comes from a
-	// 	// global interimPool, so multiple scorch instances indexing
-	// 	// different docs can lead to low quality estimates
-	// 	estimateAvgBytesPerDoc := int(float64(s.lastOutSize/s.lastNumDocs) *
-	// 		NewSegmentBufferNumResultsFactor)
-	// 	estimateNumResults := int(float64(len(results)+NewSegmentBufferNumResultsBump) *
-	// 		NewSegmentBufferAvgBytesPerDocFactor)
-	// 	br.Grow(estimateAvgBytesPerDoc * estimateNumResults)
-	// 	fmt.Println("=============")
-	// }
-	// fmt.Println("br size", br.Cap())
-	br.Grow(255)
+	if s.lastNumDocs > 0 {
+		// use previous results to initialize the buf with an estimate
+		// size, but note that the interim instance comes from a
+		// global interimPool, so multiple scorch instances indexing
+		// different docs can lead to low quality estimates
+		estimateAvgBytesPerDoc := int(float64(s.lastOutSize/s.lastNumDocs) *
+			NewSegmentBufferNumResultsFactor)
+		estimateNumResults := int(float64(len(results)+NewSegmentBufferNumResultsBump) *
+			NewSegmentBufferAvgBytesPerDocFactor)
+		br.Grow(estimateAvgBytesPerDoc * estimateNumResults)
+	}
+
 	s.results = results
 	s.chunkMode = chunkMode
 	s.w = NewCountHashWriter(&br)
-	fmt.Println("buffer initial capacity:", br.Cap())
+
 	storedIndexOffset, dictOffsets, sectionsIndexOffset, err := s.convert()
 	if err != nil {
 		return nil, uint64(0), err
 	}
-	fmt.Println("buffer capacity after write:", br.Cap(), "length of buffer:", len(br.Bytes()))
+
 	sb, err := InitSegmentBase(br.Bytes(), s.w.Sum32(), chunkMode,
 		s.FieldsMap, s.FieldsInv, uint64(len(results)),
 		storedIndexOffset, dictOffsets, sectionsIndexOffset)
@@ -228,11 +225,9 @@ func (s *interim) convert() (uint64, []uint64, uint64, error) {
 
 	// after persisting the sections to the writer, account corresponding
 	for _, opaque := range s.opaque {
-		fmt.Println("type of opaque", opaque.Type())
 		opaqueIO, ok := opaque.(segment.DiskStatsReporter)
 		if ok {
 			s.incrementBytesWritten(opaqueIO.BytesWritten())
-			fmt.Println("bytes written", opaqueIO.BytesWritten())
 		}
 	}
 
@@ -247,7 +242,6 @@ func (s *interim) convert() (uint64, []uint64, uint64, error) {
 		return 0, nil, 0, err
 	}
 
-	fmt.Println("offset values", storedIndexOffset, sectionsIndexOffset)
 	return storedIndexOffset, dictOffsets, sectionsIndexOffset, nil
 }
 

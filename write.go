@@ -16,7 +16,6 @@ package zap
 
 import (
 	"encoding/binary"
-	"fmt"
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
@@ -54,7 +53,7 @@ func writeRoaringWithLen(r *roaring.Bitmap, w io.Writer,
 func persistFieldsSection(fieldsInv []string, w *CountHashWriter, dictLocs []uint64, opaque map[int]resetable) (uint64, error) {
 	var rv uint64
 	fieldsOffsets := make([]uint64, 0, len(fieldsInv))
-	fmt.Println("total number of fields:", len(fieldsInv))
+
 	for fieldID, fieldName := range fieldsInv {
 		// record start of this field
 		fieldsOffsets = append(fieldsOffsets, uint64(w.Count()))
@@ -70,8 +69,6 @@ func persistFieldsSection(fieldsInv []string, w *CountHashWriter, dictLocs []uin
 		if err != nil {
 			return 0, err
 		}
-
-		fmt.Println(" ->field being written out:", fieldName, "number of sections:", len(segmentSections))
 
 		// write out the number of field-specific indexes
 		// FIXME hard-coding to 2, and not attempting to support sparseness well

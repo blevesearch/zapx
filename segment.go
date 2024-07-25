@@ -322,8 +322,6 @@ func (s *SegmentBase) loadFieldsNew() error {
 		return s.loadFields()
 	}
 
-	fmt.Println("pos:", pos, "pos+binary.MaxVarintLen64:", pos+binary.MaxVarintLen64, "capacity of buffer:", cap(s.mem))
-
 	seek := pos + binary.MaxVarintLen64
 	if seek > uint64(len(s.mem)) {
 		// handling a buffer overflow case.

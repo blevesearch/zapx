@@ -59,8 +59,12 @@ func getChunkSize(chunkMode uint32, cardinality uint64, maxDocs uint64) (uint64,
 		//
 		// 1.  compute the number of chunks needed (max 1024/chunk)
 		// 2.  convert to chunkSize, dividing into maxDocs
-		numChunks := (cardinality / 1024) + 1
+		numChunks := (cardinality / 2048) + 1
+		fmt.Printf("cardinality is %v \n", cardinality)
+		fmt.Printf("num chunks is %v \n", numChunks)
 		chunkSize := maxDocs / numChunks
+		fmt.Printf("max docs is %v \n", maxDocs)
+		fmt.Printf("chunk size is %v \n", chunkSize)
 		return chunkSize, nil
 	}
 	return 0, fmt.Errorf("unknown chunk mode %d", chunkMode)

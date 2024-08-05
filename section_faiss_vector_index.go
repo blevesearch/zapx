@@ -494,8 +494,10 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			ids = append(ids, hash)
 		}
 
+		// Set the faiss metric type (default is Euclidean Distance or l2_norm)
 		var metric = faiss.MetricL2
-		if content.metric == index.CosineSimilarity {
+		if content.metric == index.InnerProduct || content.metric == index.CosineSimilarity {
+			// use the same FAISS metric for inner product and cosine similarity
 			metric = faiss.MetricInnerProduct
 		}
 

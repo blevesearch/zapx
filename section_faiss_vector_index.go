@@ -485,12 +485,6 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 	//    2. its constituent vectorID -> {docID} mapping.
 	tempBuf := vo.grabBuf(binary.MaxVarintLen64)
 	for fieldID, content := range vo.vecFieldMap {
-		// Set the faiss metric type (default is Euclidean Distance or l2_norm)
-		var metric = faiss.MetricL2
-		if content.metric == index.InnerProduct || content.metric == index.CosineSimilarity {
-			// use the same FAISS metric for inner product and cosine similarity
-			metric = faiss.MetricInnerProduct
-		}
 		// calculate the capacity of the vecs and ids slices
 		// to avoid multiple allocations.
 		vecs := make([]float32, 0, len(content.vecs)*int(content.dim))
@@ -498,6 +492,13 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		for hash, vecInfo := range content.vecs {
 			vecs = append(vecs, vecInfo.vec...)
 			ids = append(ids, hash)
+		}
+
+		// Set the faiss metric type (default is Euclidean Distance or l2_norm)
+		var metric = faiss.MetricL2
+		if content.metric == index.InnerProduct || content.metric == index.CosineSimilarity {
+			// use the same FAISS metric for inner product and cosine similarity
+			metric = faiss.MetricInnerProduct
 		}
 
 		nvecs := len(ids)

@@ -267,14 +267,18 @@ func (vpl *VecPostingsIterator) BytesWritten() uint64 {
 
 // vectorIndexWrapper conforms to scorch_segment_api's VectorIndex interface
 type vectorIndexWrapper struct {
-	search func(qVector []float32, k int64, params json.RawMessage) (segment.VecPostingsList, error)
-	close  func()
-	size   func() uint64
+	search func(qVector []float32, k int64, requireFiltering bool,
+		eligibleDocIDs *roaring.Bitmap, params json.RawMessage) (
+		segment.VecPostingsList, error)
+	close func()
+	size  func() uint64
 }
 
-func (i *vectorIndexWrapper) Search(qVector []float32, k int64, params json.RawMessage) (
+func (i *vectorIndexWrapper) Search(qVector []float32, k int64,
+	requireFiltering bool, eligibleDocIDs *roaring.Bitmap, params json.RawMessage) (
 	segment.VecPostingsList, error) {
-	return i.search(qVector, k, params)
+	return i.search(qVector, k, requireFiltering, eligibleDocIDs, params)
+
 }
 
 func (i *vectorIndexWrapper) Close() {
@@ -295,13 +299,16 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
 	var vecDocIDMap map[int64]uint32
+	var docVecIDMap map[uint32]int64
 	var vectorIDsToExclude []int64
 	var fieldIDPlus1 uint16
 	var vecIndexSize uint64
 
 	var (
 		wrapVecIndex = &vectorIndexWrapper{
-			search: func(qVector []float32, k int64, params json.RawMessage) (segment.VecPostingsList, error) {
+			search: func(qVector []float32, k int64, requireFiltering bool,
+				eligibleDocIDs *roaring.Bitmap, params json.RawMessage) (
+				segment.VecPostingsList, error) {
 				// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
 				// 2. both the values can be represented using roaring bitmaps.
 				// 3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
@@ -318,12 +325,36 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 					return rv, nil
 				}
 
-				scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k, vectorIDsToExclude, params)
-				if err != nil {
-					return nil, err
+				var scores []float32
+				var ids []int64
+				var err error
+
+				if !requireFiltering {
+					scores, ids, err = vecIndex.SearchWithoutIDs(qVector, k,
+						vectorIDsToExclude, params)
+					if err != nil {
+						return nil, err
+					}
+				} else if eligibleDocIDs.Stats().Cardinality > 0 {
+					// None of the documents are eligible per the filter query.
+
+					// vector IDs corresponding to the local doc numbers to be
+					// considered for the search
+					vectorIDsToInclude := make([]int64, eligibleDocIDs.Stats().Cardinality)
+					for i, id := range eligibleDocIDs.ToArray() {
+						vectorIDsToInclude[int64(i)] = int64(docVecIDMap[id])
+					}
+
+					scores, ids, err = vecIndex.SearchWithIDs(qVector, k,
+						vectorIDsToInclude, params)
+					if err != nil {
+						return nil, err
+					}
 				}
-				// for every similar vector returned by the Search() API, add the corresponding
-				// docID and the score to the newly created vecPostingsList
+
+				// for every similar vector returned by the Search() API,
+				// add the corresponding docID and the score to the newly
+				// created vecPostingsList
 				for i := 0; i < len(ids); i++ {
 					vecID := ids[i]
 					// Checking if it's present in the vecDocIDMap.
@@ -372,7 +403,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 		pos += n
 	}
 
-	vecIndex, vecDocIDMap, vectorIDsToExclude, err =
+	vecIndex, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
 		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], except)
 
 	if vecIndex != nil {

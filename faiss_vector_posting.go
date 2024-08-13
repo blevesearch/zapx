@@ -335,8 +335,15 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 					if err != nil {
 						return nil, err
 					}
-				} else if eligibleDocIDs.Stats().Cardinality > 0 {
-					// None of the documents are eligible per the filter query.
+				} else if eligibleDocIDs != nil && !eligibleDocIDs.IsEmpty() {
+					// Non-zero documents eligible per the filter query.
+
+					if except != nil && !except.IsEmpty() {
+						// Making doubly sure that the deleted docs do not make their
+						// way into the "inclusion" list, even though that's been
+						// accounted for when computing the eligible doc IDs.
+						eligibleDocIDs.AndNot(except)
+					}
 
 					// vector IDs corresponding to the local doc numbers to be
 					// considered for the search

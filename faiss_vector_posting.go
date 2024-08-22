@@ -269,7 +269,7 @@ func (vpl *VecPostingsIterator) BytesWritten() uint64 {
 type vectorIndexWrapper struct {
 	search func(qVector []float32, k int64,
 		params json.RawMessage) (segment.VecPostingsList, error)
-	searchWithFilter func(qVector []float32, k int64, eligibleDocIDs *roaring.Bitmap,
+	searchWithFilter func(qVector []float32, k int64, eligibleDocIDs []uint64,
 		params json.RawMessage) (segment.VecPostingsList, error)
 	close func()
 	size  func() uint64
@@ -282,7 +282,7 @@ func (i *vectorIndexWrapper) Search(qVector []float32, k int64,
 }
 
 func (i *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
-	eligibleDocIDs *roaring.Bitmap, params json.RawMessage) (
+	eligibleDocIDs []uint64, params json.RawMessage) (
 	segment.VecPostingsList, error) {
 	return i.searchWithFilter(qVector, k, eligibleDocIDs, params)
 }
@@ -361,7 +361,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 				return rv, nil
 			},
 			searchWithFilter: func(qVector []float32, k int64,
-				eligibleDocIDs *roaring.Bitmap, params json.RawMessage) (
+				eligibleDocIDs []uint64, params json.RawMessage) (
 				segment.VecPostingsList, error) {
 				// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
 				// 2. both the values can be represented using roaring bitmaps.
@@ -383,21 +383,14 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 				var ids []int64
 				var err error
 
-				if eligibleDocIDs != nil && !eligibleDocIDs.IsEmpty() {
+				if len(eligibleDocIDs) > 0 {
 					// Non-zero documents eligible per the filter query.
-
-					if except != nil && !except.IsEmpty() {
-						// Making doubly sure that the deleted docs do not make their
-						// way into the "inclusion" list, even though that's been
-						// accounted for when computing the eligible doc IDs.
-						eligibleDocIDs.AndNot(except)
-					}
 
 					// vector IDs corresponding to the local doc numbers to be
 					// considered for the search
-					vectorIDsToInclude := make([]int64, eligibleDocIDs.Stats().Cardinality)
-					for i, id := range eligibleDocIDs.ToArray() {
-						vectorIDsToInclude[int64(i)] = int64(docVecIDMap[id])
+					vectorIDsToInclude := make([]int64, len(eligibleDocIDs))
+					for i, id := range eligibleDocIDs {
+						vectorIDsToInclude[int64(i)] = docVecIDMap[uint32(id)]
 					}
 
 					scores, ids, err = vecIndex.SearchWithIDs(qVector, k,

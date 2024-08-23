@@ -298,9 +298,11 @@ func (i *vectorIndexWrapper) Size() uint64 {
 // InterpretVectorIndex returns a construct of closures (vectorIndexWrapper)
 // that will allow the caller to -
 // (1) search within an attached vector index
-// (2) close attached vector index
-// (3) get the size of the attached vector index
-func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap) (
+// (2) search limited to a subset of documents within an attached vector index
+// (3) close attached vector index
+// (4) get the size of the attached vector index
+func (sb *SegmentBase) InterpretVectorIndex(field string, filtered bool,
+	except *roaring.Bitmap) (
 	segment.VectorIndex, error) {
 	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
@@ -439,7 +441,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 	}
 
 	vecIndex, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
-		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], except)
+		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], filtered, except)
 
 	if vecIndex != nil {
 		vecIndexSize = vecIndex.Size()

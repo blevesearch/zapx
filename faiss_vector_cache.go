@@ -52,14 +52,16 @@ func (vc *vectorIndexCache) Clear() {
 	vc.m.Unlock()
 }
 
-func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, except *roaring.Bitmap) (
+func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte,
+	loadDocVecIDMap bool, except *roaring.Bitmap) (
 	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, docVecIDMap map[uint32]int64,
 	vecIDsToExclude []int64, err error) {
 	var found bool
-	index, vecDocIDMap, docVecIDMap, vecIDsToExclude, found = vc.loadFromCache(fieldID, except)
+	index, vecDocIDMap, docVecIDMap, vecIDsToExclude, found = vc.loadFromCache(
+		fieldID, except)
 	if !found {
-		index, vecDocIDMap, docVecIDMap, vecIDsToExclude, err =
-			vc.createAndCache(fieldID, mem, except)
+		index, vecDocIDMap, docVecIDMap, vecIDsToExclude, err = vc.createAndCache(
+			fieldID, mem, loadDocVecIDMap, except)
 	}
 	return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, err
 }
@@ -81,9 +83,25 @@ func (vc *vectorIndexCache) loadFromCache(fieldID uint16, except *roaring.Bitmap
 	return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, true
 }
 
-func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte, except *roaring.Bitmap) (
-	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, docVecIDMap map[uint32]int64,
-	vecIDsToExclude []int64, err error) {
+func (vc *vectorIndexCache) loadDocVecIDFromCache(fieldID uint16) (
+	docVecIDMap map[uint32]int64, found bool) {
+	vc.m.RLock()
+	defer vc.m.RUnlock()
+
+	entry, ok := vc.cache[fieldID]
+	if !ok {
+		return nil, false
+	}
+
+	docVecIDMap = entry.loadDocVecIDMap()
+
+	return docVecIDMap, true
+}
+
+func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte,
+	loadDocVecIDMap bool, except *roaring.Bitmap) (
+	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
+	docVecIDMap map[uint32]int64, vecIDsToExclude []int64, err error) {
 	vc.m.Lock()
 	defer vc.m.Unlock()
 
@@ -92,9 +110,16 @@ func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte, except *r
 	// cached.
 	entry, ok := vc.cache[fieldID]
 	if ok {
-		index, vecDocIDMap, docVecIDMap = entry.load()
-		vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
-		return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
+		if !loadDocVecIDMap {
+			index, vecDocIDMap, _ = entry.load()
+			vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
+			return index, vecDocIDMap, nil, vecIDsToExclude, nil
+		} else if entry.docIDVecMap == nil {
+			// if the docVecIDMap is required but not part of the cached entry.
+			index, vecDocIDMap, docVecIDMap = entry.load()
+			vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
+			return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
+		}
 	}
 
 	// if the cache doesn't have entry, construct the vector to doc id map and the
@@ -104,7 +129,9 @@ func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte, except *r
 	pos += n
 
 	vecDocIDMap = make(map[int64]uint32, numVecs)
-	docVecIDMap = make(map[uint32]int64, numVecs)
+	if loadDocVecIDMap {
+		docVecIDMap = make(map[uint32]int64, numVecs)
+	}
 	isExceptNotEmpty := except != nil && !except.IsEmpty()
 	for i := 0; i < int(numVecs); i++ {
 		vecID, n := binary.Varint(mem[pos : pos+binary.MaxVarintLen64])
@@ -118,7 +145,9 @@ func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte, except *r
 			continue
 		}
 		vecDocIDMap[vecID] = docIDUint32
-		docVecIDMap[docIDUint32] = vecID
+		if loadDocVecIDMap {
+			docVecIDMap[docIDUint32] = vecID
+		}
 	}
 
 	indexSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
@@ -288,6 +317,10 @@ func (ce *cacheEntry) load() (*faiss.IndexImpl, map[int64]uint32, map[uint32]int
 	ce.incHit()
 	ce.addRef()
 	return ce.index, ce.vecDocIDMap, ce.docIDVecMap
+}
+
+func (ce *cacheEntry) loadDocVecIDMap() map[uint32]int64 {
+	return ce.docIDVecMap
 }
 
 func (ce *cacheEntry) close() {

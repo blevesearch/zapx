@@ -301,7 +301,7 @@ func (i *vectorIndexWrapper) Size() uint64 {
 // (2) search limited to a subset of documents within an attached vector index
 // (3) close attached vector index
 // (4) get the size of the attached vector index
-func (sb *SegmentBase) InterpretVectorIndex(field string, filtered bool,
+func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool,
 	except *roaring.Bitmap) (
 	segment.VectorIndex, error) {
 	// Params needed for the closures
@@ -441,7 +441,8 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, filtered bool,
 	}
 
 	vecIndex, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
-		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], filtered, except)
+		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], requiresFiltering,
+			except)
 
 	if vecIndex != nil {
 		vecIndexSize = vecIndex.Size()

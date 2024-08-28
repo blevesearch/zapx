@@ -52,6 +52,9 @@ func (vc *vectorIndexCache) Clear() {
 	vc.m.Unlock()
 }
 
+// loadDocVecIDMap indicates if a non-nil docVecIDMap should be returned.
+// It is true when a filtered kNN query accesses the cache since it requires the
+// map. It's false otherwise.
 func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte,
 	loadDocVecIDMap bool, except *roaring.Bitmap) (
 	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, docVecIDMap map[uint32]int64,
@@ -59,7 +62,10 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte,
 	var found bool
 	index, vecDocIDMap, docVecIDMap, vecIDsToExclude, found = vc.loadFromCache(
 		fieldID, except)
-	if !found {
+	if !found || (loadDocVecIDMap && docVecIDMap == nil) {
+		// Rebuilding the cache if either:
+		// 1. none of the required elements were present in the cache, or
+		// 2. the docVecIDMap is required but it isn't part of the cache.
 		index, vecDocIDMap, docVecIDMap, vecIDsToExclude, err = vc.createAndCache(
 			fieldID, mem, loadDocVecIDMap, except)
 	}
@@ -110,20 +116,17 @@ func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte,
 	// cached.
 	entry, ok := vc.cache[fieldID]
 	if ok {
-		if !loadDocVecIDMap {
-			index, vecDocIDMap, _ = entry.load()
-			vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
-			return index, vecDocIDMap, nil, vecIDsToExclude, nil
-		} else if entry.docIDVecMap == nil {
-			// if the docVecIDMap is required but not part of the cached entry.
+		vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
+		if !loadDocVecIDMap || (loadDocVecIDMap && entry.docIDVecMap != nil) {
 			index, vecDocIDMap, docVecIDMap = entry.load()
-			vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
 			return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
 		}
 	}
 
 	// if the cache doesn't have entry, construct the vector to doc id map and the
 	// vector index out of the mem bytes and update the cache under lock.
+	// if the docVecIDMap is required but not part of the cached entry,
+	// rebuild the cache.
 	pos := 0
 	numVecs, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
@@ -158,12 +161,13 @@ func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte,
 		return nil, nil, nil, nil, err
 	}
 
-	vc.insertLOCKED(fieldID, index, vecDocIDMap)
+	vc.insertLOCKED(fieldID, index, vecDocIDMap, loadDocVecIDMap, docVecIDMap)
 	return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
 }
 
 func (vc *vectorIndexCache) insertLOCKED(fieldIDPlus1 uint16,
-	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32) {
+	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, loadDocVecIDMap bool,
+	docVecIDMap map[uint32]int64) {
 	// the first time we've hit the cache, try to spawn a monitoring routine
 	// which will reconcile the moving averages for all the fields being hit
 	if len(vc.cache) == 0 {
@@ -177,7 +181,8 @@ func (vc *vectorIndexCache) insertLOCKED(fieldIDPlus1 uint16,
 		// this makes the average to be kept above the threshold value for a
 		// longer time and thereby the index to be resident in the cache
 		// for longer time.
-		vc.cache[fieldIDPlus1] = createCacheEntry(index, vecDocIDMap, 0.4)
+		vc.cache[fieldIDPlus1] = createCacheEntry(index, vecDocIDMap,
+			loadDocVecIDMap, docVecIDMap, 0.4)
 	}
 }
 
@@ -270,13 +275,9 @@ func (e *ewma) add(val uint64) {
 
 // -----------------------------------------------------------------------------
 
-func createCacheEntry(index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, alpha float64) *cacheEntry {
-	docVecIDMap := make(map[uint32]int64)
-	for vecID, docID := range vecDocIDMap {
-		docVecIDMap[docID] = vecID
-	}
-
-	return &cacheEntry{
+func createCacheEntry(index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
+	loadDocVecIDMap bool, docVecIDMap map[uint32]int64, alpha float64) *cacheEntry {
+	ce := &cacheEntry{
 		index:       index,
 		vecDocIDMap: vecDocIDMap,
 		docIDVecMap: docVecIDMap,
@@ -286,6 +287,10 @@ func createCacheEntry(index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, alph
 		},
 		refs: 1,
 	}
+	if loadDocVecIDMap {
+		ce.docIDVecMap = docVecIDMap
+	}
+	return ce
 }
 
 type cacheEntry struct {

@@ -117,7 +117,7 @@ func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte,
 	entry, ok := vc.cache[fieldID]
 	if ok {
 		vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
-		if !loadDocVecIDMap || (loadDocVecIDMap && entry.docIDVecMap != nil) {
+		if !loadDocVecIDMap || (loadDocVecIDMap && entry.docVecIDMap != nil) {
 			index, vecDocIDMap, docVecIDMap = entry.load()
 			return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
 		}
@@ -280,7 +280,6 @@ func createCacheEntry(index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
 	ce := &cacheEntry{
 		index:       index,
 		vecDocIDMap: vecDocIDMap,
-		docIDVecMap: docVecIDMap,
 		tracker: &ewma{
 			alpha:  alpha,
 			sample: 1,
@@ -288,7 +287,7 @@ func createCacheEntry(index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
 		refs: 1,
 	}
 	if loadDocVecIDMap {
-		ce.docIDVecMap = docVecIDMap
+		ce.docVecIDMap = docVecIDMap
 	}
 	return ce
 }
@@ -303,7 +302,7 @@ type cacheEntry struct {
 
 	index       *faiss.IndexImpl
 	vecDocIDMap map[int64]uint32
-	docIDVecMap map[uint32]int64
+	docVecIDMap map[uint32]int64
 }
 
 func (ce *cacheEntry) incHit() {
@@ -321,11 +320,11 @@ func (ce *cacheEntry) decRef() {
 func (ce *cacheEntry) load() (*faiss.IndexImpl, map[int64]uint32, map[uint32]int64) {
 	ce.incHit()
 	ce.addRef()
-	return ce.index, ce.vecDocIDMap, ce.docIDVecMap
+	return ce.index, ce.vecDocIDMap, ce.docVecIDMap
 }
 
 func (ce *cacheEntry) loadDocVecIDMap() map[uint32]int64 {
-	return ce.docIDVecMap
+	return ce.docVecIDMap
 }
 
 func (ce *cacheEntry) close() {
@@ -333,7 +332,7 @@ func (ce *cacheEntry) close() {
 		ce.index.Close()
 		ce.index = nil
 		ce.vecDocIDMap = nil
-		ce.docIDVecMap = nil
+		ce.docVecIDMap = nil
 	}()
 }
 

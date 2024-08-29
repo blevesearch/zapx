@@ -59,74 +59,69 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte,
 	loadDocVecIDMap bool, except *roaring.Bitmap) (
 	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, docVecIDMap map[uint32]int64,
 	vecIDsToExclude []int64, err error) {
-	var found bool
-	index, vecDocIDMap, docVecIDMap, vecIDsToExclude, found = vc.loadFromCache(
-		fieldID, except)
-	if !found || (loadDocVecIDMap && docVecIDMap == nil) {
-		// Rebuilding the cache if either:
-		// 1. none of the required elements were present in the cache, or
-		// 2. the docVecIDMap is required but it isn't part of the cache.
-		index, vecDocIDMap, docVecIDMap, vecIDsToExclude, err = vc.createAndCache(
-			fieldID, mem, loadDocVecIDMap, except)
-	}
+	index, vecDocIDMap, docVecIDMap, vecIDsToExclude, err = vc.loadFromCache(
+		fieldID, loadDocVecIDMap, mem, except)
 	return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, err
 }
 
-func (vc *vectorIndexCache) loadFromCache(fieldID uint16, except *roaring.Bitmap) (
-	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, docVecIDMap map[uint32]int64,
-	vecIDsToExclude []int64, found bool) {
-	vc.m.RLock()
-	defer vc.m.RUnlock()
-
-	entry, ok := vc.cache[fieldID]
-	if !ok {
-		return nil, nil, nil, nil, false
-	}
-
-	index, vecDocIDMap, docVecIDMap = entry.load()
-	vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
-
-	return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, true
-}
-
-func (vc *vectorIndexCache) loadDocVecIDFromCache(fieldID uint16) (
-	docVecIDMap map[uint32]int64, found bool) {
-	vc.m.RLock()
-	defer vc.m.RUnlock()
-
-	entry, ok := vc.cache[fieldID]
-	if !ok {
-		return nil, false
-	}
-
-	docVecIDMap = entry.loadDocVecIDMap()
-
-	return docVecIDMap, true
-}
-
-func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte,
-	loadDocVecIDMap bool, except *roaring.Bitmap) (
-	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
+// function to load the vectorDocIDMap and if required, docVecIDMap from cache
+// If not, it will create these and add them to the cache.
+func (vc *vectorIndexCache) loadFromCache(fieldID uint16, loadDocVecIDMap bool,
+	mem []byte, except *roaring.Bitmap) (index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
 	docVecIDMap map[uint32]int64, vecIDsToExclude []int64, err error) {
-	vc.m.Lock()
-	defer vc.m.Unlock()
 
-	// when there are multiple threads trying to build the index, guard redundant
-	// index creation by doing a double check and return if already created and
-	// cached.
+	vc.m.RLock()
+
 	entry, ok := vc.cache[fieldID]
 	if ok {
 		vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
-		if !loadDocVecIDMap || (loadDocVecIDMap && entry.docVecIDMap != nil) {
-			index, vecDocIDMap, docVecIDMap = entry.load()
+		index, vecDocIDMap, docVecIDMap = entry.load()
+		if !loadDocVecIDMap || (loadDocVecIDMap && len(entry.docVecIDMap) > 0) {
+			vc.m.RUnlock()
 			return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
 		}
+
+		vc.m.RUnlock()
+		vc.m.Lock()
+		// in cases where only the docVecID isn't part of the cache, build it and
+		// add it to the cache, while holding a lock to avoid concurrent modifications.
+		// typically seen for the first filtered query.
+		docVecIDMap = vc.addDocVecIDMapToCacheLOCKED(entry)
+		vc.m.Unlock()
+		return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
 	}
 
-	// if the cache doesn't have entry, construct the vector to doc id map and the
-	// vector index out of the mem bytes and update the cache under lock.
-	// if the docVecIDMap is required but not part of the cached entry,
-	// rebuild the cache.
+	vc.m.RUnlock()
+	// acquiring a lock since this is modifying the cache.
+	vc.m.Lock()
+	defer vc.m.Unlock()
+	return vc.createAndCacheLOCKED(fieldID, mem, loadDocVecIDMap, except)
+}
+
+func (vc *vectorIndexCache) addDocVecIDMapToCacheLOCKED(ce *cacheEntry) map[uint32]int64 {
+
+	// Guarding against concurrent accesses by adding a double check here.
+	if ce.docVecIDMap != nil {
+		return ce.docVecIDMap
+	}
+
+	docVecIDMap := make(map[uint32]int64)
+	for vecID, docID := range ce.vecDocIDMap {
+		docVecIDMap[docID] = vecID
+	}
+
+	ce.docVecIDMap = docVecIDMap
+	return docVecIDMap
+}
+
+// Rebuilding the cache on a miss.
+func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
+	loadDocVecIDMap bool, except *roaring.Bitmap) (
+	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
+	docVecIDMap map[uint32]int64, vecIDsToExclude []int64, err error) {
+
+	// if the cache doesn't have the entry, construct the vector to doc id map and
+	// the vector index out of the mem bytes and update the cache under lock.
 	pos := 0
 	numVecs, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
@@ -321,10 +316,6 @@ func (ce *cacheEntry) load() (*faiss.IndexImpl, map[int64]uint32, map[uint32]int
 	ce.incHit()
 	ce.addRef()
 	return ce.index, ce.vecDocIDMap, ce.docVecIDMap
-}
-
-func (ce *cacheEntry) loadDocVecIDMap() map[uint32]int64 {
-	return ce.docVecIDMap
 }
 
 func (ce *cacheEntry) close() {

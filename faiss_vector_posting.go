@@ -348,11 +348,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					return rv, nil
 				}
 
-				var scores []float32
-				var ids []int64
-				var err error
-
-				scores, ids, err = vecIndex.SearchWithoutIDs(qVector, k,
+				scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k,
 					vectorIDsToExclude, params)
 				if err != nil {
 					return nil, err
@@ -381,10 +377,6 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					return rv, nil
 				}
 
-				var scores []float32
-				var ids []int64
-				var err error
-
 				if len(eligibleDocIDs) > 0 {
 					// Non-zero documents eligible per the filter query.
 
@@ -395,14 +387,14 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 						vectorIDsToInclude[int64(i)] = docVecIDMap[uint32(id)]
 					}
 
-					scores, ids, err = vecIndex.SearchWithIDs(qVector, k,
+					scores, ids, err := vecIndex.SearchWithIDs(qVector, k,
 						vectorIDsToInclude, params)
 					if err != nil {
 						return nil, err
 					}
-				}
 
-				addIDsToPostingsList(rv, ids, scores)
+					addIDsToPostingsList(rv, ids, scores)
+				}
 				return rv, nil
 			},
 			close: func() {

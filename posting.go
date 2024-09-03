@@ -17,6 +17,7 @@ package zap
 import (
 	"encoding/binary"
 	"fmt"
+	"log"
 	"math"
 	"reflect"
 
@@ -240,6 +241,23 @@ func (p *PostingsList) Count() uint64 {
 			e = 1
 		}
 	} else if p.postings != nil {
+		// A safeguard against panic by roaring.Bitmap.GetCardinality()
+		//
+		// See https://jira.issues.couchbase.com/browse/MB-57871
+		//
+		// A panic was observed in the wild in Bitmap.GetCardinality(),
+		// because of a nil pointer dereference, that happened due to
+		// presence of a nil container in the Bitmap.highlowcontainer.containers
+		//
+		// This is a temporary fix to help us recover from the panic, and to
+		// log bitmap stats to help us understand the issue better.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("zapx: PostingsList.Count() panic: %v"+
+					"\n\nBitmap Stats:%+v\n", r, p.postings.Stats())
+			}
+		}()
+
 		n = p.postings.GetCardinality()
 		if p.except != nil {
 			e = p.postings.AndCardinality(p.except)

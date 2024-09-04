@@ -1,11 +1,11 @@
 module github.com/blevesearch/zapx/v16
 
-go 1.20
+go 1.21
 
 require (
 	github.com/RoaringBitmap/roaring v1.9.3
 	github.com/blevesearch/bleve_index_api v1.1.11
-	github.com/blevesearch/go-faiss v1.0.20
+	github.com/blevesearch/go-faiss v1.0.21
 	github.com/blevesearch/mmap-go v1.0.4
 	github.com/blevesearch/scorch_segment_api/v2 v2.2.15
 	github.com/blevesearch/vellum v1.0.10

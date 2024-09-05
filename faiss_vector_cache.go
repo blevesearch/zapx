@@ -99,8 +99,8 @@ func (vc *vectorIndexCache) loadFromCache(fieldID uint16, loadDocVecIDMap bool,
 }
 
 func (vc *vectorIndexCache) addDocVecIDMapToCacheLOCKED(ce *cacheEntry) map[uint32]int64 {
-
-	// Guarding against concurrent accesses by adding a double check here.
+	// Handle concurrent accesses (to avoid unnecessary work) by adding a
+	// check within the write lock here.
 	if ce.docVecIDMap != nil {
 		return ce.docVecIDMap
 	}

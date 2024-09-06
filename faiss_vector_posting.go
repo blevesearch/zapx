@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"math"
 	"reflect"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -372,8 +373,15 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 		pos += n
 	}
 
+	var cacheExpiryTime time.Duration
+	if v, ok := sb.config["cacheExpiryTime"]; ok {
+		if v, err := parseToTimeDuration(v); err == nil {
+			cacheExpiryTime = v
+		}
+	}
+
 	vecIndex, vecDocIDMap, vectorIDsToExclude, err =
-		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], except)
+		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], except, cacheExpiryTime)
 
 	if vecIndex != nil {
 		vecIndexSize = vecIndex.Size()

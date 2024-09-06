@@ -38,6 +38,10 @@ type vectorIndexCache struct {
 	closeCh chan struct{}
 	m       sync.RWMutex
 	cache   map[uint16]*cacheEntry
+
+	// expiry time for a cache entry during idle period
+	cacheExpiryTime time.Duration
+	lastAccessTime  time.Time
 }
 
 func (vc *vectorIndexCache) Clear() {
@@ -52,12 +56,14 @@ func (vc *vectorIndexCache) Clear() {
 	vc.m.Unlock()
 }
 
-func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, except *roaring.Bitmap) (
-	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, vecIDsToExclude []int64, err error) {
+func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte,
+	except *roaring.Bitmap, cacheExpiryTime time.Duration) (
+	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
+	vecIDsToExclude []int64, err error) {
 	var found bool
 	index, vecDocIDMap, vecIDsToExclude, found = vc.loadFromCache(fieldID, except)
 	if !found {
-		index, vecDocIDMap, vecIDsToExclude, err = vc.createAndCache(fieldID, mem, except)
+		index, vecDocIDMap, vecIDsToExclude, err = vc.createAndCache(fieldID, mem, except, cacheExpiryTime)
 	}
 	return index, vecDocIDMap, vecIDsToExclude, err
 }
@@ -78,8 +84,10 @@ func (vc *vectorIndexCache) loadFromCache(fieldID uint16, except *roaring.Bitmap
 	return index, vecDocIDMap, vecIDsToExclude, true
 }
 
-func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte, except *roaring.Bitmap) (
-	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, vecIDsToExclude []int64, err error) {
+func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte,
+	except *roaring.Bitmap, cacheExpiryTime time.Duration) (
+	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
+	vecIDsToExclude []int64, err error) {
 	vc.m.Lock()
 	defer vc.m.Unlock()
 
@@ -123,15 +131,16 @@ func (vc *vectorIndexCache) createAndCache(fieldID uint16, mem []byte, except *r
 		return nil, nil, nil, err
 	}
 
-	vc.insertLOCKED(fieldID, index, vecDocIDMap)
+	vc.insertLOCKED(fieldID, index, vecDocIDMap, cacheExpiryTime)
 	return index, vecDocIDMap, vecIDsToExclude, nil
 }
 
-func (vc *vectorIndexCache) insertLOCKED(fieldIDPlus1 uint16,
-	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32) {
+func (vc *vectorIndexCache) insertLOCKED(fieldIDPlus1 uint16, index *faiss.IndexImpl,
+	vecDocIDMap map[int64]uint32, cacheExpiryTime time.Duration) {
 	// the first time we've hit the cache, try to spawn a monitoring routine
 	// which will reconcile the moving averages for all the fields being hit
 	if len(vc.cache) == 0 {
+		vc.cacheExpiryTime = cacheExpiryTime
 		go vc.monitor()
 	}
 
@@ -174,15 +183,30 @@ func (vc *vectorIndexCache) cleanup() bool {
 		entry.tracker.add(sample)
 
 		refCount := atomic.LoadInt64(&entry.refs)
+
+		// by default we don't consider expiry time, and the
+		// cacheExpiryTime is set iff its something that's been configured by user.
+		cacheEntryExpired := vc.cacheExpiryTime == 0 ||
+			(vc.cacheExpiryTime > 0 && time.Since(vc.lastAccessTime) > vc.cacheExpiryTime)
+
 		// the comparison threshold as of now is (1 - a). mathematically it
 		// means that there is only 1 query per second on average as per history.
 		// and in the current second, there were no queries performed against
 		// this index.
-		if entry.tracker.avg <= (1-entry.tracker.alpha) && refCount <= 0 {
+		if entry.tracker.avg <= (1-entry.tracker.alpha) && refCount <= 0 && cacheEntryExpired {
 			atomic.StoreUint64(&entry.tracker.sample, 0)
 			delete(vc.cache, fieldIDPlus1)
 			entry.close()
 			continue
+		}
+
+		// indicates that there are some live queries in the system so update the
+		// last access time which would be used to decide whether we cleanup the
+		// cache or not.
+		// considering the last access time which is delimited by the periodicity
+		// of the cache.
+		if refCount > 0 {
+			vc.lastAccessTime = time.Now()
 		}
 		atomic.StoreUint64(&entry.tracker.sample, 0)
 	}

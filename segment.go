@@ -38,8 +38,18 @@ func init() {
 	reflectStaticSizeSegmentBase = int(unsafe.Sizeof(sb))
 }
 
+// Open returns a zap impl of a segment along with keeping some config values in
+// mind during the segment's lifetime.
+func (z *ZapPlugin) OpenEx(path string, config map[string]interface{}) (segment.Segment, error) {
+	return z.open(path, config)
+}
+
 // Open returns a zap impl of a segment
-func (*ZapPlugin) Open(path string) (segment.Segment, error) {
+func (z *ZapPlugin) Open(path string) (segment.Segment, error) {
+	return z.open(path, nil)
+}
+
+func (*ZapPlugin) open(path string, config map[string]interface{}) (segment.Segment, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -57,6 +67,7 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 			fieldFSTs:      make(map[uint16]*vellum.FST),
 			vecIndexCache:  newVectorIndexCache(),
 			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
+			config:         config,
 		},
 		f:    f,
 		mm:   mm,
@@ -107,6 +118,8 @@ type SegmentBase struct {
 	// atomic access to these variables
 	bytesRead    uint64
 	bytesWritten uint64
+
+	config map[string]interface{} // config for the segment
 
 	m         sync.Mutex
 	fieldFSTs map[uint16]*vellum.FST

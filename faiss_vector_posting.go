@@ -307,7 +307,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
 	var vecDocIDMap map[int64]uint32
-	var docVecIDMap map[uint32]int64
+	var docVecIDMap map[uint32][]int64
 	var vectorIDsToExclude []int64
 	var fieldIDPlus1 uint16
 	var vecIndexSize uint64
@@ -382,9 +382,9 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 
 					// vector IDs corresponding to the local doc numbers to be
 					// considered for the search
-					vectorIDsToInclude := make([]int64, len(eligibleDocIDs))
-					for i, id := range eligibleDocIDs {
-						vectorIDsToInclude[int64(i)] = docVecIDMap[uint32(id)]
+					vectorIDsToInclude := make([]int64, 0, len(eligibleDocIDs))
+					for _, id := range eligibleDocIDs {
+						vectorIDsToInclude = append(vectorIDsToInclude, docVecIDMap[uint32(id)]...)
 					}
 
 					scores, ids, err := vecIndex.SearchWithIDs(qVector, k,

@@ -57,7 +57,7 @@ func (vc *vectorIndexCache) Clear() {
 // map. It's false otherwise.
 func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte,
 	loadDocVecIDMap bool, except *roaring.Bitmap) (
-	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, docVecIDMap map[uint32]int64,
+	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, docVecIDMap map[uint32][]int64,
 	vecIDsToExclude []int64, err error) {
 	index, vecDocIDMap, docVecIDMap, vecIDsToExclude, err = vc.loadFromCache(
 		fieldID, loadDocVecIDMap, mem, except)
@@ -68,7 +68,7 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte,
 // If not, it will create these and add them to the cache.
 func (vc *vectorIndexCache) loadFromCache(fieldID uint16, loadDocVecIDMap bool,
 	mem []byte, except *roaring.Bitmap) (index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
-	docVecIDMap map[uint32]int64, vecIDsToExclude []int64, err error) {
+	docVecIDMap map[uint32][]int64, vecIDsToExclude []int64, err error) {
 
 	vc.m.RLock()
 
@@ -98,16 +98,16 @@ func (vc *vectorIndexCache) loadFromCache(fieldID uint16, loadDocVecIDMap bool,
 	return vc.createAndCacheLOCKED(fieldID, mem, loadDocVecIDMap, except)
 }
 
-func (vc *vectorIndexCache) addDocVecIDMapToCacheLOCKED(ce *cacheEntry) map[uint32]int64 {
+func (vc *vectorIndexCache) addDocVecIDMapToCacheLOCKED(ce *cacheEntry) map[uint32][]int64 {
 	// Handle concurrent accesses (to avoid unnecessary work) by adding a
 	// check within the write lock here.
 	if ce.docVecIDMap != nil {
 		return ce.docVecIDMap
 	}
 
-	docVecIDMap := make(map[uint32]int64)
+	docVecIDMap := make(map[uint32][]int64)
 	for vecID, docID := range ce.vecDocIDMap {
-		docVecIDMap[docID] = vecID
+		docVecIDMap[docID] = append(docVecIDMap[docID], vecID)
 	}
 
 	ce.docVecIDMap = docVecIDMap
@@ -118,7 +118,7 @@ func (vc *vectorIndexCache) addDocVecIDMapToCacheLOCKED(ce *cacheEntry) map[uint
 func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	loadDocVecIDMap bool, except *roaring.Bitmap) (
 	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
-	docVecIDMap map[uint32]int64, vecIDsToExclude []int64, err error) {
+	docVecIDMap map[uint32][]int64, vecIDsToExclude []int64, err error) {
 
 	// if the cache doesn't have the entry, construct the vector to doc id map and
 	// the vector index out of the mem bytes and update the cache under lock.
@@ -128,7 +128,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 
 	vecDocIDMap = make(map[int64]uint32, numVecs)
 	if loadDocVecIDMap {
-		docVecIDMap = make(map[uint32]int64, numVecs)
+		docVecIDMap = make(map[uint32][]int64, numVecs)
 	}
 	isExceptNotEmpty := except != nil && !except.IsEmpty()
 	for i := 0; i < int(numVecs); i++ {
@@ -144,7 +144,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		}
 		vecDocIDMap[vecID] = docIDUint32
 		if loadDocVecIDMap {
-			docVecIDMap[docIDUint32] = vecID
+			docVecIDMap[docIDUint32] = append(docVecIDMap[docIDUint32], vecID)
 		}
 	}
 
@@ -162,7 +162,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 
 func (vc *vectorIndexCache) insertLOCKED(fieldIDPlus1 uint16,
 	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, loadDocVecIDMap bool,
-	docVecIDMap map[uint32]int64) {
+	docVecIDMap map[uint32][]int64) {
 	// the first time we've hit the cache, try to spawn a monitoring routine
 	// which will reconcile the moving averages for all the fields being hit
 	if len(vc.cache) == 0 {
@@ -271,7 +271,7 @@ func (e *ewma) add(val uint64) {
 // -----------------------------------------------------------------------------
 
 func createCacheEntry(index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
-	loadDocVecIDMap bool, docVecIDMap map[uint32]int64, alpha float64) *cacheEntry {
+	loadDocVecIDMap bool, docVecIDMap map[uint32][]int64, alpha float64) *cacheEntry {
 	ce := &cacheEntry{
 		index:       index,
 		vecDocIDMap: vecDocIDMap,
@@ -297,7 +297,7 @@ type cacheEntry struct {
 
 	index       *faiss.IndexImpl
 	vecDocIDMap map[int64]uint32
-	docVecIDMap map[uint32]int64
+	docVecIDMap map[uint32][]int64
 }
 
 func (ce *cacheEntry) incHit() {
@@ -312,7 +312,7 @@ func (ce *cacheEntry) decRef() {
 	atomic.AddInt64(&ce.refs, -1)
 }
 
-func (ce *cacheEntry) load() (*faiss.IndexImpl, map[int64]uint32, map[uint32]int64) {
+func (ce *cacheEntry) load() (*faiss.IndexImpl, map[int64]uint32, map[uint32][]int64) {
 	ce.incHit()
 	ce.addRef()
 	return ce.index, ce.vecDocIDMap, ce.docVecIDMap

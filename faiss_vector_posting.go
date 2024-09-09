@@ -267,14 +267,24 @@ func (vpl *VecPostingsIterator) BytesWritten() uint64 {
 
 // vectorIndexWrapper conforms to scorch_segment_api's VectorIndex interface
 type vectorIndexWrapper struct {
-	search func(qVector []float32, k int64, params json.RawMessage) (segment.VecPostingsList, error)
-	close  func()
-	size   func() uint64
+	search func(qVector []float32, k int64,
+		params json.RawMessage) (segment.VecPostingsList, error)
+	searchWithFilter func(qVector []float32, k int64, eligibleDocIDs []uint64,
+		params json.RawMessage) (segment.VecPostingsList, error)
+	close func()
+	size  func() uint64
 }
 
-func (i *vectorIndexWrapper) Search(qVector []float32, k int64, params json.RawMessage) (
+func (i *vectorIndexWrapper) Search(qVector []float32, k int64,
+	params json.RawMessage) (
 	segment.VecPostingsList, error) {
 	return i.search(qVector, k, params)
+}
+
+func (i *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
+	eligibleDocIDs []uint64, params json.RawMessage) (
+	segment.VecPostingsList, error) {
+	return i.searchWithFilter(qVector, k, eligibleDocIDs, params)
 }
 
 func (i *vectorIndexWrapper) Close() {
@@ -288,20 +298,40 @@ func (i *vectorIndexWrapper) Size() uint64 {
 // InterpretVectorIndex returns a construct of closures (vectorIndexWrapper)
 // that will allow the caller to -
 // (1) search within an attached vector index
-// (2) close attached vector index
-// (3) get the size of the attached vector index
-func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap) (
+// (2) search limited to a subset of documents within an attached vector index
+// (3) close attached vector index
+// (4) get the size of the attached vector index
+func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool,
+	except *roaring.Bitmap) (
 	segment.VectorIndex, error) {
 	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
 	var vecDocIDMap map[int64]uint32
+	var docVecIDMap map[uint32][]int64
 	var vectorIDsToExclude []int64
 	var fieldIDPlus1 uint16
 	var vecIndexSize uint64
 
+	// Utility function to add the corresponding docID and scores for each vector
+	// returned after the kNN query to the newly
+	// created vecPostingsList
+	addIDsToPostingsList := func(pl *VecPostingsList, ids []int64, scores []float32) {
+		for i := 0; i < len(ids); i++ {
+			vecID := ids[i]
+			// Checking if it's present in the vecDocIDMap.
+			// If -1 is returned as an ID(insufficient vectors), this will ensure
+			// it isn't added to the final postings list.
+			if docID, ok := vecDocIDMap[vecID]; ok {
+				code := getVectorCode(docID, scores[i])
+				pl.postings.Add(uint64(code))
+			}
+		}
+	}
+
 	var (
 		wrapVecIndex = &vectorIndexWrapper{
-			search: func(qVector []float32, k int64, params json.RawMessage) (segment.VecPostingsList, error) {
+			search: func(qVector []float32, k int64, params json.RawMessage) (
+				segment.VecPostingsList, error) {
 				// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
 				// 2. both the values can be represented using roaring bitmaps.
 				// 3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
@@ -318,23 +348,53 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 					return rv, nil
 				}
 
-				scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k, vectorIDsToExclude, params)
+				scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k,
+					vectorIDsToExclude, params)
 				if err != nil {
 					return nil, err
 				}
-				// for every similar vector returned by the Search() API, add the corresponding
-				// docID and the score to the newly created vecPostingsList
-				for i := 0; i < len(ids); i++ {
-					vecID := ids[i]
-					// Checking if it's present in the vecDocIDMap.
-					// If -1 is returned as an ID(insufficient vectors), this will ensure
-					// it isn't added to the final postings list.
-					if docID, ok := vecDocIDMap[vecID]; ok {
-						code := getVectorCode(docID, scores[i])
-						rv.postings.Add(uint64(code))
-					}
+
+				addIDsToPostingsList(rv, ids, scores)
+
+				return rv, nil
+			},
+			searchWithFilter: func(qVector []float32, k int64,
+				eligibleDocIDs []uint64, params json.RawMessage) (
+				segment.VecPostingsList, error) {
+				// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
+				// 2. both the values can be represented using roaring bitmaps.
+				// 3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
+				// 4. VecPostings would just have the docNum and the score. Every call of Next()
+				//    and Advance just returns the next VecPostings. The caller would do a vp.Number()
+				//    and the Score() to get the corresponding values
+				rv := &VecPostingsList{
+					except:   nil, // todo: handle the except bitmap within postings iterator.
+					postings: roaring64.New(),
 				}
 
+				if vecIndex == nil || vecIndex.D() != len(qVector) {
+					// vector index not found or dimensionality mismatched
+					return rv, nil
+				}
+
+				if len(eligibleDocIDs) > 0 {
+					// Non-zero documents eligible per the filter query.
+
+					// vector IDs corresponding to the local doc numbers to be
+					// considered for the search
+					vectorIDsToInclude := make([]int64, 0, len(eligibleDocIDs))
+					for _, id := range eligibleDocIDs {
+						vectorIDsToInclude = append(vectorIDsToInclude, docVecIDMap[uint32(id)]...)
+					}
+
+					scores, ids, err := vecIndex.SearchWithIDs(qVector, k,
+						vectorIDsToInclude, params)
+					if err != nil {
+						return nil, err
+					}
+
+					addIDsToPostingsList(rv, ids, scores)
+				}
 				return rv, nil
 			},
 			close: func() {
@@ -372,8 +432,9 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 		pos += n
 	}
 
-	vecIndex, vecDocIDMap, vectorIDsToExclude, err =
-		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], except)
+	vecIndex, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
+		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], requiresFiltering,
+			except)
 
 	if vecIndex != nil {
 		vecIndexSize = vecIndex.Size()

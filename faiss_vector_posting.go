@@ -387,13 +387,81 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 						vectorIDsToInclude = append(vectorIDsToInclude, docVecIDMap[uint32(id)]...)
 					}
 
-					scores, ids, err := vecIndex.SearchWithIDs(qVector, k,
-						vectorIDsToInclude, params)
+					// Gives the vector IDs for each cluster.
+					clusterAssignment, _ := vecIndex.GetClusterAssignment()
+					// Accounting for flat index
+					if len(clusterAssignment) == 0 {
+						scores, ids, err := vecIndex.SearchWithIDs(qVector, k,
+							vectorIDsToInclude, params)
+						if err != nil {
+							return nil, err
+						}
+
+						addIDsToPostingsList(rv, ids, scores)
+						return rv, nil
+					}
+
+					// Converting to roaring bitmap for ease of intersect ops with
+					// the set of eligible doc IDs.
+					centroidVecIDMap := make(map[int64]*roaring.Bitmap)
+					for centroidID, vecIDs := range clusterAssignment {
+						if _, exists := centroidVecIDMap[centroidID]; !exists {
+							centroidVecIDMap[centroidID] = roaring.NewBitmap()
+						}
+						for _, vecID := range vecIDs {
+							centroidVecIDMap[centroidID].Add(uint32(vecID))
+						}
+					}
+
+					eligibleVecIDsBitmap := roaring.NewBitmap()
+					for _, eligibleDocID := range eligibleDocIDs {
+						vecIDs := docVecIDMap[uint32(eligibleDocID)]
+						for _, vecID := range vecIDs {
+							eligibleVecIDsBitmap.Add(uint32(vecID))
+						}
+					}
+					eligibleCentroidIDs := make([]int64, 0)
+					deleted := 0
+					for centroidID, vecIDs := range centroidVecIDMap {
+						vecIDs.And(eligibleVecIDsBitmap)
+						if vecIDs.GetCardinality() > 0 {
+							centroidVecIDMap[centroidID] = vecIDs
+							eligibleCentroidIDs = append(eligibleCentroidIDs, centroidID)
+						} else {
+							// don't consider clusters with no eligible IDs.
+							delete(centroidVecIDMap, centroidID)
+							deleted++
+						}
+					}
+
+					// getting the eligible centroids in increasing order of distance
+					// or, decreasing order of proximity to query vector.
+					closestCentroidIDs, centroidDistances, _ := vecIndex.GetCentroidDistances(qVector, eligibleCentroidIDs)
+
+					nprobe := vecIndex.GetNProbe()
+
+					eligibleDocsTillNow := int64(0)
+					centroidPos := 0
+					for i, centroidID := range closestCentroidIDs {
+						eligibleDocsTillNow += int64(centroidVecIDMap[centroidID].GetCardinality())
+						if eligibleDocsTillNow >= k && i >= int(nprobe-1) {
+							// the closest 'nprobe' clusters have at least 'K'
+							// eligible vectors.
+							centroidPos = i + 1
+							break
+						}
+						centroidPos = i + 1
+					}
+
+					scores, ids, err := vecIndex.SearchSpecifiedClusters(vectorIDsToInclude,
+						closestCentroidIDs, centroidPos, k, qVector,
+						centroidDistances, params)
 					if err != nil {
 						return nil, err
 					}
 
 					addIDsToPostingsList(rv, ids, scores)
+					return rv, nil
 				}
 				return rv, nil
 			},

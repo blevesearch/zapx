@@ -421,7 +421,6 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 						}
 					}
 					eligibleCentroidIDs := make([]int64, 0)
-					deleted := 0
 					for centroidID, vecIDs := range centroidVecIDMap {
 						vecIDs.And(eligibleVecIDsBitmap)
 						if vecIDs.GetCardinality() > 0 {
@@ -430,13 +429,13 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 						} else {
 							// don't consider clusters with no eligible IDs.
 							delete(centroidVecIDMap, centroidID)
-							deleted++
 						}
 					}
 
 					// getting the eligible centroids in increasing order of distance
-					// or, decreasing order of proximity to query vector.
-					closestCentroidIDs, centroidDistances, _ := vecIndex.GetCentroidDistances(qVector, eligibleCentroidIDs)
+					// i.e. decreasing order of proximity to query vector.
+					closestCentroidIDs, centroidDistances, _ :=
+						vecIndex.GetCentroidDistances(qVector, eligibleCentroidIDs)
 
 					nprobe := vecIndex.GetNProbe()
 

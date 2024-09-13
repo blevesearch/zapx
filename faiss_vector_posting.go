@@ -387,9 +387,10 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 						vectorIDsToInclude = append(vectorIDsToInclude, docVecIDMap[uint32(id)]...)
 					}
 
-					// Gives the vector IDs for each cluster.
+					// Retrieve the mapping of centroid IDs to vectors within
+					// the cluster.
 					clusterAssignment, _ := vecIndex.GetClusterAssignment()
-					// Accounting for flat index
+					// Accounting for a flat index
 					if len(clusterAssignment) == 0 {
 						scores, ids, err := vecIndex.SearchWithIDs(qVector, k,
 							vectorIDsToInclude, params)
@@ -413,6 +414,8 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 						}
 					}
 
+					// Getting the vector IDs corresponding to the eligible
+					// doc IDs.
 					eligibleVecIDsBitmap := roaring.NewBitmap()
 					for _, eligibleDocID := range eligibleDocIDs {
 						vecIDs := docVecIDMap[uint32(eligibleDocID)]
@@ -420,10 +423,16 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 							eligibleVecIDsBitmap.Add(uint32(vecID))
 						}
 					}
+
+					// Determining which clusters, identified by centroid ID,
+					// have at least one eligible vector and hence, ought to be
+					// probed.
 					eligibleCentroidIDs := make([]int64, 0)
 					for centroidID, vecIDs := range centroidVecIDMap {
 						vecIDs.And(eligibleVecIDsBitmap)
 						if vecIDs.GetCardinality() > 0 {
+							// The mapping is now reduced to those vectors which
+							// are also eligible docs for the filter query.
 							centroidVecIDMap[centroidID] = vecIDs
 							eligibleCentroidIDs = append(eligibleCentroidIDs, centroidID)
 						} else {
@@ -432,28 +441,32 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 						}
 					}
 
-					// getting the eligible centroids in increasing order of distance
-					// i.e. decreasing order of proximity to query vector.
+					// Ordering the retrieved centroid IDs by increasing order
+					// of distance i.e. decreasing order of proximity to query vector.
 					closestCentroidIDs, centroidDistances, _ :=
 						vecIndex.GetCentroidDistances(qVector, eligibleCentroidIDs)
 
+					// Getting the nprobe value set at index time.
 					nprobe := vecIndex.GetNProbe()
 
 					eligibleDocsTillNow := int64(0)
-					centroidPos := 0
+					minEligibleCentroids := 0
 					for i, centroidID := range closestCentroidIDs {
 						eligibleDocsTillNow += int64(centroidVecIDMap[centroidID].GetCardinality())
 						if eligibleDocsTillNow >= k && i >= int(nprobe-1) {
-							// the closest 'nprobe' clusters have at least 'K'
-							// eligible vectors.
-							centroidPos = i + 1
+							// Continue till at least 'K' cumulative vectors are
+							// collected or 'nprobe' clusters are examined, whichever
+							// comes later.
+							minEligibleCentroids = i + 1
 							break
 						}
-						centroidPos = i + 1
+						minEligibleCentroids = i + 1
 					}
 
+					// Search the clusters specified by 'closestCentroidIDs' for
+					// vectors whose IDs are present in 'vectorIDsToInclude'
 					scores, ids, err := vecIndex.SearchSpecifiedClusters(vectorIDsToInclude,
-						closestCentroidIDs, centroidPos, k, qVector,
+						closestCentroidIDs, minEligibleCentroids, k, qVector,
 						centroidDistances, params)
 					if err != nil {
 						return nil, err

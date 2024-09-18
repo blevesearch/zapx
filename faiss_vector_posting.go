@@ -389,7 +389,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 
 					// Retrieve the mapping of centroid IDs to vectors within
 					// the cluster.
-					clusterAssignment, _ := vecIndex.GetClusterAssignment()
+					clusterAssignment, _ := vecIndex.ObtainClusterToVecIDsFromIVFIndex()
 					// Accounting for a flat index
 					if len(clusterAssignment) == 0 {
 						scores, ids, err := vecIndex.SearchWithIDs(qVector, k,
@@ -444,7 +444,8 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					// Ordering the retrieved centroid IDs by increasing order
 					// of distance i.e. decreasing order of proximity to query vector.
 					closestCentroidIDs, centroidDistances, _ :=
-						vecIndex.GetCentroidDistances(qVector, eligibleCentroidIDs)
+						vecIndex.ObtainClustersWithDistancesFromIVFIndex(qVector,
+							eligibleCentroidIDs)
 
 					// Getting the nprobe value set at index time.
 					nprobe := vecIndex.GetNProbe()
@@ -465,9 +466,9 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 
 					// Search the clusters specified by 'closestCentroidIDs' for
 					// vectors whose IDs are present in 'vectorIDsToInclude'
-					scores, ids, err := vecIndex.SearchSpecifiedClusters(vectorIDsToInclude,
-						closestCentroidIDs, minEligibleCentroids, k, qVector,
-						centroidDistances, params)
+					scores, ids, err := vecIndex.SearchClustersFromIVFIndex(
+						vectorIDsToInclude, closestCentroidIDs, minEligibleCentroids,
+						k, qVector, centroidDistances, params)
 					if err != nil {
 						return nil, err
 					}

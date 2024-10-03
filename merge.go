@@ -73,7 +73,7 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 	// wrap it for counting (tracking offsets)
 	cr := NewCountHashWriterWithStatsReporter(br, s)
 
-	newDocNums, numDocs, storedIndexOffset, _, _, _, sectionsIndexOffset, err :=
+	newDocNums, numDocs, storedIndexOffset, _, _, sectionsIndexOffset, err :=
 		MergeToWriter(segmentBases, drops, chunkMode, cr, closeCh)
 	if err != nil {
 		cleanup()
@@ -111,7 +111,7 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 
 func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	chunkMode uint32, cr *CountHashWriter, closeCh chan struct{}) (
-	newDocNums [][]uint64, numDocs, storedIndexOffset uint64, dictLocs []uint64,
+	newDocNums [][]uint64, numDocs, storedIndexOffset uint64,
 	fieldsInv []string, fieldsMap map[string]uint16, sectionsIndexOffset uint64,
 	err error) {
 
@@ -122,7 +122,7 @@ func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	numDocs = computeNewDocCount(segments, drops)
 
 	if isClosed(closeCh) {
-		return nil, 0, 0, nil, nil, nil, 0, seg.ErrClosed
+		return nil, 0, 0, nil, nil, 0, seg.ErrClosed
 	}
 
 	// the merge opaque is especially important when it comes to tracking the file
@@ -140,7 +140,7 @@ func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		storedIndexOffset, newDocNums, err = mergeStoredAndRemap(segments, drops,
 			fieldsMap, fieldsInv, fieldsSame, numDocs, cr, closeCh)
 		if err != nil {
-			return nil, 0, 0, nil, nil, nil, 0, err
+			return nil, 0, 0, nil, nil, 0, err
 		}
 
 		// at this point, ask each section implementation to merge itself
@@ -149,21 +149,19 @@ func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 
 			err = x.Merge(mergeOpaque, segments, drops, fieldsInv, newDocNums, cr, closeCh)
 			if err != nil {
-				return nil, 0, 0, nil, nil, nil, 0, err
+				return nil, 0, 0, nil, nil, 0, err
 			}
 		}
-	} else {
-		dictLocs = make([]uint64, len(fieldsInv))
 	}
 
 	// we can persist the fields section index now, this will point
 	// to the various indexes (each in different section) available for a field.
-	sectionsIndexOffset, err = persistFieldsSection(fieldsInv, cr, dictLocs, mergeOpaque)
+	sectionsIndexOffset, err = persistFieldsSection(fieldsInv, cr, mergeOpaque)
 	if err != nil {
-		return nil, 0, 0, nil, nil, nil, 0, err
+		return nil, 0, 0, nil, nil, 0, err
 	}
 
-	return newDocNums, numDocs, storedIndexOffset, dictLocs, fieldsInv, fieldsMap, sectionsIndexOffset, nil
+	return newDocNums, numDocs, storedIndexOffset, fieldsInv, fieldsMap, sectionsIndexOffset, nil
 }
 
 // mapFields takes the fieldsInv list and returns a map of fieldName

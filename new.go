@@ -66,14 +66,14 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 	s.chunkMode = chunkMode
 	s.w = NewCountHashWriter(&br)
 
-	storedIndexOffset, dictOffsets, sectionsIndexOffset, err := s.convert()
+	storedIndexOffset, sectionsIndexOffset, err := s.convert()
 	if err != nil {
 		return nil, uint64(0), err
 	}
 
 	sb, err := InitSegmentBase(br.Bytes(), s.w.Sum32(), chunkMode,
 		s.FieldsMap, s.FieldsInv, uint64(len(results)),
-		storedIndexOffset, dictOffsets, sectionsIndexOffset)
+		storedIndexOffset, sectionsIndexOffset)
 
 	// get the bytes written before the interim's reset() call
 	// write it to the newly formed segment base.
@@ -168,7 +168,7 @@ type interimLoc struct {
 	arrayposs []uint64
 }
 
-func (s *interim) convert() (uint64, []uint64, uint64, error) {
+func (s *interim) convert() (uint64, uint64, error) {
 	s.FieldsMap = map[string]uint16{}
 
 	args := map[string]interface{}{
@@ -209,17 +209,15 @@ func (s *interim) convert() (uint64, []uint64, uint64, error) {
 
 	storedIndexOffset, err := s.writeStoredFields()
 	if err != nil {
-		return 0, nil, 0, err
+		return 0, 0, err
 	}
-
-	var dictOffsets []uint64
 
 	// we can persist the various sections at this point.
 	// the rule of thumb here is that each section must persist field wise.
 	for _, x := range segmentSections {
 		_, err = x.Persist(s.opaque, s.w)
 		if err != nil {
-			return 0, nil, 0, err
+			return 0, 0, err
 		}
 	}
 
@@ -231,18 +229,14 @@ func (s *interim) convert() (uint64, []uint64, uint64, error) {
 		}
 	}
 
-	if len(s.results) == 0 {
-		dictOffsets = make([]uint64, len(s.FieldsInv))
-	}
-
 	// we can persist a new fields section here
 	// this new fields section will point to the various indexes available
-	sectionsIndexOffset, err := persistFieldsSection(s.FieldsInv, s.w, dictOffsets, s.opaque)
+	sectionsIndexOffset, err := persistFieldsSection(s.FieldsInv, s.w, s.opaque)
 	if err != nil {
-		return 0, nil, 0, err
+		return 0, 0, err
 	}
 
-	return storedIndexOffset, dictOffsets, sectionsIndexOffset, nil
+	return storedIndexOffset, sectionsIndexOffset, nil
 }
 
 func (s *interim) getOrDefineField(fieldName string) int {

@@ -867,15 +867,6 @@ func (s *SegmentBase) loadDvReaders() error {
 
 				s.incrementBytesRead(read)
 
-				dataLoc, n := binary.Uvarint(s.mem[pos : pos+binary.MaxVarintLen64])
-				if n <= 0 {
-					return fmt.Errorf("loadDvReaders: failed to read the dataLoc "+
-						"offset for sectionID %v field %v", secID, s.fieldsInv[fieldID])
-				}
-				if secID == SectionInvertedTextIndex {
-					s.dictLocs = append(s.dictLocs, dataLoc)
-					s.incrementBytesRead(uint64(n))
-				}
 				fieldDvReader, err := s.loadFieldDocValueReader(s.fieldsInv[fieldID], fieldLocStart, fieldLocEnd)
 				if err != nil {
 					return err

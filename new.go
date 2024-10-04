@@ -170,7 +170,9 @@ type interimLoc struct {
 }
 
 func (s *interim) convert() (uint64, uint64, error) {
-	s.FieldsMap = map[string]uint16{}
+	if s.FieldsMap == nil {
+		s.FieldsMap = map[string]uint16{}
+	}
 
 	args := map[string]interface{}{
 		"results":   s.results,

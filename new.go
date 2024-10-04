@@ -124,8 +124,10 @@ func (s *interim) reset() (err error) {
 	s.results = nil
 	s.chunkMode = 0
 	s.w = nil
-	s.FieldsMap = nil
-	s.FieldsInv = nil
+	for k := range s.FieldsMap {
+		delete(s.FieldsMap, k)
+	}
+	s.FieldsInv = s.FieldsInv[:0]
 	s.metaBuf.Reset()
 	s.tmp0 = s.tmp0[:0]
 	s.tmp1 = s.tmp1[:0]

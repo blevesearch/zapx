@@ -38,8 +38,19 @@ func init() {
 	reflectStaticSizeSegmentBase = int(unsafe.Sizeof(sb))
 }
 
+// OpenEx returns a zap impl of a segment which tracks some config values during
+// the its lifetime.
+func (z *ZapPlugin) OpenEx(path string, config map[string]interface{}) (segment.Segment, error) {
+	return z.open(path, config)
+}
+
 // Open returns a zap impl of a segment
-func (*ZapPlugin) Open(path string) (segment.Segment, error) {
+func (z *ZapPlugin) Open(path string) (segment.Segment, error) {
+	return z.open(path, nil)
+}
+
+// Open returns a zap impl of a segment
+func (*ZapPlugin) open(path string, config map[string]interface{}) (segment.Segment, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -57,6 +68,7 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 			fieldsMap:      make(map[string]uint16),
 			fieldDvReaders: make(map[uint16]*docValueReader),
 			fieldFSTs:      make(map[uint16]*vellum.FST),
+			config:         config,
 		},
 		f:    f,
 		mm:   mm,
@@ -64,6 +76,8 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 		refs: 1,
 	}
 	rv.SegmentBase.updateSize()
+
+	rv.parseSegmentConfig()
 
 	err = rv.loadConfig()
 	if err != nil {
@@ -104,8 +118,11 @@ type SegmentBase struct {
 	size              uint64
 
 	// atomic access to these variables
-	bytesRead    uint64
-	bytesWritten uint64
+	trackBytesRead bool
+	bytesRead      uint64
+	bytesWritten   uint64
+
+	config map[string]interface{} // config for the segment
 
 	m         sync.Mutex
 	fieldFSTs map[uint16]*vellum.FST
@@ -218,7 +235,9 @@ func (s *Segment) loadConfig() error {
 
 	// 8*4 + 4*3 = 44 bytes being accounted from all the offsets
 	// above being read from the file
-	s.incrementBytesRead(44)
+	if s.trackBytesRead {
+		s.incrementBytesRead(44)
+	}
 	return nil
 }
 
@@ -273,7 +292,9 @@ func (s *SegmentBase) loadFields() error {
 		addr := binary.BigEndian.Uint64(s.mem[s.fieldsIndexOffset+(8*fieldID) : s.fieldsIndexOffset+(8*fieldID)+8])
 
 		// accounting the address of the dictLoc being read from file
-		s.incrementBytesRead(8)
+		if s.trackBytesRead {
+			s.incrementBytesRead(8)
+		}
 
 		dictLoc, read := binary.Uvarint(s.mem[addr:fieldsIndexEnd])
 		n := uint64(read)
@@ -285,7 +306,9 @@ func (s *SegmentBase) loadFields() error {
 
 		name := string(s.mem[addr+n : addr+n+nameLen])
 
-		s.incrementBytesRead(n + nameLen)
+		if s.trackBytesRead {
+			s.incrementBytesRead(n + nameLen)
+		}
 		s.fieldsInv = append(s.fieldsInv, name)
 		s.fieldsMap[name] = uint16(fieldID + 1)
 
@@ -324,7 +347,9 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 					return nil, fmt.Errorf("empty dictionary for field: %v", field)
 				}
 				fstBytes := sb.mem[dictStart+uint64(read) : dictStart+uint64(read)+vellumLen]
-				rv.incrementBytesRead(uint64(read) + vellumLen)
+				if sb.trackBytesRead {
+					rv.incrementBytesRead(uint64(read) + vellumLen)
+				}
 				rv.fst, err = vellum.Load(fstBytes)
 				if err != nil {
 					sb.m.Unlock()
@@ -614,7 +639,9 @@ func (s *SegmentBase) loadDvReaders() error {
 		}
 		read += uint64(n)
 
-		s.incrementBytesRead(read)
+		if s.trackBytesRead {
+			s.incrementBytesRead(read)
+		}
 		fieldDvReader, err := s.loadFieldDocValueReader(field, fieldLocStart, fieldLocEnd)
 		if err != nil {
 			return err
@@ -626,4 +653,13 @@ func (s *SegmentBase) loadDvReaders() error {
 	}
 
 	return nil
+}
+
+func (s *SegmentBase) parseSegmentConfig() {
+	// check if disk stats are to be tracked
+	if trackBytesRead, ok := s.config["trackDiskStats"]; ok {
+		if parsed, ok := trackBytesRead.(bool); ok {
+			s.trackBytesRead = parsed
+		}
+	}
 }

@@ -127,7 +127,9 @@ func (s *SegmentBase) loadFieldDocValueReader(field string,
 
 		// 16 bytes since it corresponds to the length
 		// of chunk offsets and the position of the offsets
-		s.incrementBytesRead(16)
+		if s.trackBytesRead {
+			s.incrementBytesRead(16)
+		}
 	} else {
 		return nil, fmt.Errorf("loadFieldDocValueReader: fieldDvLoc too small: %d-%d", fieldDvLocEnd, fieldDvLocStart)
 	}
@@ -148,7 +150,9 @@ func (s *SegmentBase) loadFieldDocValueReader(field string,
 		fdvIter.chunkOffsets[i] = loc
 		offset += uint64(read)
 	}
-	s.incrementBytesRead(offset)
+	if s.trackBytesRead {
+		s.incrementBytesRead(offset)
+	}
 	// set the data offset
 	fdvIter.dvDataLoc = fieldDvLocStart
 
@@ -185,7 +189,9 @@ func (di *docValueReader) loadDvChunk(chunkNumber uint64, s *SegmentBase) error 
 		return fmt.Errorf("failed to read the chunk")
 	}
 	chunkMetaLoc := destChunkDataLoc + uint64(read)
-	di.incrementBytesRead(uint64(read))
+	if s.trackBytesRead {
+		di.incrementBytesRead(uint64(read))
+	}
 	offset := uint64(0)
 	if cap(di.curChunkHeader) < int(numDocs) {
 		di.curChunkHeader = make([]MetaData, int(numDocs))
@@ -201,7 +207,9 @@ func (di *docValueReader) loadDvChunk(chunkNumber uint64, s *SegmentBase) error 
 
 	compressedDataLoc := chunkMetaLoc + offset
 	dataLength := curChunkEnd - compressedDataLoc
-	di.incrementBytesRead(uint64(dataLength + offset))
+	if s.trackBytesRead {
+		di.incrementBytesRead(uint64(dataLength + offset))
+	}
 	di.curChunkData = s.mem[compressedDataLoc : compressedDataLoc+dataLength]
 	di.curChunkNum = chunkNumber
 	di.uncompressed = di.uncompressed[:0]

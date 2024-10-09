@@ -210,13 +210,17 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 	// initialize freq chunk reader
 	if rv.includeFreqNorm {
 		rv.freqNormReader = newChunkedIntDecoder(p.sb.mem, p.freqOffset, rv.freqNormReader)
-		rv.incrementBytesRead(rv.freqNormReader.getBytesRead())
+		if p.sb.trackBytesRead {
+			rv.incrementBytesRead(rv.freqNormReader.getBytesRead())
+		}
 	}
 
 	// initialize the loc chunk reader
 	if rv.includeLocs {
 		rv.locReader = newChunkedIntDecoder(p.sb.mem, p.locOffset, rv.locReader)
-		rv.incrementBytesRead(rv.locReader.getBytesRead())
+		if p.sb.trackBytesRead {
+			rv.incrementBytesRead(rv.locReader.getBytesRead())
+		}
 	}
 
 	rv.all = p.postings.Iterator()
@@ -292,7 +296,9 @@ func (rv *PostingsList) read(postingsOffset uint64, d *Dictionary) error {
 
 	roaringBytes := d.sb.mem[postingsOffset+n : postingsOffset+n+postingsLen]
 
-	rv.incrementBytesRead(n + postingsLen)
+	if d.sb.trackBytesRead {
+		rv.incrementBytesRead(n + postingsLen)
+	}
 
 	if rv.postings == nil {
 		rv.postings = roaring.NewBitmap()

@@ -74,7 +74,7 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 	cr := NewCountHashWriterWithStatsReporter(br, s)
 
 	newDocNums, numDocs, storedIndexOffset, _, _, sectionsIndexOffset, err :=
-		MergeToWriter(segmentBases, drops, chunkMode, cr, closeCh)
+		mergeToWriter(segmentBases, drops, chunkMode, cr, closeCh)
 	if err != nil {
 		cleanup()
 		return nil, 0, err
@@ -109,7 +109,7 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 	return newDocNums, uint64(cr.Count()), nil
 }
 
-func MergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
+func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	chunkMode uint32, cr *CountHashWriter, closeCh chan struct{}) (
 	newDocNums [][]uint64, numDocs, storedIndexOffset uint64,
 	fieldsInv []string, fieldsMap map[string]uint16, sectionsIndexOffset uint64,

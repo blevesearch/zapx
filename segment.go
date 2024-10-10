@@ -56,6 +56,7 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 			fieldsMap:      make(map[string]uint16),
 			fieldFSTs:      make(map[uint16]*vellum.FST),
 			vecIndexCache:  newVectorIndexCache(),
+			synIndexCache:  newSynonymIndexCache(),
 			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
 		},
 		f:    f,
@@ -113,6 +114,7 @@ type SegmentBase struct {
 
 	// this cache comes into play when vectors are supported in builds.
 	vecIndexCache *vectorIndexCache
+	synIndexCache *synonymIndexCache
 }
 
 func (sb *SegmentBase) Size() int {
@@ -128,7 +130,7 @@ func (sb *SegmentBase) updateSize() {
 		sizeInBytes += (len(k) + SizeOfString) + SizeOfUint16
 	}
 
-	// fieldsInv, dictLocs
+	// fieldsInv, dictLocs, thesaurusLocs
 	for _, entry := range sb.fieldsInv {
 		sizeInBytes += len(entry) + SizeOfString
 	}
@@ -149,7 +151,11 @@ func (sb *SegmentBase) updateSize() {
 
 func (sb *SegmentBase) AddRef()             {}
 func (sb *SegmentBase) DecRef() (err error) { return nil }
-func (sb *SegmentBase) Close() (err error)  { sb.vecIndexCache.Clear(); return nil }
+func (sb *SegmentBase) Close() (err error) {
+	sb.vecIndexCache.Clear()
+	sb.synIndexCache.Clear()
+	return nil
+}
 
 // Segment implements a persisted segment.Segment interface, by
 // embedding an mmap()'ed SegmentBase.
@@ -472,6 +478,48 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 	return rv, nil
 }
 
+// Thesaurus returns the term thesaurus for the specified field
+func (s *SegmentBase) Thesaurus(name string) (segment.Thesaurus, error) {
+	thesaurus, err := s.thesaurus(name)
+	if err == nil && thesaurus == nil {
+		return emptyThesaurus, nil
+	}
+	return thesaurus, err
+}
+
+func (sb *SegmentBase) thesaurus(name string) (rv *Thesaurus, err error) {
+	fieldIDPlus1 := sb.fieldsMap[name]
+	if fieldIDPlus1 == 0 {
+		return nil, nil
+	}
+	thesaurusStart := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionSynonymIndex]
+	if thesaurusStart > 0 {
+		rv = &Thesaurus{
+			sb:      sb,
+			name:    name,
+			fieldID: fieldIDPlus1 - 1,
+		}
+		// the below loop loads the following:
+		// 1. doc values(first 2 iterations) - adhering to the sections format. never
+		// valid values for synonym section.
+		for i := 0; i < 2; i++ {
+			_, n := binary.Uvarint(sb.mem[thesaurusStart : thesaurusStart+binary.MaxVarintLen64])
+			thesaurusStart += uint64(n)
+		}
+		fst, synTermMap, err := sb.synIndexCache.loadOrCreate(rv.fieldID, sb.mem[thesaurusStart:])
+		if err != nil {
+			return nil, fmt.Errorf("thesaurus name %s err: %v", name, err)
+		}
+		rv.fst = fst
+		rv.synIDTermMap = synTermMap
+		rv.fstReader, err = rv.fst.Reader()
+		if err != nil {
+			return nil, fmt.Errorf("thesaurus name %s vellum reader err: %v", name, err)
+		}
+	}
+	return rv, nil
+}
+
 // visitDocumentCtx holds data structures that are reusable across
 // multiple VisitDocument() calls to avoid memory allocations
 type visitDocumentCtx struct {
@@ -650,6 +698,7 @@ func (s *Segment) Close() (err error) {
 func (s *Segment) closeActual() (err error) {
 	// clear contents from the vector index cache before un-mmapping
 	s.vecIndexCache.Clear()
+	s.synIndexCache.Clear()
 
 	if s.mm != nil {
 		err = s.mm.Unmap()

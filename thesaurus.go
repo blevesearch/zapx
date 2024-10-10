@@ -27,7 +27,7 @@ import (
 type Thesaurus struct {
 	sb           *SegmentBase
 	name         string
-	thesaurusID  uint16
+	fieldID      uint16
 	synIDTermMap map[uint32][]byte
 	fst          *vellum.FST
 

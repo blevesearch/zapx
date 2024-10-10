@@ -170,14 +170,12 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		fieldDvReaders:      make([]map[uint16]*docValueReader, len(segmentSections)),
 		docValueOffset:      0, // docValueOffsets identified automatically by the section
 		fieldFSTs:           make(map[uint16]*vellum.FST),
-		thesaurusFSTs:       make(map[uint16]*vellum.FST),
 		vecIndexCache:       newVectorIndexCache(),
 		synIndexCache:       newSynonymIndexCache(),
 		// following fields gets populated by loadFieldsNew
-		fieldsMap:    make(map[string]uint16),
-		thesaurusMap: make(map[string]uint16),
-		dictLocs:     make([]uint64, 0),
-		fieldsInv:    make([]string, 0),
+		fieldsMap: make(map[string]uint16),
+		dictLocs:  make([]uint64, 0),
+		fieldsInv: make([]string, 0),
 	}
 	sb.updateSize()
 

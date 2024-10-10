@@ -87,7 +87,9 @@ var emptyVecPostingsIterator = &VecPostingsIterator{}
 var emptyVecPostingsList = &VecPostingsList{}
 
 func (vpl *VecPostingsList) Iterator(prealloc segment.VecPostingsIterator) segment.VecPostingsIterator {
-
+	if vpl.postings == nil {
+		return emptyVecPostingsIterator
+	}
 	// tbd: do we check the cardinality of postings and scores?
 	var preallocPI *VecPostingsIterator
 	pi, ok := prealloc.(*VecPostingsIterator)

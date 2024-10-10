@@ -54,8 +54,11 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 	rv := &Segment{
 		SegmentBase: SegmentBase{
 			fieldsMap:      make(map[string]uint16),
+			thesaurusMap:   make(map[string]uint16),
 			fieldFSTs:      make(map[uint16]*vellum.FST),
+			thesaurusFSTs:  make(map[uint16]*vellum.FST),
 			vecIndexCache:  newVectorIndexCache(),
+			synIndexCache:  newSynonymIndexCache(),
 			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
 		},
 		f:    f,
@@ -92,6 +95,7 @@ type SegmentBase struct {
 	memCRC              uint32
 	chunkMode           uint32
 	fieldsMap           map[string]uint16   // fieldName -> fieldID+1
+	thesaurusMap        map[string]uint16   // thesaurusName -> thesaurusID+1
 	fieldsInv           []string            // fieldID -> fieldName
 	fieldsSectionsMap   []map[uint16]uint64 // fieldID -> section -> address
 	numDocs             uint64
@@ -100,6 +104,7 @@ type SegmentBase struct {
 	sectionsIndexOffset uint64
 	docValueOffset      uint64
 	dictLocs            []uint64
+	thesaurusLocs       []uint64
 	fieldDvReaders      []map[uint16]*docValueReader // naive chunk cache per field; section->field->reader
 	fieldDvNames        []string                     // field names cached in fieldDvReaders
 	size                uint64
@@ -108,11 +113,13 @@ type SegmentBase struct {
 	bytesRead    uint64
 	bytesWritten uint64
 
-	m         sync.Mutex
-	fieldFSTs map[uint16]*vellum.FST
+	m             sync.Mutex
+	fieldFSTs     map[uint16]*vellum.FST
+	thesaurusFSTs map[uint16]*vellum.FST
 
 	// this cache comes into play when vectors are supported in builds.
 	vecIndexCache *vectorIndexCache
+	synIndexCache *synonymIndexCache
 }
 
 func (sb *SegmentBase) Size() int {
@@ -128,11 +135,17 @@ func (sb *SegmentBase) updateSize() {
 		sizeInBytes += (len(k) + SizeOfString) + SizeOfUint16
 	}
 
-	// fieldsInv, dictLocs
+	// thesaurusMap
+	for k := range sb.thesaurusMap {
+		sizeInBytes += (len(k) + SizeOfString) + SizeOfUint16
+	}
+
+	// fieldsInv, dictLocs, thesaurusLocs
 	for _, entry := range sb.fieldsInv {
 		sizeInBytes += len(entry) + SizeOfString
 	}
 	sizeInBytes += len(sb.dictLocs) * SizeOfUint64
+	sizeInBytes += len(sb.thesaurusLocs) * SizeOfUint64
 
 	// fieldDvReaders
 	for _, secDvReaders := range sb.fieldDvReaders {
@@ -149,7 +162,11 @@ func (sb *SegmentBase) updateSize() {
 
 func (sb *SegmentBase) AddRef()             {}
 func (sb *SegmentBase) DecRef() (err error) { return nil }
-func (sb *SegmentBase) Close() (err error)  { sb.vecIndexCache.Clear(); return nil }
+func (sb *SegmentBase) Close() (err error) {
+	sb.vecIndexCache.Clear()
+	sb.synIndexCache.Clear()
+	return nil
+}
 
 // Segment implements a persisted segment.Segment interface, by
 // embedding an mmap()'ed SegmentBase.
@@ -298,6 +315,7 @@ func (s *SegmentBase) loadFields() error {
 		dictLoc, read := binary.Uvarint(s.mem[addr:fieldsIndexEnd])
 		n := uint64(read)
 		s.dictLocs = append(s.dictLocs, dictLoc)
+		// do not load thesaurusLocs as they are not present in the older file formats
 
 		var nameLen uint64
 		nameLen, read = binary.Uvarint(s.mem[addr+n : fieldsIndexEnd])
@@ -308,6 +326,7 @@ func (s *SegmentBase) loadFields() error {
 		s.incrementBytesRead(n + nameLen)
 		s.fieldsInv = append(s.fieldsInv, name)
 		s.fieldsMap[name] = uint16(fieldID + 1)
+		// do not load thesaurusMap as they are not present in the older file formats
 
 		fieldID++
 	}
@@ -413,6 +432,26 @@ func (s *SegmentBase) loadFieldNew(fieldID uint16, pos uint64,
 			// account the bytes read while parsing the field's inverted index section
 			s.incrementBytesRead(uint64(read + n))
 			s.dictLocs = append(s.dictLocs, dictLoc)
+		} else if fieldSectionType == SectionSynonymIndex {
+			// this field is a thesaurus field and we need to read the thesaurus
+			// data from the file.
+			if fieldSectionAddr == 0 {
+				s.thesaurusLocs = append(s.thesaurusLocs, 0)
+				continue
+			}
+			read := 0
+			// skip the doc values
+			_, n := binary.Uvarint(s.mem[fieldSectionAddr : fieldSectionAddr+binary.MaxVarintLen64])
+			fieldSectionAddr += uint64(n)
+			read += n
+			_, n = binary.Uvarint(s.mem[fieldSectionAddr : fieldSectionAddr+binary.MaxVarintLen64])
+			fieldSectionAddr += uint64(n)
+			read += n
+			thesaurusLoc, n := binary.Uvarint(s.mem[fieldSectionAddr : fieldSectionAddr+binary.MaxVarintLen64])
+			// account the bytes read while parsing the field's synonym section
+			s.incrementBytesRead(uint64(read + n))
+			s.thesaurusLocs = append(s.thesaurusLocs, thesaurusLoc)
+			s.thesaurusMap[fieldName] = uint16(fieldID + 1)
 		}
 	}
 
@@ -469,6 +508,58 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 		}
 	}
 
+	return rv, nil
+}
+
+// Thesaurus returns the term thesaurus for the specified field
+func (s *SegmentBase) Thesaurus(name string) (segment.Thesaurus, error) {
+	thesaurus, err := s.thesaurus(name)
+	if err == nil && thesaurus == nil {
+		return emptyThesaurus, nil
+	}
+	return thesaurus, err
+}
+
+func (sb *SegmentBase) thesaurus(name string) (rv *Thesaurus, err error) {
+	thesaurusIDPlus1 := sb.thesaurusMap[name]
+	if thesaurusIDPlus1 > 0 {
+		rv = &Thesaurus{
+			sb:          sb,
+			name:        name,
+			thesaurusID: thesaurusIDPlus1 - 1,
+		}
+		thesaurusStart := sb.thesaurusLocs[rv.thesaurusID]
+		if thesaurusStart > 0 {
+			var ok bool
+			sb.m.Lock()
+			if rv.fst, ok = sb.thesaurusFSTs[rv.thesaurusID]; !ok {
+				// read the length of the vellum data
+				vellumLen, read := binary.Uvarint(sb.mem[thesaurusStart : thesaurusStart+binary.MaxVarintLen64])
+				if vellumLen == 0 {
+					sb.m.Unlock()
+					return nil, fmt.Errorf("empty thesaurus for name: %v", name)
+				}
+				fstBytes := sb.mem[thesaurusStart+uint64(read) : thesaurusStart+uint64(read)+vellumLen]
+				rv.fst, err = vellum.Load(fstBytes)
+				if err != nil {
+					sb.m.Unlock()
+					return nil, fmt.Errorf("thesaurus name %s vellum err: %v", name, err)
+				}
+				rv.synIDTermMap = sb.synIndexCache.loadOrCreate(rv.thesaurusID, sb.mem[thesaurusStart+uint64(read)+vellumLen:])
+				sb.thesaurusFSTs[rv.thesaurusID] = rv.fst
+			} else {
+				if rv.synIDTermMap, ok = sb.synIndexCache.load(rv.thesaurusID); !ok {
+					sb.m.Unlock()
+					return nil, fmt.Errorf("thesaurus name %s synIDTermMap not found", name)
+				}
+			}
+			sb.m.Unlock()
+			rv.fstReader, err = rv.fst.Reader()
+			if err != nil {
+				return nil, fmt.Errorf("thesaurus name %s vellum reader err: %v", name, err)
+			}
+		}
+	}
 	return rv, nil
 }
 
@@ -650,6 +741,7 @@ func (s *Segment) Close() (err error) {
 func (s *Segment) closeActual() (err error) {
 	// clear contents from the vector index cache before un-mmapping
 	s.vecIndexCache.Clear()
+	s.synIndexCache.Clear()
 
 	if s.mm != nil {
 		err = s.mm.Unmap()
@@ -717,6 +809,17 @@ func (s *Segment) DictAddr(field string) (uint64, error) {
 	}
 
 	return s.dictLocs[fieldIDPlus1-1], nil
+}
+
+// ThesaurusAddr is a helper function to compute the file offset where the
+// thesaurus is stored for the specified thesaurus name.
+func (s *Segment) ThesaurusAddr(name string) (uint64, error) {
+	thesaurusIDPlus1, ok := s.thesaurusMap[name]
+	if !ok {
+		return 0, fmt.Errorf("no such thesaurus '%s'", name)
+	}
+
+	return s.thesaurusLocs[thesaurusIDPlus1-1], nil
 }
 
 func (s *Segment) getSectionDvOffsets(fieldID int, secID uint16) (uint64, uint64, uint64, error) {

@@ -102,6 +102,8 @@ type interim struct {
 	//  name -> field id + 1
 	FieldsMap map[string]uint16
 
+	ThesaurusMap map[string]uint16
+
 	// FieldsInv is the inverse of FieldsMap
 	//  field id -> name
 	FieldsInv []string

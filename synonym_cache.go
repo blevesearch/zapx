@@ -16,7 +16,10 @@ package zap
 
 import (
 	"encoding/binary"
+	"fmt"
 	"sync"
+
+	"github.com/blevesearch/vellum"
 )
 
 func newSynonymIndexCache() *synonymIndexCache {
@@ -39,11 +42,9 @@ func (sc *synonymIndexCache) Clear() {
 	sc.m.Unlock()
 }
 
-func (sc *synonymIndexCache) loadOrCreate(thesaurusID uint16, mem []byte) map[uint32][]byte {
-
+func (sc *synonymIndexCache) loadOrCreate(fieldID uint16, mem []byte) (*vellum.FST, map[uint32][]byte, error) {
 	sc.m.RLock()
-
-	entry, ok := sc.cache[thesaurusID]
+	entry, ok := sc.cache[fieldID]
 	if ok {
 		sc.m.RUnlock()
 		return entry.load()
@@ -54,69 +55,62 @@ func (sc *synonymIndexCache) loadOrCreate(thesaurusID uint16, mem []byte) map[ui
 	sc.m.Lock()
 	defer sc.m.Unlock()
 
-	entry, ok = sc.cache[thesaurusID]
+	entry, ok = sc.cache[fieldID]
 	if ok {
 		return entry.load()
 	}
 
-	return sc.createAndCacheLOCKED(thesaurusID, mem)
+	return sc.createAndCacheLOCKED(fieldID, mem)
 }
 
-func (sc *synonymIndexCache) load(thesaurusID uint16) (map[uint32][]byte, bool) {
-	sc.m.RLock()
-	defer sc.m.RUnlock()
-
-	entry, ok := sc.cache[thesaurusID]
-	if !ok {
-		return nil, false
+func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte) (*vellum.FST, map[uint32][]byte, error) {
+	var pos uint64
+	// read the length of the vellum data
+	vellumLen, read := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+	if vellumLen == 0 || read <= 0 {
+		return nil, nil, fmt.Errorf("vellum length is 0")
 	}
-
-	return entry.load(), true
-}
-
-func (sc *synonymIndexCache) createAndCacheLOCKED(thesaurusID uint16, mem []byte) map[uint32][]byte {
+	fstBytes := mem[pos+uint64(read) : pos+uint64(read)+vellumLen]
+	fst, err := vellum.Load(fstBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("vellum err: %v", err)
+	}
 	synTermMap := make(map[uint32][]byte)
-	pos := 0
 	numSyns, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
-	pos += n
+	pos += uint64(n)
+	if numSyns == 0 {
+		return nil, nil, fmt.Errorf("no synonyms found")
+	}
 	for i := 0; i < int(numSyns); i++ {
 		synID, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
-		pos += n
-
+		pos += uint64(n)
 		termLen, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
-		pos += n
-
-		term := mem[pos : pos+int(termLen)]
-
+		pos += uint64(n)
+		if termLen == 0 {
+			return nil, nil, fmt.Errorf("term length is 0")
+		}
+		term := mem[pos : pos+uint64(termLen)]
 		synTermMap[uint32(synID)] = term
 	}
-	sc.insertLOCKED(thesaurusID, synTermMap)
-	return synTermMap
+	sc.insertLOCKED(fieldID, fst, synTermMap)
+	return fst, synTermMap, nil
 }
 
-func (sc *synonymIndexCache) insertLOCKED(thesaurusID uint16, synTermMap map[uint32][]byte) {
-	_, ok := sc.cache[thesaurusID]
+func (sc *synonymIndexCache) insertLOCKED(fieldID uint16, fst *vellum.FST, synTermMap map[uint32][]byte) {
+	_, ok := sc.cache[fieldID]
 	if !ok {
-		// initializing the alpha with 0.4 essentially means that we are favoring
-		// the history a little bit more relative to the current sample value.
-		// this makes the average to be kept above the threshold value for a
-		// longer time and thereby the index to be resident in the cache
-		// for longer time.
-		sc.cache[thesaurusID] = createSynonymCacheEntry(synTermMap)
+		sc.cache[fieldID] = &synonymCacheEntry{
+			fst:        fst,
+			synTermMap: synTermMap,
+		}
 	}
-}
-
-func createSynonymCacheEntry(synTermMap map[uint32][]byte) *synonymCacheEntry {
-	ce := &synonymCacheEntry{
-		synTermMap: synTermMap,
-	}
-	return ce
 }
 
 type synonymCacheEntry struct {
+	fst        *vellum.FST
 	synTermMap map[uint32][]byte
 }
 
-func (ce *synonymCacheEntry) load() map[uint32][]byte {
-	return ce.synTermMap
+func (ce *synonymCacheEntry) load() (*vellum.FST, map[uint32][]byte, error) {
+	return ce.fst, ce.synTermMap, nil
 }

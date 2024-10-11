@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"math"
 	"sort"
+	"strings"
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
@@ -536,9 +537,11 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 			}
 
 			if postingsOffset > uint64(0) {
-				err = io.builder.Insert([]byte(term), postingsOffset)
-				if err != nil {
-					return nil, err
+				if !strings.HasPrefix(term, "##") {
+					err = io.builder.Insert([]byte(term), postingsOffset)
+					if err != nil {
+						return nil, err
+					}
 				}
 			}
 

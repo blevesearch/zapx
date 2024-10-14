@@ -130,7 +130,7 @@ func (sb *SegmentBase) updateSize() {
 		sizeInBytes += (len(k) + SizeOfString) + SizeOfUint16
 	}
 
-	// fieldsInv, dictLocs, thesaurusLocs
+	// fieldsInv, dictLocs
 	for _, entry := range sb.fieldsInv {
 		sizeInBytes += len(entry) + SizeOfString
 	}
@@ -506,7 +506,10 @@ func (sb *SegmentBase) thesaurus(name string) (rv *Thesaurus, err error) {
 			_, n := binary.Uvarint(sb.mem[thesaurusStart : thesaurusStart+binary.MaxVarintLen64])
 			thesaurusStart += uint64(n)
 		}
-		fst, synTermMap, err := sb.synIndexCache.loadOrCreate(rv.fieldID, sb.mem[thesaurusStart:])
+		// 2. thesaurus location - valid value for synonym section.
+		thesLoc, n := binary.Uvarint(sb.mem[thesaurusStart : thesaurusStart+binary.MaxVarintLen64])
+		thesaurusStart += uint64(n)
+		fst, synTermMap, err := sb.synIndexCache.loadOrCreate(rv.fieldID, sb.mem[thesLoc:])
 		if err != nil {
 			return nil, fmt.Errorf("thesaurus name %s err: %v", name, err)
 		}

@@ -70,11 +70,13 @@ func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte) (*
 	if vellumLen == 0 || read <= 0 {
 		return nil, nil, fmt.Errorf("vellum length is 0")
 	}
-	fstBytes := mem[pos+uint64(read) : pos+uint64(read)+vellumLen]
+	pos += uint64(read)
+	fstBytes := mem[pos : pos+vellumLen]
 	fst, err := vellum.Load(fstBytes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("vellum err: %v", err)
 	}
+	pos += vellumLen
 	synTermMap := make(map[uint32][]byte)
 	numSyns, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
@@ -90,6 +92,7 @@ func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte) (*
 			return nil, nil, fmt.Errorf("term length is 0")
 		}
 		term := mem[pos : pos+uint64(termLen)]
+		pos += uint64(termLen)
 		synTermMap[uint32(synID)] = term
 	}
 	sc.insertLOCKED(fieldID, fst, synTermMap)

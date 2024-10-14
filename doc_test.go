@@ -176,3 +176,149 @@ func (s *stubField) NumPlainTextBytes() uint64 {
 func (s *stubField) Compose(field string, length int, freq index.TokenFrequencies) {
 
 }
+
+// -----------------------------------------------------------------------------
+type stubSynonymDefinition struct {
+	term     string
+	synonyms []string
+}
+
+func (s *stubSynonymDefinition) Term() string {
+	return s.term
+}
+
+func (s *stubSynonymDefinition) Synonyms() []string {
+	return s.synonyms
+}
+
+func newStubSynonymDefinition(term string, synonyms []string) index.SynonymDefinition {
+	return &stubSynonymDefinition{
+		term:     term,
+		synonyms: synonyms,
+	}
+}
+
+// -----------------------------------------------------------------------------
+type stubSynonymField struct {
+	name        string
+	synonymDefs []index.SynonymDefinition
+}
+
+func (s *stubSynonymField) Name() string {
+	return s.name
+}
+
+func (s *stubSynonymField) Value() []byte {
+	return nil
+}
+
+func (s *stubSynonymField) ArrayPositions() []uint64 {
+	return nil
+}
+
+func (s *stubSynonymField) EncodedFieldType() byte {
+	return 0
+}
+
+func (s *stubSynonymField) Analyze() {
+
+}
+
+func (s *stubSynonymField) Options() index.FieldIndexingOptions {
+	return 0
+}
+
+func (s *stubSynonymField) AnalyzedLength() int {
+	return 0
+}
+
+func (s *stubSynonymField) AnalyzedTokenFrequencies() index.TokenFrequencies {
+	return nil
+}
+
+func (s *stubSynonymField) NumPlainTextBytes() uint64 {
+	return 0
+}
+
+func (sf *stubSynonymField) VisitSynonymDefinitions(visitor func(index.SynonymDefinition)) {
+	for _, def := range sf.synonymDefs {
+		visitor(def)
+	}
+}
+
+func analyzeStubTerm(term string) string {
+	lowerCaseTerm := strings.ToLower(term)
+	return lowerCaseTerm
+}
+
+func newStubSynonymField(name, analyzer string, defs []index.SynonymDefinition) index.SynonymField {
+	analyzedSynonymDefs := make([]index.SynonymDefinition, 0, len(defs))
+	for _, def := range defs {
+		analyzedTerm := analyzeStubTerm(def.Term())
+		analyzedSynonyms := make([]string, 0, len(def.Synonyms()))
+		for _, syn := range def.Synonyms() {
+			analyzedSynonyms = append(analyzedSynonyms, analyzeStubTerm(syn))
+		}
+		analyzedSynonymDefs = append(analyzedSynonymDefs, newStubSynonymDefinition(analyzedTerm, analyzedSynonyms))
+	}
+	return &stubSynonymField{
+		name:        name,
+		synonymDefs: analyzedSynonymDefs,
+	}
+}
+
+// -----------------------------------------------------------------------------
+type stubSynonymDocument struct {
+	id     string
+	fields []index.Field
+}
+
+func (s *stubSynonymDocument) ID() string {
+	return s.id
+}
+
+func (s *stubSynonymDocument) Size() int {
+	return 0
+}
+
+func (s *stubSynonymDocument) VisitFields(visitor index.FieldVisitor) {
+	for _, f := range s.fields {
+		visitor(f)
+	}
+}
+
+func (s *stubSynonymDocument) HasComposite() bool {
+	return false
+}
+
+func (s *stubSynonymDocument) VisitComposite(visitor index.CompositeFieldVisitor) {
+}
+
+func (s *stubSynonymDocument) NumPlainTextBytes() uint64 {
+	return 0
+}
+func (s *stubSynonymDocument) StoredFieldsBytes() uint64 {
+	return 0
+}
+
+func (s *stubSynonymDocument) AddIDField() {
+	s.fields = append(s.fields, newStubFieldSplitString("_id", nil, s.id, true, false, false))
+}
+
+func (s *stubSynonymDocument) VisitSynonymField(visitor index.SynonymFieldVisitor) {
+	for _, f := range s.fields {
+		if sf, ok := f.(index.SynonymField); ok {
+			visitor(sf)
+		}
+	}
+}
+
+func newStubSynonymDocument(id string, synonymField index.SynonymField) index.SynonymDocument {
+	rv := &stubSynonymDocument{
+		id:     id,
+		fields: []index.Field{synonymField},
+	}
+	return rv
+}
+
+// -----------------------------------------------------------------------------

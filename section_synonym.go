@@ -31,6 +31,10 @@ import (
 
 func init() {
 	registerSegmentSection(SectionSynonymIndex, &synonymIndexSection{})
+	invertedIndexExclusionChecks = append(invertedIndexExclusionChecks, func(field index.Field) bool {
+		_, ok := field.(index.SynonymField)
+		return ok
+	})
 }
 
 // -----------------------------------------------------------------------------
@@ -110,6 +114,9 @@ func (so *synonymIndexOpaque) Reset() (err error) {
 	if so.builder != nil {
 		err = so.builder.Reset(&so.builderBuf)
 	}
+	so.FieldIDtoThesaurusID = nil
+	so.SynonymTermToID = nil
+	so.SynonymIDtoTerm = nil
 
 	so.tmp0 = so.tmp0[:0]
 	return err
@@ -127,9 +134,7 @@ func (so *synonymIndexOpaque) process(field index.SynonymField, fieldID uint16, 
 
 	termSynMap := so.SynonymTermToID[tid]
 
-	synDefs := field.SynonymDefinitions()
-
-	for _, def := range synDefs {
+	field.VisitSynonymDefinitions(func(def index.SynonymDefinition) {
 		pid := thesaurus[def.Term()] - 1
 
 		bs := so.Synonyms[pid]
@@ -138,13 +143,14 @@ func (so *synonymIndexOpaque) process(field index.SynonymField, fieldID uint16, 
 			code := encodeSynonym(termSynMap[syn], docNum)
 			bs.Add(code)
 		}
-	}
+	})
 }
 
 func (so *synonymIndexOpaque) realloc(fieldID uint16) {
 	var pidNext int
 	var sidNext uint32
 	so.ThesaurusMap = map[string]uint16{}
+	so.FieldIDtoThesaurusID = map[uint16]int{}
 
 	for _, result := range so.results {
 		if synDoc, ok := result.(index.SynonymDocument); ok {
@@ -154,44 +160,42 @@ func (so *synonymIndexOpaque) realloc(fieldID uint16) {
 		}
 	}
 
-	visitSynonymField := func(synField index.SynonymField) {
-		thesaurusID := uint16(so.getOrDefineThesaurus(fieldID, synField.Name()))
-
-		thesaurus := so.Thesauri[thesaurusID]
-		thesaurusKeys := so.ThesaurusKeys[thesaurusID]
-
-		synTermMap := so.SynonymIDtoTerm[thesaurusID]
-
-		termSynMap := so.SynonymTermToID[thesaurusID]
-
-		synDefs := synField.SynonymDefinitions()
-		for _, synDef := range synDefs {
-			term := synDef.Term()
-			_, exists := thesaurus[term]
-			if !exists {
-				pidNext++
-				pidPlus1 := uint64(pidNext)
-
-				thesaurus[term] = pidPlus1
-				thesaurusKeys = append(thesaurusKeys, term)
-			}
-			syns := synDef.Synonyms()
-			for _, syn := range syns {
-				_, exists := termSynMap[syn]
-				if !exists {
-					sidNext++
-					sidPlus1 := sidNext
-					termSynMap[syn] = sidPlus1
-					synTermMap[sidPlus1] = syn
-				}
-			}
-		}
-		so.ThesaurusKeys[thesaurusID] = thesaurusKeys
-	}
-
 	for _, result := range so.results {
 		if synDoc, ok := result.(index.SynonymDocument); ok {
-			synDoc.VisitSynonymField(visitSynonymField)
+			synDoc.VisitSynonymField(func(synField index.SynonymField) {
+
+				thesaurusID := uint16(so.getOrDefineThesaurus(fieldID, synField.Name()))
+
+				thesaurus := so.Thesauri[thesaurusID]
+				thesaurusKeys := so.ThesaurusKeys[thesaurusID]
+
+				synTermMap := so.SynonymIDtoTerm[thesaurusID]
+
+				termSynMap := so.SynonymTermToID[thesaurusID]
+
+				synField.VisitSynonymDefinitions(func(synDef index.SynonymDefinition) {
+					term := synDef.Term()
+					_, exists := thesaurus[term]
+					if !exists {
+						pidNext++
+						pidPlus1 := uint64(pidNext)
+
+						thesaurus[term] = pidPlus1
+						thesaurusKeys = append(thesaurusKeys, term)
+					}
+					syns := synDef.Synonyms()
+					for _, syn := range syns {
+						_, exists := termSynMap[syn]
+						if !exists {
+							sidNext++
+							sidPlus1 := sidNext
+							termSynMap[syn] = sidPlus1
+							synTermMap[sidPlus1] = syn
+						}
+					}
+				})
+				so.ThesaurusKeys[thesaurusID] = thesaurusKeys
+			})
 		}
 	}
 
@@ -291,7 +295,6 @@ func (so *synonymIndexOpaque) writeThesauri(w *CountHashWriter) (thesOffsets []u
 			return nil, err
 		}
 
-		// record where this dictionary starts
 		thesOffsets[thesaurusID] = uint64(w.Count())
 
 		vellumData := so.builderBuf.Bytes()
@@ -318,7 +321,7 @@ func (so *synonymIndexOpaque) writeThesauri(w *CountHashWriter) (thesOffsets []u
 		}
 
 		// write out the synTermMap for this thesaurus
-		_, err := writeSynTermMap(so.SynonymIDtoTerm[thesaurusID], w, buf)
+		err := writeSynTermMap(so.SynonymIDtoTerm[thesaurusID], w, buf)
 		if err != nil {
 			return nil, err
 		}
@@ -430,7 +433,7 @@ func writeSynonyms(postings *roaring64.Bitmap, w *CountHashWriter, bufMaxVarintL
 
 	postingsOffset := uint64(w.Count())
 
-	_, err = writeRoaringSynonymWithLen(postings, w, bufMaxVarintLen64)
+	err = writeRoaringSynonymWithLen(postings, w, bufMaxVarintLen64)
 	if err != nil {
 		return 0, err
 	}
@@ -438,69 +441,61 @@ func writeSynonyms(postings *roaring64.Bitmap, w *CountHashWriter, bufMaxVarintL
 	return postingsOffset, nil
 }
 
-func writeSynTermMap(synTermMap map[uint32]string, w *CountHashWriter, bufMaxVarintLen64 []byte) (
-	offset uint64, err error) {
-
+func writeSynTermMap(synTermMap map[uint32]string, w *CountHashWriter, bufMaxVarintLen64 []byte) error {
 	if len(synTermMap) == 0 {
-		return 0, nil
+		return nil
 	}
-
-	synTermMapOffset := uint64(w.Count())
 	n := binary.PutUvarint(bufMaxVarintLen64, uint64(len(synTermMap)))
-	_, err = w.Write(bufMaxVarintLen64[:n])
+	_, err := w.Write(bufMaxVarintLen64[:n])
 	if err != nil {
-		return 0, err
+		return err
 	}
 
 	for sid, term := range synTermMap {
 		n = binary.PutUvarint(bufMaxVarintLen64, uint64(sid))
 		_, err = w.Write(bufMaxVarintLen64[:n])
 		if err != nil {
-			return 0, err
+			return err
 		}
 
 		n = binary.PutUvarint(bufMaxVarintLen64, uint64(len(term)))
 		_, err = w.Write(bufMaxVarintLen64[:n])
 		if err != nil {
-			return 0, err
+			return err
 		}
 
 		_, err = w.Write([]byte(term))
 		if err != nil {
-			return 0, err
+			return err
 		}
 	}
 
-	return synTermMapOffset, nil
+	return nil
 }
 
 // writes out the length of the roaring bitmap in bytes as varint
 // then writes out the roaring bitmap itself
 func writeRoaringSynonymWithLen(r *roaring64.Bitmap, w io.Writer,
-	reuseBufVarint []byte) (int, error) {
+	reuseBufVarint []byte) error {
 	buf, err := r.ToBytes()
 	if err != nil {
-		return 0, err
+		return err
 	}
-
-	var tw int
 
 	// write out the length
 	n := binary.PutUvarint(reuseBufVarint, uint64(len(buf)))
-	nw, err := w.Write(reuseBufVarint[:n])
-	tw += nw
+	_, err = w.Write(reuseBufVarint[:n])
 	if err != nil {
-		return tw, err
+		return err
 	}
 
 	// write out the roaring bytes
-	nw, err = w.Write(buf)
-	tw += nw
+	_, err = w.Write(buf)
 	if err != nil {
-		return tw, err
+		return err
 	}
 
-	return tw, nil
+	return nil
 }
 
 func mergeAndPersistSynonymSection(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
@@ -684,7 +679,7 @@ func mergeAndPersistSynonymSection(segments []*SegmentBase, dropsIn []*roaring.B
 		}
 
 		// write out the synTermMap for this thesaurus
-		_, err = writeSynTermMap(synTermMap, w, bufMaxVarintLen64)
+		err = writeSynTermMap(synTermMap, w, bufMaxVarintLen64)
 		if err != nil {
 			return nil, nil, err
 		}

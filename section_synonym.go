@@ -45,6 +45,13 @@ type synonymIndexOpaque struct {
 	// indicates whether the following structs are initialized
 	init bool
 
+	// FieldsMap maps field name to field id and must be set in
+	// the index opaque using the key "fieldsMap"
+	// used for ensuring accurate mapping between fieldID and
+	// thesaurusID
+	//  name -> field id
+	FieldsMap map[string]uint16
+
 	// ThesaurusMap adds 1 to thesaurus id to avoid zero value issues
 	//  name -> thesaurus id + 1
 	ThesaurusMap map[string]uint16
@@ -89,6 +96,8 @@ func (so *synonymIndexOpaque) Set(key string, value interface{}) {
 	switch key {
 	case "results":
 		so.results = value.([]index.Document)
+	case "fieldsMap":
+		so.FieldsMap = value.(map[string]uint16)
 	}
 }
 
@@ -124,7 +133,7 @@ func (so *synonymIndexOpaque) Reset() (err error) {
 
 func (so *synonymIndexOpaque) process(field index.SynonymField, fieldID uint16, docNum uint32) {
 	if !so.init && so.results != nil {
-		so.realloc(fieldID)
+		so.realloc()
 		so.init = true
 	}
 
@@ -146,7 +155,7 @@ func (so *synonymIndexOpaque) process(field index.SynonymField, fieldID uint16, 
 	})
 }
 
-func (so *synonymIndexOpaque) realloc(fieldID uint16) {
+func (so *synonymIndexOpaque) realloc() {
 	var pidNext int
 	var sidNext uint32
 	so.ThesaurusMap = map[string]uint16{}
@@ -155,7 +164,8 @@ func (so *synonymIndexOpaque) realloc(fieldID uint16) {
 	for _, result := range so.results {
 		if synDoc, ok := result.(index.SynonymDocument); ok {
 			synDoc.VisitSynonymField(func(synField index.SynonymField) {
-				so.getOrDefineThesaurus(fieldID, synField.Name())
+				fieldIDPlus1 := so.FieldsMap[synField.Name()]
+				so.getOrDefineThesaurus(fieldIDPlus1-1, synField.Name())
 			})
 		}
 	}
@@ -163,8 +173,8 @@ func (so *synonymIndexOpaque) realloc(fieldID uint16) {
 	for _, result := range so.results {
 		if synDoc, ok := result.(index.SynonymDocument); ok {
 			synDoc.VisitSynonymField(func(synField index.SynonymField) {
-
-				thesaurusID := uint16(so.getOrDefineThesaurus(fieldID, synField.Name()))
+				fieldIDPlus1 := so.FieldsMap[synField.Name()]
+				thesaurusID := uint16(so.getOrDefineThesaurus(fieldIDPlus1-1, synField.Name()))
 
 				thesaurus := so.Thesauri[thesaurusID]
 				thesaurusKeys := so.ThesaurusKeys[thesaurusID]
@@ -378,12 +388,6 @@ func (s *synonymIndexSection) Process(opaque map[int]resetable, docNum uint32, f
 		return
 	}
 	if sf, ok := field.(index.SynonymField); ok {
-		// at this point we have a synonym document being processed
-		// and this document is expected to have a single field
-		// which is a synonym field.
-		// we consider the
-		//	fieldName as the thesaurusName and
-		//	fieldID as the thesaurusID.
 		so := s.getSynonymIndexOpaque(opaque)
 		so.process(sf, fieldID, docNum)
 	}

@@ -22,6 +22,7 @@ import (
 
 	"errors"
 
+	"github.com/RoaringBitmap/roaring"
 	index "github.com/blevesearch/bleve_index_api"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
@@ -63,8 +64,8 @@ func buildTestSegmentForThesaurus(results []index.Document) (*SegmentBase, error
 	return seg.(*SegmentBase), err
 }
 
-func extractSynonymsForTermFromThesaurus(thes segment.Thesaurus, term string) ([]string, error) {
-	list, err := thes.SynonymsList([]byte(term), nil, nil)
+func extractSynonymsForTermFromThesaurus(thes segment.Thesaurus, term string, except *roaring.Bitmap) ([]string, error) {
+	list, err := thes.SynonymsList([]byte(term), except, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +90,7 @@ func extractSynonymsForTermFromThesaurus(thes segment.Thesaurus, term string) ([
 	return synonyms, nil
 }
 
-func testSegmentSynonymAccuracy(collectionName string, testSynonymMap map[string][]string, seg segment.Segment) error {
+func checkWithDeletes(except *roaring.Bitmap, collectionName string, testSynonymMap map[string][]string, seg segment.Segment) error {
 	dict, err := seg.Dictionary(collectionName)
 	if err != nil {
 		return err
@@ -115,7 +116,7 @@ func testSegmentSynonymAccuracy(collectionName string, testSynonymMap map[string
 		return errors.New("expected a thesaurus")
 	}
 	for term, expectedSynonyms := range testSynonymMap {
-		synonyms, err := extractSynonymsForTermFromThesaurus(thes, term)
+		synonyms, err := extractSynonymsForTermFromThesaurus(thes, term, except)
 		if err != nil {
 			return err
 		}
@@ -127,6 +128,28 @@ func testSegmentSynonymAccuracy(collectionName string, testSynonymMap map[string
 		for i, synonym := range synonyms {
 			if synonym != expectedSynonyms[i] {
 				return errors.New("unexpected synonym")
+			}
+		}
+	}
+	return nil
+}
+
+func testSegmentSynonymAccuracy(collSynMap map[string][]testSynonymDefinition, seg segment.Segment) error {
+	for collectionName, testSynonymMap := range collSynMap {
+		expectedSynonymMap := createExpectedSynonymMap(testSynonymMap)
+		err := checkWithDeletes(nil, collectionName, expectedSynonymMap, seg)
+		if err != nil {
+			return err
+		}
+		for i := 0; i < len(testSynonymMap); i++ {
+			except := roaring.New()
+			except.Add(uint32(i))
+			modifiedSynonymMap := append([]testSynonymDefinition{}, testSynonymMap[:i]...)
+			modifiedSynonymMap = append(modifiedSynonymMap, testSynonymMap[i+1:]...)
+			expectedSynonymMap = createExpectedSynonymMap(modifiedSynonymMap)
+			err = checkWithDeletes(except, collectionName, expectedSynonymMap, seg)
+			if err != nil {
+				return err
 			}
 		}
 	}
@@ -152,78 +175,119 @@ func createExpectedSynonymMap(input []testSynonymDefinition) map[string][]string
 	return rv
 }
 
-func TestThesaurusSingleSegment(t *testing.T) {
-	err := os.RemoveAll("/tmp/scorch.zap")
+func buildSegment(testSynonymDefinitions map[string][]testSynonymDefinition) (segment.Segment, error) {
+	tmpDir, err := os.MkdirTemp("", "zap-")
 	if err != nil {
-		t.Fatalf("error removing directory: %v", err)
+		return nil, err
 	}
-	collectionName := "coll1"
-	testSynonymDefinitions := []testSynonymDefinition{
-		{
-			terms: nil,
-			synonyms: []string{
-				"adeptness",
-				"aptitude",
-				"facility",
-				"faculty",
-				"capacity",
-				"power",
-				"knack",
-				"proficiency",
-				"ability",
-			},
-		},
-		{
-			terms: []string{"afflict"},
-			synonyms: []string{
-				"affect",
-				"bother",
-				"distress",
-				"oppress",
-				"trouble",
-				"torment",
-			},
-		},
-		{
-			terms: []string{"capacity"},
-			synonyms: []string{
-				"volume",
-				"content",
-				"size",
-				"dimensions",
-				"measure",
-			},
-		},
+
+	err = os.RemoveAll(tmpDir)
+	if err != nil {
+		return nil, err
 	}
 	var testSynonymDocuments []index.Document
-	for i, testSynonymDefinition := range testSynonymDefinitions {
-		testSynonymDocuments = append(testSynonymDocuments, buildTestSynonymDocument(
-			strconv.Itoa(i),
-			collectionName,
-			testSynonymDefinition.terms,
-			testSynonymDefinition.synonyms,
-		))
+	for collName, synDefs := range testSynonymDefinitions {
+		for i, testSynonymDefinition := range synDefs {
+			testSynonymDocuments = append(testSynonymDocuments, buildTestSynonymDocument(
+				strconv.Itoa(i),
+				collName,
+				testSynonymDefinition.terms,
+				testSynonymDefinition.synonyms,
+			))
+		}
 	}
 	sb, err := buildTestSegmentForThesaurus(testSynonymDocuments)
 	if err != nil {
-		t.Fatalf("error building test seg: %v", err)
+		return nil, err
 	}
-	err = PersistSegmentBase(sb, "/tmp/scorch.zap")
+	err = PersistSegmentBase(sb, tmpDir)
 	if err != nil {
-		t.Fatalf("error persisting seg: %v", err)
+		return nil, err
 	}
-	seg, err := zapPlugin.Open("/tmp/scorch.zap")
+	seg, err := zapPlugin.Open(tmpDir)
 	if err != nil {
-		t.Fatalf("error opening seg: %v", err)
+		return nil, err
+	}
+	err = testSegmentSynonymAccuracy(testSynonymDefinitions, seg)
+	if err != nil {
+		return nil, err
+	}
+	return seg, nil
+}
+
+func TestSingleSegmentThesaurus(t *testing.T) {
+	firstCollectionName := "coll0"
+	secondCollectionName := "coll1"
+	testSynonymDefinitions := map[string][]testSynonymDefinition{
+		firstCollectionName: {
+			{
+				terms: nil,
+				synonyms: []string{
+					"adeptness",
+					"aptitude",
+					"facility",
+					"faculty",
+					"capacity",
+					"power",
+					"knack",
+					"proficiency",
+					"ability",
+				},
+			},
+			{
+				terms: []string{"afflict"},
+				synonyms: []string{
+					"affect",
+					"bother",
+					"distress",
+					"oppress",
+					"trouble",
+					"torment",
+				},
+			},
+			{
+				terms: []string{"capacity"},
+				synonyms: []string{
+					"volume",
+					"content",
+					"size",
+					"dimensions",
+					"measure",
+				},
+			},
+		},
+		secondCollectionName: {
+			{
+				synonyms: []string{
+					"absolutely",
+					"unqualifiedly",
+					"unconditionally",
+					"unreservedly",
+					"unexceptionally",
+					"unequivocally",
+				},
+			},
+			{
+				terms: []string{"abrupt"},
+				synonyms: []string{
+					"sudden",
+					"hasty",
+					"quick",
+					"precipitate",
+					"snappy",
+				},
+			},
+		},
+	}
+
+	seg1, err := buildSegment(testSynonymDefinitions)
+	if err != nil {
+		t.Fatalf("error building segment: %v", err)
 	}
 	defer func() {
-		cerr := seg.Close()
+		cerr := seg1.Close()
 		if cerr != nil {
 			t.Fatalf("error closing seg: %v", err)
 		}
 	}()
-	err = testSegmentSynonymAccuracy(collectionName, createExpectedSynonymMap(testSynonymDefinitions), seg)
-	if err != nil {
-		t.Fatalf("error testing segment: %v", err)
-	}
 }

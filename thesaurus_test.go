@@ -215,7 +215,37 @@ func buildSegment(testSynonymDefinitions map[string][]testSynonymDefinition) (se
 	return seg, nil
 }
 
-func TestSingleSegmentThesaurus(t *testing.T) {
+func mergeSegments(segs []segment.Segment, drops []*roaring.Bitmap, testSynonymDefinitions map[string][]testSynonymDefinition) error {
+	tmpDir, err := os.MkdirTemp("", "zap-")
+	if err != nil {
+		return err
+	}
+	err = os.RemoveAll(tmpDir)
+	if err != nil {
+		return err
+	}
+	// Test Merging of multiple segments
+	_, _, err = zapPlugin.Merge(segs, drops, tmpDir, nil, nil)
+	if err != nil {
+		return err
+	}
+
+	seg, err := zapPlugin.Open(tmpDir)
+	if err != nil {
+		return err
+	}
+	err = testSegmentSynonymAccuracy(testSynonymDefinitions, seg)
+	if err != nil {
+		return err
+	}
+	cerr := seg.Close()
+	if cerr != nil {
+		return err
+	}
+	return nil
+}
+
+func TestThesaurus(t *testing.T) {
 	firstCollectionName := "coll0"
 	secondCollectionName := "coll1"
 	testSynonymDefinitions := map[string][]testSynonymDefinition{
@@ -279,7 +309,7 @@ func TestSingleSegmentThesaurus(t *testing.T) {
 			},
 		},
 	}
-
+	// single segment test
 	seg1, err := buildSegment(testSynonymDefinitions)
 	if err != nil {
 		t.Fatalf("error building segment: %v", err)
@@ -290,4 +320,42 @@ func TestSingleSegmentThesaurus(t *testing.T) {
 			t.Fatalf("error closing seg: %v", err)
 		}
 	}()
+
+	// multiple segment test
+	numSegs := 3
+	numDocs := 5
+	segData := make([]map[string][]testSynonymDefinition, numSegs)
+
+	segData[0] = make(map[string][]testSynonymDefinition)
+	segData[0][firstCollectionName] = testSynonymDefinitions[firstCollectionName][:2] // 2 docs
+
+	segData[1] = make(map[string][]testSynonymDefinition)
+	segData[1][firstCollectionName] = testSynonymDefinitions[firstCollectionName][2:]
+	segData[1][secondCollectionName] = testSynonymDefinitions[secondCollectionName][:1] // 2 docs
+
+	segData[2] = make(map[string][]testSynonymDefinition)
+	segData[2][secondCollectionName] = testSynonymDefinitions[secondCollectionName][1:] // 1 doc
+
+	segs := make([]segment.Segment, numSegs)
+	for i, data := range segData {
+		seg, err := buildSegment(data)
+		if err != nil {
+			t.Fatalf("error building segment: %v", err)
+		}
+		segs[i] = seg
+	}
+	drops := make([]*roaring.Bitmap, numDocs)
+	for i := 0; i < numDocs; i++ {
+		drops[i] = roaring.New()
+	}
+	err = mergeSegments(segs, drops, testSynonymDefinitions)
+	if err != nil {
+		t.Fatalf("error merging segments: %v", err)
+	}
+	for _, seg := range segs {
+		cerr := seg.Close()
+		if cerr != nil {
+			t.Fatalf("error closing seg: %v", err)
+		}
+	}
 }

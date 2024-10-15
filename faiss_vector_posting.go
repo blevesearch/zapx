@@ -417,12 +417,14 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					// Getting the vector IDs corresponding to the eligible
 					// doc IDs.
 					eligibleVecIDsBitmap := roaring.NewBitmap()
+					vecIDsUint32 := make([]uint32, 0)
 					for _, eligibleDocID := range eligibleDocIDs {
 						vecIDs := docVecIDMap[uint32(eligibleDocID)]
 						for _, vecID := range vecIDs {
-							eligibleVecIDsBitmap.Add(uint32(vecID))
+							vecIDsUint32 = append(vecIDsUint32, uint32(vecID))
 						}
 					}
+					eligibleVecIDsBitmap.AddMany(vecIDsUint32)
 
 					// Determining which clusters, identified by centroid ID,
 					// have at least one eligible vector and hence, ought to be
@@ -463,6 +465,9 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 						}
 						minEligibleCentroids = i + 1
 					}
+
+					// If the fraction of eligible vec IDs is greater than 50%,
+					// use an exclude selector instead for the ineligible IDs.
 
 					// Search the clusters specified by 'closestCentroidIDs' for
 					// vectors whose IDs are present in 'vectorIDsToInclude'

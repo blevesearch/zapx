@@ -466,9 +466,6 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 						minEligibleCentroids = i + 1
 					}
 
-					// If the fraction of eligible vec IDs is greater than 50%,
-					// use an exclude selector instead for the ineligible IDs.
-
 					// Search the clusters specified by 'closestCentroidIDs' for
 					// vectors whose IDs are present in 'vectorIDsToInclude'
 					scores, ids, err := vecIndex.SearchClustersFromIVFIndex(

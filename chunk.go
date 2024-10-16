@@ -36,6 +36,9 @@ var ErrChunkSizeZero = errors.New("chunk size is zero")
 // between a valid chunk size of 0 and an error by checking for ErrChunkSizeZero.
 func getChunkSize(chunkMode uint32, cardinality uint64, maxDocs uint64) (uint64, error) {
 	switch {
+	case chunkMode == 0:
+		return 0, ErrChunkSizeZero
+
 	// any chunkMode <= 1024 will always chunk with chunkSize=chunkMode
 	case chunkMode <= 1024:
 		// legacy chunk size

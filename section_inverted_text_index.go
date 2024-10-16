@@ -412,7 +412,6 @@ func (i *invertedIndexOpaque) BytesRead() uint64 {
 func (i *invertedIndexOpaque) ResetBytesRead(uint64) {}
 
 func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uint64, err error) {
-
 	if io.results == nil || len(io.results) == 0 {
 		return nil, nil
 	}
@@ -462,7 +461,11 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 			locs := io.Locs[pid]
 			locOffset := 0
 
-			chunkSize, err := getChunkSize(io.chunkMode, postingsBS.GetCardinality(), uint64(len(io.results)))
+			var cardinality uint64
+			if postingsBS != nil {
+				cardinality = postingsBS.GetCardinality()
+			}
+			chunkSize, err := getChunkSize(io.chunkMode, cardinality, uint64(len(io.results)))
 			if err != nil {
 				return nil, err
 			}

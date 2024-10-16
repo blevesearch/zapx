@@ -426,13 +426,36 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					}
 					eligibleVecIDsBitmap.AddMany(vecIDsUint32)
 
+					var selector faiss.Selector
+					var err error
+					ineligibleVectorIDs := make([]int64, 0, len(vecDocIDMap)-
+						len(vectorIDsToInclude))
+					if float32(eligibleVecIDsBitmap.GetCardinality())/
+						float32(len(vecDocIDMap)) > 0.5 {
+						for docID, vecIDs := range docVecIDMap {
+							for _, vecID := range vecIDs {
+								if !eligibleVecIDsBitmap.Contains(uint32(vecID)) &&
+									!except.Contains(docID) {
+									ineligibleVectorIDs = append(ineligibleVectorIDs,
+										int64(vecID))
+								}
+							}
+						}
+						selector, err = faiss.NewIDSelectorNot(ineligibleVectorIDs)
+					} else {
+						selector, err = faiss.NewIDSelectorBatch(vectorIDsToInclude)
+					}
+					if err != nil {
+						return nil, err
+					}
+
 					// Determining which clusters, identified by centroid ID,
 					// have at least one eligible vector and hence, ought to be
 					// probed.
 					eligibleCentroidIDs := make([]int64, 0)
 					for centroidID, vecIDs := range centroidVecIDMap {
 						vecIDs.And(eligibleVecIDsBitmap)
-						if vecIDs.GetCardinality() > 0 {
+						if !vecIDs.IsEmpty() {
 							// The mapping is now reduced to those vectors which
 							// are also eligible docs for the filter query.
 							centroidVecIDMap[centroidID] = vecIDs
@@ -469,8 +492,8 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					// Search the clusters specified by 'closestCentroidIDs' for
 					// vectors whose IDs are present in 'vectorIDsToInclude'
 					scores, ids, err := vecIndex.SearchClustersFromIVFIndex(
-						vectorIDsToInclude, closestCentroidIDs, minEligibleCentroids,
-						k, qVector, centroidDistances, params)
+						selector, len(vectorIDsToInclude), closestCentroidIDs,
+						minEligibleCentroids, k, qVector, centroidDistances, params)
 					if err != nil {
 						return nil, err
 					}

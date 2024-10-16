@@ -134,12 +134,15 @@ func (p *VecPostingsList) Size() int {
 }
 
 func (p *VecPostingsList) Count() uint64 {
-	n := p.postings.GetCardinality()
-	var e uint64
-	if p.except != nil {
-		e = p.postings.AndCardinality(p.except)
+	if p.postings != nil {
+		n := p.postings.GetCardinality()
+		var e uint64
+		if p.except != nil {
+			e = p.postings.AndCardinality(p.except)
+		}
+		return n - e
 	}
-	return n - e
+	return 0
 }
 
 func (vpl *VecPostingsList) ResetBytesRead(val uint64) {

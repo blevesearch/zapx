@@ -667,7 +667,11 @@ func (s *interim) writeDicts() (fdvIndexOffset uint64, dictOffsets []uint64, err
 			locs := s.Locs[pid]
 			locOffset := 0
 
-			chunkSize, err := getChunkSize(s.chunkMode, postingsBS.GetCardinality(), uint64(len(s.results)))
+			var cardinality uint64
+			if postingsBS != nil {
+				cardinality = postingsBS.GetCardinality()
+			}
+			chunkSize, err := getChunkSize(s.chunkMode, cardinality, uint64(len(s.results)))
 			if err != nil {
 				return 0, nil, err
 			}

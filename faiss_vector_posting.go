@@ -428,10 +428,13 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 
 					var selector faiss.Selector
 					var err error
-					ineligibleVectorIDs := make([]int64, 0, len(vecDocIDMap)-
-						len(vectorIDsToInclude))
+					// If there are more elements to be included than excluded, it
+					// might be quicker to use an exclusion selector as a filter
+					// instead of an inclusion selector.
 					if float32(eligibleVecIDsBitmap.GetCardinality())/
 						float32(len(vecDocIDMap)) > 0.5 {
+						ineligibleVectorIDs := make([]int64, 0, len(vecDocIDMap)-
+							len(vectorIDsToInclude))
 						for docID, vecIDs := range docVecIDMap {
 							for _, vecID := range vecIDs {
 								if !eligibleVecIDsBitmap.Contains(uint32(vecID)) &&

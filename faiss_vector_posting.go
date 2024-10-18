@@ -383,6 +383,19 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				if len(eligibleDocIDs) > 0 {
 					// Non-zero documents eligible per the filter query.
 
+					// If every element in the index is eligible(eg. high selectivity
+					// cases), then this can basically be considered unfiltered kNN.
+					if len(eligibleDocIDs) == int(sb.numDocs) {
+						scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k,
+							vectorIDsToExclude, params)
+						if err != nil {
+							return nil, err
+						}
+
+						addIDsToPostingsList(rv, ids, scores)
+						return rv, nil
+					}
+
 					// vector IDs corresponding to the local doc numbers to be
 					// considered for the search
 					vectorIDsToInclude := make([]int64, 0, len(eligibleDocIDs))
@@ -419,12 +432,51 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 
 					// Getting the vector IDs corresponding to the eligible
 					// doc IDs.
+					// The docVecIDMap maps each docID to vectorIDs corresponding
+					// to it.
+					// Usually, each docID has one vecID mapped to it unless
+					// the vector is nested, in which case there can be multiple
+					// vectorIDs mapped to the same docID.
+					// Eg. docID d1 -> vecID v1, for the first case
+					// d1 -> {v1,v2}, for the second case.
 					eligibleVecIDsBitmap := roaring.NewBitmap()
+					vecIDsUint32 := make([]uint32, 0)
 					for _, eligibleDocID := range eligibleDocIDs {
 						vecIDs := docVecIDMap[uint32(eligibleDocID)]
 						for _, vecID := range vecIDs {
-							eligibleVecIDsBitmap.Add(uint32(vecID))
+							vecIDsUint32 = append(vecIDsUint32, uint32(vecID))
 						}
+					}
+					eligibleVecIDsBitmap.AddMany(vecIDsUint32)
+
+					var selector faiss.Selector
+					var err error
+					// If there are more elements to be included than excluded, it
+					// might be quicker to use an exclusion selector as a filter
+					// instead of an inclusion selector.
+					if float32(eligibleVecIDsBitmap.GetCardinality())/
+						float32(len(vecDocIDMap)) > 0.5 {
+						ineligibleVectorIDs := make([]int64, 0, len(vecDocIDMap)-
+							len(vectorIDsToInclude))
+						for docID, vecIDs := range docVecIDMap {
+							for _, vecID := range vecIDs {
+								if !eligibleVecIDsBitmap.Contains(uint32(vecID)) {
+									if except != nil && !except.Contains(docID) {
+										ineligibleVectorIDs = append(ineligibleVectorIDs,
+											int64(vecID))
+									} else {
+										ineligibleVectorIDs = append(ineligibleVectorIDs,
+											int64(vecID))
+									}
+								}
+							}
+						}
+						selector, err = faiss.NewIDSelectorNot(ineligibleVectorIDs)
+					} else {
+						selector, err = faiss.NewIDSelectorBatch(vectorIDsToInclude)
+					}
+					if err != nil {
+						return nil, err
 					}
 
 					// Determining which clusters, identified by centroid ID,
@@ -433,7 +485,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					eligibleCentroidIDs := make([]int64, 0)
 					for centroidID, vecIDs := range centroidVecIDMap {
 						vecIDs.And(eligibleVecIDsBitmap)
-						if vecIDs.GetCardinality() > 0 {
+						if !vecIDs.IsEmpty() {
 							// The mapping is now reduced to those vectors which
 							// are also eligible docs for the filter query.
 							centroidVecIDMap[centroidID] = vecIDs
@@ -470,8 +522,8 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					// Search the clusters specified by 'closestCentroidIDs' for
 					// vectors whose IDs are present in 'vectorIDsToInclude'
 					scores, ids, err := vecIndex.SearchClustersFromIVFIndex(
-						vectorIDsToInclude, closestCentroidIDs, minEligibleCentroids,
-						k, qVector, centroidDistances, params)
+						selector, len(vectorIDsToInclude), closestCentroidIDs,
+						minEligibleCentroids, k, qVector, centroidDistances, params)
 					if err != nil {
 						return nil, err
 					}

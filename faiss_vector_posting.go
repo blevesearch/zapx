@@ -380,6 +380,19 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				if len(eligibleDocIDs) > 0 {
 					// Non-zero documents eligible per the filter query.
 
+					// If every element in the index is eligible(eg. high selectivity
+					// cases), then this can basically be considered unfiltered kNN.
+					if len(eligibleDocIDs) == int(sb.numDocs) {
+						scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k,
+							vectorIDsToExclude, params)
+						if err != nil {
+							return nil, err
+						}
+
+						addIDsToPostingsList(rv, ids, scores)
+						return rv, nil
+					}
+
 					// vector IDs corresponding to the local doc numbers to be
 					// considered for the search
 					vectorIDsToInclude := make([]int64, 0, len(eligibleDocIDs))
@@ -444,10 +457,14 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 							len(vectorIDsToInclude))
 						for docID, vecIDs := range docVecIDMap {
 							for _, vecID := range vecIDs {
-								if !eligibleVecIDsBitmap.Contains(uint32(vecID)) &&
-									!except.Contains(docID) {
-									ineligibleVectorIDs = append(ineligibleVectorIDs,
-										int64(vecID))
+								if !eligibleVecIDsBitmap.Contains(uint32(vecID)) {
+									if except != nil && !except.Contains(docID) {
+										ineligibleVectorIDs = append(ineligibleVectorIDs,
+											int64(vecID))
+									} else {
+										ineligibleVectorIDs = append(ineligibleVectorIDs,
+											int64(vecID))
+									}
 								}
 							}
 						}

@@ -416,6 +416,13 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 
 					// Getting the vector IDs corresponding to the eligible
 					// doc IDs.
+					// The docVecIDMap maps each docID to vectorIDs corresponding
+					// to it.
+					// Usually, each docID has one vecID mapped to it unless
+					// the vector is nested, in which case there can be multiple
+					// vectorIDs mapped to the same docID.
+					// Eg. docID d1 -> vecID v1, for the first case
+					// d1 -> {v1,v2}, for the second case.
 					eligibleVecIDsBitmap := roaring.NewBitmap()
 					vecIDsUint32 := make([]uint32, 0)
 					for _, eligibleDocID := range eligibleDocIDs {

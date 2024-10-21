@@ -425,9 +425,11 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 						if _, exists := centroidVecIDMap[centroidID]; !exists {
 							centroidVecIDMap[centroidID] = roaring.NewBitmap()
 						}
+						vecIDsUint32 := make([]uint32, 0, len(vecIDs))
 						for _, vecID := range vecIDs {
-							centroidVecIDMap[centroidID].Add(uint32(vecID))
+							vecIDsUint32 = append(vecIDsUint32, uint32(vecID))
 						}
+						centroidVecIDMap[centroidID].AddMany(vecIDsUint32)
 					}
 
 					// Getting the vector IDs corresponding to the eligible

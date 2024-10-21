@@ -34,16 +34,27 @@ func init() {
 type invertedTextIndexSection struct {
 }
 
-// this function is something that tells the inverted index section whether to
-// process a particular field or not - since it might be processed by another
-// section this function helps in avoiding unnecessary work.
-// (only used by faiss vector section currently, will need a separate API for every
-// section we introduce in the future or a better way forward - TODO)
-var isFieldNotApplicableToInvertedTextSection func(field index.Field) bool
+// This function checks whether the inverted index section should process
+// a particular field, avoiding unnecessary work if another section will handle it.
+var isFieldExcludedFromInvertedIndex = func(field index.Field) bool {
+	for _, excludeField := range invertedIndexExclusionChecks {
+		if excludeField(field) {
+			// atleast one section has agreed to exclude this field
+			// from inverted index processing and has agreed to process it
+			// independently
+			return true
+		}
+	}
+	// no section has excluded this field from inverted index processing
+	// so it should be processed by the inverted index section
+	return false
+}
+
+// List of checks to determine if a field is excluded from the inverted index section
+var invertedIndexExclusionChecks = make([]func(field index.Field) bool, 0)
 
 func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint32, field index.Field, fieldID uint16) {
-	if isFieldNotApplicableToInvertedTextSection == nil ||
-		!isFieldNotApplicableToInvertedTextSection(field) {
+	if !isFieldExcludedFromInvertedIndex(field) {
 		invIndexOpaque := i.getInvertedIndexOpaque(opaque)
 		invIndexOpaque.process(field, fieldID, docNum)
 	}
@@ -439,6 +450,13 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 	}
 
 	for fieldID, terms := range io.DictKeys {
+		dict := io.Dicts[fieldID]
+		// dict is nil if the field is excluded from inverted index
+		// processing, so skip it
+		if len(dict) == 0 {
+			continue
+		}
+
 		if cap(docTermMap) < len(io.results) {
 			docTermMap = make([][]byte, len(io.results))
 		} else {
@@ -447,8 +465,6 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 				docTermMap[docNum] = docTermMap[docNum][:0]
 			}
 		}
-
-		dict := io.Dicts[fieldID]
 
 		for _, term := range terms { // terms are already sorted
 			pid := dict[term] - 1

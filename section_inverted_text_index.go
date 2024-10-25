@@ -398,11 +398,11 @@ func (i *invertedIndexOpaque) grabBuf(size int) []byte {
 }
 
 func (i *invertedIndexOpaque) incrementBytesWritten(bytes uint64) {
-	atomic.AddUint64(&i.bytesWritten, bytes)
+	i.bytesWritten += bytes
 }
 
 func (i *invertedIndexOpaque) BytesWritten() uint64 {
-	return atomic.LoadUint64(&i.bytesWritten)
+	return i.bytesWritten
 }
 
 func (i *invertedIndexOpaque) BytesRead() uint64 {

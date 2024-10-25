@@ -147,7 +147,6 @@ type interim struct {
 	lastNumDocs int
 	lastOutSize int
 
-	// atomic access to this variable
 	bytesWritten uint64
 }
 
@@ -497,11 +496,11 @@ func (s *interim) processDocument(docNum uint64,
 }
 
 func (s *interim) getBytesWritten() uint64 {
-	return atomic.LoadUint64(&s.bytesWritten)
+	return s.bytesWritten
 }
 
 func (s *interim) incrementBytesWritten(val uint64) {
-	atomic.AddUint64(&s.bytesWritten, val)
+	s.bytesWritten += val
 }
 
 func (s *interim) writeStoredFields() (

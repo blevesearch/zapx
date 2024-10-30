@@ -25,6 +25,7 @@ import (
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
+	index "github.com/blevesearch/bleve_index_api"
 	mmap "github.com/blevesearch/mmap-go"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 	"github.com/blevesearch/vellum"
@@ -107,6 +108,8 @@ type SegmentBase struct {
 	// atomic access to these variables
 	bytesRead    uint64
 	bytesWritten uint64
+
+	updatedFields map[string]index.FieldInfo
 
 	m         sync.Mutex
 	fieldFSTs map[uint16]*vellum.FST
@@ -883,4 +886,8 @@ func (s *SegmentBase) loadDvReaders() error {
 	}
 
 	return nil
+}
+
+func (s *SegmentBase) UpdatedFields() map[string]index.FieldInfo {
+	return s.updatedFields
 }

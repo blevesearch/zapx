@@ -318,11 +318,9 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 
 		validMerge = true
 		// set the dims and metric values from the constructed index.
-		if dims == 0 {
-			dims = index.D()
-			metric = int(index.MetricType())
-			indexOptimizedFor = vecIndexes[segI].indexOptimizedFor
-		}
+		dims = index.D()
+		metric = int(index.MetricType())
+		indexOptimizedFor = vecIndexes[segI].indexOptimizedFor
 	}
 
 	// not a valid merge operation as there are no valid indexes to merge.

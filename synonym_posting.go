@@ -18,11 +18,25 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"reflect"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
+
+var reflectStaticSizeSynonymsList int
+var reflectStaticSizeSynonymsIterator int
+var reflectStaticSizeSynonym int
+
+func init() {
+	var sl SynonymsList
+	reflectStaticSizeSynonymsList = int(reflect.TypeOf(sl).Size())
+	var si SynonymsIterator
+	reflectStaticSizeSynonymsIterator = int(reflect.TypeOf(si).Size())
+	var s Synonym
+	reflectStaticSizePosting = int(reflect.TypeOf(s).Size())
+}
 
 type SynonymsList struct {
 	sb             *SegmentBase
@@ -37,6 +51,16 @@ type SynonymsList struct {
 
 // represents an immutable, empty synonyms list
 var emptySynonymsList = &SynonymsList{}
+
+func (p *SynonymsList) Size() int {
+	sizeInBytes := reflectStaticSizeSynonymsList + SizeOfPtr
+
+	if p.except != nil {
+		sizeInBytes += int(p.except.GetSizeInBytes())
+	}
+
+	return sizeInBytes
+}
 
 // Iterator returns an iterator for this postings list
 func (s *SynonymsList) Iterator(prealloc segment.SynonymsIterator) segment.SynonymsIterator {
@@ -113,6 +137,13 @@ type SynonymsIterator struct {
 
 var emptySynonymsIterator = &SynonymsIterator{}
 
+func (i *SynonymsIterator) Size() int {
+	sizeInBytes := reflectStaticSizeSynonymsIterator + SizeOfPtr +
+		i.nextSyn.Size()
+
+	return sizeInBytes
+}
+
 func (i *SynonymsIterator) Next() (segment.Synonym, error) {
 	return i.next()
 }
@@ -171,6 +202,13 @@ type Synonym struct {
 	term   string
 	synID  uint32
 	docNum uint32
+}
+
+func (p *Synonym) Size() int {
+	sizeInBytes := reflectStaticSizePosting + SizeOfPtr +
+		len(p.term)
+
+	return sizeInBytes
 }
 
 func (s *Synonym) Term() string {

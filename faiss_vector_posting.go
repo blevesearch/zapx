@@ -273,7 +273,7 @@ type vectorIndexWrapper struct {
 	search func(qVector []float32, k int64,
 		params json.RawMessage) (segment.VecPostingsList, error)
 	searchWithFilter func(qVector []float32, k int64, eligibleDocIDs []uint64,
-		params json.RawMessage) (segment.VecPostingsList, error)
+		include bool, params json.RawMessage) (segment.VecPostingsList, error)
 	close func()
 	size  func() uint64
 }
@@ -285,9 +285,9 @@ func (i *vectorIndexWrapper) Search(qVector []float32, k int64,
 }
 
 func (i *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
-	eligibleDocIDs []uint64, params json.RawMessage) (
+	eligibleDocIDs []uint64, include bool, params json.RawMessage) (
 	segment.VecPostingsList, error) {
-	return i.searchWithFilter(qVector, k, eligibleDocIDs, params)
+	return i.searchWithFilter(qVector, k, eligibleDocIDs, include, params)
 }
 
 func (i *vectorIndexWrapper) Close() {
@@ -362,7 +362,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				return rv, nil
 			},
 			searchWithFilter: func(qVector []float32, k int64,
-				eligibleDocIDs []uint64, params json.RawMessage) (
+				eligibleDocIDs []uint64, include bool, params json.RawMessage) (
 				segment.VecPostingsList, error) {
 				// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
 				// 2. both the values can be represented using roaring bitmaps.
@@ -442,7 +442,10 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					// If there are more elements to be included than excluded, it
 					// might be quicker to use an exclusion selector as a filter
 					// instead of an inclusion selector.
-					if float32(len(eligibleDocIDs))/float32(len(docVecIDMap)) > 0.5 {
+					if float32(len(eligibleDocIDs))/float32(len(docVecIDMap)) > 0.5 ||
+						// use an exclude selector  here since upstream, there were far
+						// more elements to be included than excluded
+						!include {
 						ineligibleVecIDsBitmap := roaring.NewBitmap()
 						eligibleDocIDsMap := make(map[uint64]struct{})
 						for _, eligibleDocID := range eligibleDocIDs {

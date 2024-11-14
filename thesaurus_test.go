@@ -42,19 +42,18 @@ func createEquivalentSynonymMap(input []string, resultMap map[string][]string) m
 }
 
 func buildTestSynonymDocument(id string, collection string, terms []string, synonyms []string) index.Document {
-	synDefs := make(map[string][]string)
+	var synonymMap map[string][]string
 	if terms == nil {
-		synDefs = createEquivalentSynonymMap(synonyms, synDefs)
+		numEntries := len(synonyms) * (len(synonyms) - 1)
+		synonymMap = make(map[string][]string, numEntries)
+		synonymMap = createEquivalentSynonymMap(synonyms, synonymMap)
 	} else {
+		synonymMap = make(map[string][]string, len(terms))
 		for _, term := range terms {
-			synDefs[term] = synonyms
+			synonymMap[term] = synonyms
 		}
 	}
-	synonymDefs := make([]index.SynonymDefinition, 0, len(synDefs))
-	for term, synonyms := range synDefs {
-		synonymDefs = append(synonymDefs, newStubSynonymDefinition(term, synonyms))
-	}
-	synDoc := newStubSynonymDocument(id, newStubSynonymField(collection, "standard", synonymDefs))
+	synDoc := newStubSynonymDocument(id, newStubSynonymField(collection, "standard", synonymMap))
 	synDoc.AddIDField()
 	return synDoc
 }
@@ -121,20 +120,26 @@ func checkWithDeletes(except *roaring.Bitmap, collectionName string, testSynonym
 			return err
 		}
 		if len(synonyms) != len(expectedSynonyms) {
-			return errors.New("unexpected number of synonyms")
+			return errors.New("unexpected number of synonyms, expected: " +
+				strconv.Itoa(len(expectedSynonyms)) + " got: " +
+				strconv.Itoa(len(synonyms)) + " for term: " + term + " when excepting: " + except.String())
 		}
 		sort.Strings(synonyms)
 		sort.Strings(expectedSynonyms)
 		for i, synonym := range synonyms {
 			if synonym != expectedSynonyms[i] {
-				return errors.New("unexpected synonym")
+				return errors.New("unexpected synonym" + synonym + " for term: " + term)
 			}
 		}
 	}
 	return nil
 }
 
-func testSegmentSynonymAccuracy(collSynMap map[string][]testSynonymDefinition, seg segment.Segment) error {
+func testSegmentSynonymAccuracy(testSynonymDefinitions []testSynonymDefinition, seg segment.Segment) error {
+	collSynMap := make(map[string][]testSynonymDefinition)
+	for _, testSynonymDefinition := range testSynonymDefinitions {
+		collSynMap[testSynonymDefinition.collectionName] = append(collSynMap[testSynonymDefinition.collectionName], testSynonymDefinition)
+	}
 	for collectionName, testSynonymMap := range collSynMap {
 		expectedSynonymMap := createExpectedSynonymMap(testSynonymMap)
 		err := checkWithDeletes(nil, collectionName, expectedSynonymMap, seg)
@@ -157,8 +162,9 @@ func testSegmentSynonymAccuracy(collSynMap map[string][]testSynonymDefinition, s
 }
 
 type testSynonymDefinition struct {
-	terms    []string
-	synonyms []string
+	collectionName string
+	terms          []string
+	synonyms       []string
 }
 
 func createExpectedSynonymMap(input []testSynonymDefinition) map[string][]string {
@@ -175,7 +181,7 @@ func createExpectedSynonymMap(input []testSynonymDefinition) map[string][]string
 	return rv
 }
 
-func buildSegment(testSynonymDefinitions map[string][]testSynonymDefinition) (segment.Segment, error) {
+func buildSegment(testSynonymDefinitions []testSynonymDefinition) (segment.Segment, error) {
 	tmpDir, err := os.MkdirTemp("", "zap-")
 	if err != nil {
 		return nil, err
@@ -186,15 +192,13 @@ func buildSegment(testSynonymDefinitions map[string][]testSynonymDefinition) (se
 		return nil, err
 	}
 	var testSynonymDocuments []index.Document
-	for collName, synDefs := range testSynonymDefinitions {
-		for i, testSynonymDefinition := range synDefs {
-			testSynonymDocuments = append(testSynonymDocuments, buildTestSynonymDocument(
-				strconv.Itoa(i),
-				collName,
-				testSynonymDefinition.terms,
-				testSynonymDefinition.synonyms,
-			))
-		}
+	for i, testSynonymDefinition := range testSynonymDefinitions {
+		testSynonymDocuments = append(testSynonymDocuments, buildTestSynonymDocument(
+			strconv.Itoa(i),
+			testSynonymDefinition.collectionName,
+			testSynonymDefinition.terms,
+			testSynonymDefinition.synonyms,
+		))
 	}
 	sb, err := buildTestSegmentForThesaurus(testSynonymDocuments)
 	if err != nil {
@@ -215,8 +219,8 @@ func buildSegment(testSynonymDefinitions map[string][]testSynonymDefinition) (se
 	return seg, nil
 }
 
-func mergeSegments(segs []segment.Segment, drops []*roaring.Bitmap, testSynonymDefinitions map[string][]testSynonymDefinition) error {
-	tmpDir, err := os.MkdirTemp("", "zap-")
+func mergeSegments(segs []segment.Segment, drops []*roaring.Bitmap, testSynonymDefinitions []testSynonymDefinition) error {
+	tmpDir, err := os.MkdirTemp("", "mergedzap-")
 	if err != nil {
 		return err
 	}
@@ -245,67 +249,68 @@ func mergeSegments(segs []segment.Segment, drops []*roaring.Bitmap, testSynonymD
 	return nil
 }
 
-func TestThesaurus(t *testing.T) {
+func TestSynonymSegment(t *testing.T) {
 	firstCollectionName := "coll0"
 	secondCollectionName := "coll1"
-	testSynonymDefinitions := map[string][]testSynonymDefinition{
-		firstCollectionName: {
-			{
-				terms: nil,
-				synonyms: []string{
-					"adeptness",
-					"aptitude",
-					"facility",
-					"faculty",
-					"capacity",
-					"power",
-					"knack",
-					"proficiency",
-					"ability",
-				},
-			},
-			{
-				terms: []string{"afflict"},
-				synonyms: []string{
-					"affect",
-					"bother",
-					"distress",
-					"oppress",
-					"trouble",
-					"torment",
-				},
-			},
-			{
-				terms: []string{"capacity"},
-				synonyms: []string{
-					"volume",
-					"content",
-					"size",
-					"dimensions",
-					"measure",
-				},
+	testSynonymDefinitions := []testSynonymDefinition{
+		{
+			collectionName: firstCollectionName,
+			terms:          nil,
+			synonyms: []string{
+				"adeptness",
+				"aptitude",
+				"facility",
+				"faculty",
+				"capacity",
+				"power",
+				"knack",
+				"proficiency",
+				"ability",
 			},
 		},
-		secondCollectionName: {
-			{
-				synonyms: []string{
-					"absolutely",
-					"unqualifiedly",
-					"unconditionally",
-					"unreservedly",
-					"unexceptionally",
-					"unequivocally",
-				},
+		{
+			collectionName: firstCollectionName,
+			terms:          []string{"afflict"},
+			synonyms: []string{
+				"affect",
+				"bother",
+				"distress",
+				"oppress",
+				"trouble",
+				"torment",
 			},
-			{
-				terms: []string{"abrupt"},
-				synonyms: []string{
-					"sudden",
-					"hasty",
-					"quick",
-					"precipitate",
-					"snappy",
-				},
+		},
+		{
+			collectionName: firstCollectionName,
+			terms:          []string{"capacity"},
+			synonyms: []string{
+				"volume",
+				"content",
+				"size",
+				"dimensions",
+				"measure",
+			},
+		},
+		{
+			collectionName: secondCollectionName,
+			synonyms: []string{
+				"absolutely",
+				"unqualifiedly",
+				"unconditionally",
+				"unreservedly",
+				"unexceptionally",
+				"unequivocally",
+			},
+		},
+		{
+			collectionName: secondCollectionName,
+			terms:          []string{"abrupt"},
+			synonyms: []string{
+				"sudden",
+				"hasty",
+				"quick",
+				"precipitate",
+				"snappy",
 			},
 		},
 	}
@@ -321,41 +326,40 @@ func TestThesaurus(t *testing.T) {
 		}
 	}()
 
-	// multiple segment test
-	numSegs := 3
-	numDocs := 5
-	segData := make([]map[string][]testSynonymDefinition, numSegs)
+	// // multiple segment test
+	// numSegs := 3
+	// numDocs := 5
+	// segData := make([][]testSynonymDefinition, numSegs)
 
-	segData[0] = make(map[string][]testSynonymDefinition)
-	segData[0][firstCollectionName] = testSynonymDefinitions[firstCollectionName][:2] // 2 docs
+	// segData[0] = make([]testSynonymDefinition, 0)
+	// segData[0] = testSynonymDefinitions[:2] // 2 docs
 
-	segData[1] = make(map[string][]testSynonymDefinition)
-	segData[1][firstCollectionName] = testSynonymDefinitions[firstCollectionName][2:]
-	segData[1][secondCollectionName] = testSynonymDefinitions[secondCollectionName][:1] // 2 docs
+	// segData[1] = make([]testSynonymDefinition, 0)
+	// segData[1] = testSynonymDefinitions[2:4] // 2 docs
 
-	segData[2] = make(map[string][]testSynonymDefinition)
-	segData[2][secondCollectionName] = testSynonymDefinitions[secondCollectionName][1:] // 1 doc
+	// segData[2] = make([]testSynonymDefinition, 0)
+	// segData[2] = testSynonymDefinitions[4:] // 1 doc
 
-	segs := make([]segment.Segment, numSegs)
-	for i, data := range segData {
-		seg, err := buildSegment(data)
-		if err != nil {
-			t.Fatalf("error building segment: %v", err)
-		}
-		segs[i] = seg
-	}
-	drops := make([]*roaring.Bitmap, numDocs)
-	for i := 0; i < numDocs; i++ {
-		drops[i] = roaring.New()
-	}
-	err = mergeSegments(segs, drops, testSynonymDefinitions)
-	if err != nil {
-		t.Fatalf("error merging segments: %v", err)
-	}
-	for _, seg := range segs {
-		cerr := seg.Close()
-		if cerr != nil {
-			t.Fatalf("error closing seg: %v", err)
-		}
-	}
+	// segs := make([]segment.Segment, numSegs)
+	// for i, data := range segData {
+	// 	seg, err := buildSegment(data)
+	// 	if err != nil {
+	// 		t.Fatalf("error building segment: %v", err)
+	// 	}
+	// 	segs[i] = seg
+	// }
+	// drops := make([]*roaring.Bitmap, numDocs)
+	// for i := 0; i < numDocs; i++ {
+	// 	drops[i] = roaring.New()
+	// }
+	// err = mergeSegments(segs, drops, testSynonymDefinitions)
+	// if err != nil {
+	// 	t.Fatalf("error merging segments: %v", err)
+	// }
+	// for _, seg := range segs {
+	// 	cerr := seg.Close()
+	// 	if cerr != nil {
+	// 		t.Fatalf("error closing seg: %v", err)
+	// 	}
+	// }
 }

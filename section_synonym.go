@@ -143,12 +143,12 @@ func (so *synonymIndexOpaque) process(field index.SynonymField, fieldID uint16, 
 
 	termSynMap := so.SynonymTermToID[tid]
 
-	field.VisitSynonymDefinitions(func(def index.SynonymDefinition) {
-		pid := thesaurus[def.Term()] - 1
+	field.VisitSynonymDefinitions(func(term string, synonyms []string) {
+		pid := thesaurus[term] - 1
 
 		bs := so.Synonyms[pid]
 
-		for _, syn := range def.Synonyms() {
+		for _, syn := range synonyms {
 			code := encodeSynonym(termSynMap[syn], docNum)
 			bs.Add(code)
 		}
@@ -163,7 +163,7 @@ func (so *synonymIndexOpaque) realloc() {
 
 	for _, result := range so.results {
 		if synDoc, ok := result.(index.SynonymDocument); ok {
-			synDoc.VisitSynonymField(func(synField index.SynonymField) {
+			synDoc.VisitSynonymFields(func(synField index.SynonymField) {
 				fieldIDPlus1 := so.FieldsMap[synField.Name()]
 				so.getOrDefineThesaurus(fieldIDPlus1-1, synField.Name())
 			})
@@ -172,7 +172,7 @@ func (so *synonymIndexOpaque) realloc() {
 
 	for _, result := range so.results {
 		if synDoc, ok := result.(index.SynonymDocument); ok {
-			synDoc.VisitSynonymField(func(synField index.SynonymField) {
+			synDoc.VisitSynonymFields(func(synField index.SynonymField) {
 				fieldIDPlus1 := so.FieldsMap[synField.Name()]
 				thesaurusID := uint16(so.getOrDefineThesaurus(fieldIDPlus1-1, synField.Name()))
 
@@ -183,8 +183,7 @@ func (so *synonymIndexOpaque) realloc() {
 
 				termSynMap := so.SynonymTermToID[thesaurusID]
 
-				synField.VisitSynonymDefinitions(func(synDef index.SynonymDefinition) {
-					term := synDef.Term()
+				synField.VisitSynonymDefinitions(func(term string, synonyms []string) {
 					_, exists := thesaurus[term]
 					if !exists {
 						pidNext++
@@ -193,8 +192,7 @@ func (so *synonymIndexOpaque) realloc() {
 						thesaurus[term] = pidPlus1
 						thesaurusKeys = append(thesaurusKeys, term)
 					}
-					syns := synDef.Synonyms()
-					for _, syn := range syns {
+					for _, syn := range synonyms {
 						_, exists := termSynMap[syn]
 						if !exists {
 							sidNext++

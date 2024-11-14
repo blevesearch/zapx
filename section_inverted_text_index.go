@@ -273,9 +273,11 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			return nil, 0, err
 		}
 		// close the enumerator to free the underlying iterators
-		err = enumerator.Close()
-		if err != nil {
-			return nil, 0, err
+		if enumerator != nil {
+			err = enumerator.Close()
+			if err != nil {
+				return nil, 0, err
+			}
 		}
 
 		err = finishTerm(prevTerm)

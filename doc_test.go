@@ -178,30 +178,9 @@ func (s *stubField) Compose(field string, length int, freq index.TokenFrequencie
 }
 
 // -----------------------------------------------------------------------------
-type stubSynonymDefinition struct {
-	term     string
-	synonyms []string
-}
-
-func (s *stubSynonymDefinition) Term() string {
-	return s.term
-}
-
-func (s *stubSynonymDefinition) Synonyms() []string {
-	return s.synonyms
-}
-
-func newStubSynonymDefinition(term string, synonyms []string) index.SynonymDefinition {
-	return &stubSynonymDefinition{
-		term:     term,
-		synonyms: synonyms,
-	}
-}
-
-// -----------------------------------------------------------------------------
 type stubSynonymField struct {
-	name        string
-	synonymDefs []index.SynonymDefinition
+	name       string
+	synonymMap map[string][]string
 }
 
 func (s *stubSynonymField) Name() string {
@@ -240,9 +219,9 @@ func (s *stubSynonymField) NumPlainTextBytes() uint64 {
 	return 0
 }
 
-func (sf *stubSynonymField) VisitSynonymDefinitions(visitor func(index.SynonymDefinition)) {
-	for _, def := range sf.synonymDefs {
-		visitor(def)
+func (sf *stubSynonymField) VisitSynonymDefinitions(visitor func(term string, synonyms []string)) {
+	for term, synonyms := range sf.synonymMap {
+		visitor(term, synonyms)
 	}
 }
 
@@ -251,19 +230,19 @@ func analyzeStubTerm(term string) string {
 	return lowerCaseTerm
 }
 
-func newStubSynonymField(name, analyzer string, defs []index.SynonymDefinition) index.SynonymField {
-	analyzedSynonymDefs := make([]index.SynonymDefinition, 0, len(defs))
-	for _, def := range defs {
-		analyzedTerm := analyzeStubTerm(def.Term())
-		analyzedSynonyms := make([]string, 0, len(def.Synonyms()))
-		for _, syn := range def.Synonyms() {
+func newStubSynonymField(name, analyzer string, synonymMap map[string][]string) index.SynonymField {
+	analyzedSynonymDefs := make(map[string][]string, len(synonymMap))
+	for term, synonyms := range synonymMap {
+		analyzedTerm := analyzeStubTerm(term)
+		analyzedSynonyms := make([]string, 0, len(synonyms))
+		for _, syn := range synonyms {
 			analyzedSynonyms = append(analyzedSynonyms, analyzeStubTerm(syn))
 		}
-		analyzedSynonymDefs = append(analyzedSynonymDefs, newStubSynonymDefinition(analyzedTerm, analyzedSynonyms))
+		analyzedSynonymDefs[analyzedTerm] = analyzedSynonyms
 	}
 	return &stubSynonymField{
-		name:        name,
-		synonymDefs: analyzedSynonymDefs,
+		name:       name,
+		synonymMap: analyzedSynonymDefs,
 	}
 }
 
@@ -305,7 +284,7 @@ func (s *stubSynonymDocument) AddIDField() {
 	s.fields = append(s.fields, newStubFieldSplitString("_id", nil, s.id, true, false, false))
 }
 
-func (s *stubSynonymDocument) VisitSynonymField(visitor index.SynonymFieldVisitor) {
+func (s *stubSynonymDocument) VisitSynonymFields(visitor index.SynonymFieldVisitor) {
 	for _, f := range s.fields {
 		if sf, ok := f.(index.SynonymField); ok {
 			visitor(sf)

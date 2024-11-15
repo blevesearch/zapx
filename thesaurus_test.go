@@ -27,33 +27,15 @@ import (
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 
-func createEquivalentSynonymMap(input []string, resultMap map[string][]string) map[string][]string {
-	if resultMap == nil {
-		resultMap = make(map[string][]string)
-	}
-	for _, elem := range input {
-		for _, otherElem := range input {
-			if elem != otherElem {
-				resultMap[elem] = append(resultMap[elem], otherElem)
-			}
-		}
-	}
-	return resultMap
-}
-
-func buildTestSynonymDocument(id string, collection string, terms []string, synonyms []string) index.Document {
-	var synonymMap map[string][]string
-	if terms == nil {
-		numEntries := len(synonyms) * (len(synonyms) - 1)
-		synonymMap = make(map[string][]string, numEntries)
-		synonymMap = createEquivalentSynonymMap(synonyms, synonymMap)
-	} else {
-		synonymMap = make(map[string][]string, len(terms))
-		for _, term := range terms {
-			synonymMap[term] = synonyms
-		}
-	}
-	synDoc := newStubSynonymDocument(id, newStubSynonymField(collection, "standard", synonymMap))
+func buildTestSynonymDocument(id string, synonymSource string, terms []string, synonyms []string) index.Document {
+	// Create the synonym document using stubs.
+	stubAnalyzer := "standard"
+	// Create the synonym field.
+	synField := newStubSynonymField(synonymSource, stubAnalyzer, terms, synonyms)
+	// Analyze the synonyms.
+	synField.Analyze()
+	// Create the synonym document.
+	synDoc := newStubSynonymDocument(id, synField)
 	synDoc.AddIDField()
 	return synDoc
 }
@@ -122,7 +104,7 @@ func checkWithDeletes(except *roaring.Bitmap, collectionName string, testSynonym
 		if len(synonyms) != len(expectedSynonyms) {
 			return errors.New("unexpected number of synonyms, expected: " +
 				strconv.Itoa(len(expectedSynonyms)) + " got: " +
-				strconv.Itoa(len(synonyms)) + " for term: " + term + " when excepting: " + except.String())
+				strconv.Itoa(len(synonyms)) + " for term: " + term)
 		}
 		sort.Strings(synonyms)
 		sort.Strings(expectedSynonyms)
@@ -165,6 +147,20 @@ type testSynonymDefinition struct {
 	collectionName string
 	terms          []string
 	synonyms       []string
+}
+
+func createEquivalentSynonymMap(input []string, resultMap map[string][]string) map[string][]string {
+	if resultMap == nil {
+		resultMap = make(map[string][]string)
+	}
+	for _, elem := range input {
+		for _, otherElem := range input {
+			if elem != otherElem {
+				resultMap[elem] = append(resultMap[elem], otherElem)
+			}
+		}
+	}
+	return resultMap
 }
 
 func createExpectedSynonymMap(input []testSynonymDefinition) map[string][]string {

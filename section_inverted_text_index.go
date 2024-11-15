@@ -451,11 +451,6 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 
 	for fieldID, terms := range io.DictKeys {
 		dict := io.Dicts[fieldID]
-		// dict is nil if the field is excluded from inverted index
-		// processing, so skip it
-		if len(dict) == 0 {
-			continue
-		}
 
 		if cap(docTermMap) < len(io.results) {
 			docTermMap = make([][]byte, len(io.results))

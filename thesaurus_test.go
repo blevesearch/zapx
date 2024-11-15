@@ -59,7 +59,7 @@ func buildTestSynonymDocument(id string, collection string, terms []string, syno
 }
 
 func buildTestSegmentForThesaurus(results []index.Document) (*SegmentBase, error) {
-	seg, _, err := zapPlugin.newWithChunkMode(results, 1024)
+	seg, _, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode)
 	return seg.(*SegmentBase), err
 }
 
@@ -182,15 +182,6 @@ func createExpectedSynonymMap(input []testSynonymDefinition) map[string][]string
 }
 
 func buildSegment(testSynonymDefinitions []testSynonymDefinition) (segment.Segment, error) {
-	tmpDir, err := os.MkdirTemp("", "zap-")
-	if err != nil {
-		return nil, err
-	}
-
-	err = os.RemoveAll(tmpDir)
-	if err != nil {
-		return nil, err
-	}
 	var testSynonymDocuments []index.Document
 	for i, testSynonymDefinition := range testSynonymDefinitions {
 		testSynonymDocuments = append(testSynonymDocuments, buildTestSynonymDocument(
@@ -201,6 +192,15 @@ func buildSegment(testSynonymDefinitions []testSynonymDefinition) (segment.Segme
 		))
 	}
 	sb, err := buildTestSegmentForThesaurus(testSynonymDocuments)
+	if err != nil {
+		return nil, err
+	}
+	tmpDir, err := os.MkdirTemp("", "zap-")
+	if err != nil {
+		return nil, err
+	}
+
+	err = os.RemoveAll(tmpDir)
 	if err != nil {
 		return nil, err
 	}
@@ -327,39 +327,39 @@ func TestSynonymSegment(t *testing.T) {
 	}()
 
 	// // multiple segment test
-	// numSegs := 3
-	// numDocs := 5
-	// segData := make([][]testSynonymDefinition, numSegs)
+	numSegs := 3
+	numDocs := 5
+	segData := make([][]testSynonymDefinition, numSegs)
 
-	// segData[0] = make([]testSynonymDefinition, 0)
-	// segData[0] = testSynonymDefinitions[:2] // 2 docs
+	segData[0] = make([]testSynonymDefinition, 0)
+	segData[0] = testSynonymDefinitions[:2] // 2 docs
 
-	// segData[1] = make([]testSynonymDefinition, 0)
-	// segData[1] = testSynonymDefinitions[2:4] // 2 docs
+	segData[1] = make([]testSynonymDefinition, 0)
+	segData[1] = testSynonymDefinitions[2:4] // 2 docs
 
-	// segData[2] = make([]testSynonymDefinition, 0)
-	// segData[2] = testSynonymDefinitions[4:] // 1 doc
+	segData[2] = make([]testSynonymDefinition, 0)
+	segData[2] = testSynonymDefinitions[4:] // 1 doc
 
-	// segs := make([]segment.Segment, numSegs)
-	// for i, data := range segData {
-	// 	seg, err := buildSegment(data)
-	// 	if err != nil {
-	// 		t.Fatalf("error building segment: %v", err)
-	// 	}
-	// 	segs[i] = seg
-	// }
-	// drops := make([]*roaring.Bitmap, numDocs)
-	// for i := 0; i < numDocs; i++ {
-	// 	drops[i] = roaring.New()
-	// }
-	// err = mergeSegments(segs, drops, testSynonymDefinitions)
-	// if err != nil {
-	// 	t.Fatalf("error merging segments: %v", err)
-	// }
-	// for _, seg := range segs {
-	// 	cerr := seg.Close()
-	// 	if cerr != nil {
-	// 		t.Fatalf("error closing seg: %v", err)
-	// 	}
-	// }
+	segs := make([]segment.Segment, numSegs)
+	for i, data := range segData {
+		seg, err := buildSegment(data)
+		if err != nil {
+			t.Fatalf("error building segment: %v", err)
+		}
+		segs[i] = seg
+	}
+	drops := make([]*roaring.Bitmap, numDocs)
+	for i := 0; i < numDocs; i++ {
+		drops[i] = roaring.New()
+	}
+	err = mergeSegments(segs, drops, testSynonymDefinitions)
+	if err != nil {
+		t.Fatalf("error merging segments: %v", err)
+	}
+	for _, seg := range segs {
+		cerr := seg.Close()
+		if cerr != nil {
+			t.Fatalf("error closing seg: %v", err)
+		}
+	}
 }

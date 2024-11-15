@@ -179,7 +179,11 @@ func (s *stubField) Compose(field string, length int, freq index.TokenFrequencie
 
 // -----------------------------------------------------------------------------
 type stubSynonymField struct {
-	name       string
+	name     string
+	analyzer string
+	input    []string
+	synonyms []string
+
 	synonymMap map[string][]string
 }
 
@@ -200,7 +204,18 @@ func (s *stubSynonymField) EncodedFieldType() byte {
 }
 
 func (s *stubSynonymField) Analyze() {
-
+	var analyzedInput []string
+	if len(s.input) > 0 {
+		analyzedInput = make([]string, 0, len(s.input))
+		for _, term := range s.input {
+			analyzedInput = append(analyzedInput, analyzeStubTerm(term, s.analyzer))
+		}
+	}
+	analyzedSynonyms := make([]string, 0, len(s.synonyms))
+	for _, syn := range s.synonyms {
+		analyzedSynonyms = append(analyzedSynonyms, analyzeStubTerm(syn, s.analyzer))
+	}
+	s.synonymMap = processSynonymData(analyzedInput, analyzedSynonyms)
 }
 
 func (s *stubSynonymField) Options() index.FieldIndexingOptions {
@@ -219,30 +234,46 @@ func (s *stubSynonymField) NumPlainTextBytes() uint64 {
 	return 0
 }
 
-func (sf *stubSynonymField) VisitSynonymDefinitions(visitor func(term string, synonyms []string)) {
+func (sf *stubSynonymField) IterateSynonyms(visitor func(term string, synonyms []string)) {
 	for term, synonyms := range sf.synonymMap {
 		visitor(term, synonyms)
 	}
 }
 
-func analyzeStubTerm(term string) string {
+func processSynonymData(input []string, synonyms []string) map[string][]string {
+	var synonymMap map[string][]string
+	if len(input) > 0 {
+		// Map each term to the same list of synonyms.
+		synonymMap = make(map[string][]string, len(input))
+		for _, term := range input {
+			synonymMap[term] = append([]string(nil), synonyms...) // Avoid sharing slices.
+		}
+	} else {
+		synonymMap = make(map[string][]string, len(synonyms))
+		// Precompute a map where each synonym points to all other synonyms.
+		for i, elem := range synonyms {
+			synonymMap[elem] = make([]string, 0, len(synonyms)-1)
+			for j, otherElem := range synonyms {
+				if i != j {
+					synonymMap[elem] = append(synonymMap[elem], otherElem)
+				}
+			}
+		}
+	}
+	return synonymMap
+}
+
+func analyzeStubTerm(term string, analyzer string) string {
 	lowerCaseTerm := strings.ToLower(term)
 	return lowerCaseTerm
 }
 
-func newStubSynonymField(name, analyzer string, synonymMap map[string][]string) index.SynonymField {
-	analyzedSynonymDefs := make(map[string][]string, len(synonymMap))
-	for term, synonyms := range synonymMap {
-		analyzedTerm := analyzeStubTerm(term)
-		analyzedSynonyms := make([]string, 0, len(synonyms))
-		for _, syn := range synonyms {
-			analyzedSynonyms = append(analyzedSynonyms, analyzeStubTerm(syn))
-		}
-		analyzedSynonymDefs[analyzedTerm] = analyzedSynonyms
-	}
+func newStubSynonymField(name string, analyzer string, input []string, synonyms []string) index.SynonymField {
 	return &stubSynonymField{
-		name:       name,
-		synonymMap: analyzedSynonymDefs,
+		name:     name,
+		analyzer: analyzer,
+		input:    input,
+		synonyms: synonyms,
 	}
 }
 

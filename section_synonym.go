@@ -143,7 +143,7 @@ func (so *synonymIndexOpaque) process(field index.SynonymField, fieldID uint16, 
 
 	termSynMap := so.SynonymTermToID[tid]
 
-	field.VisitSynonymDefinitions(func(term string, synonyms []string) {
+	field.IterateSynonyms(func(term string, synonyms []string) {
 		pid := thesaurus[term] - 1
 
 		bs := so.Synonyms[pid]
@@ -183,7 +183,7 @@ func (so *synonymIndexOpaque) realloc() {
 
 				termSynMap := so.SynonymTermToID[thesaurusID]
 
-				synField.VisitSynonymDefinitions(func(term string, synonyms []string) {
+				synField.IterateSynonyms(func(term string, synonyms []string) {
 					_, exists := thesaurus[term]
 					if !exists {
 						pidNext++

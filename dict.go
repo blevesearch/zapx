@@ -166,7 +166,7 @@ func (i *DictionaryIterator) Next() (*index.DictEntry, error) {
 	}
 	term, postingsOffset := i.itr.Current()
 	if fitr, ok := i.itr.(vellum.FuzzyIterator); ok {
-		i.entry.EditDistance = fitr.Distance()
+		i.entry.EditDistance = fitr.EditDistance()
 	}
 	i.entry.Term = string(term)
 	if !i.omitCount {

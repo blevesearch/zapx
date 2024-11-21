@@ -35,10 +35,11 @@ const docDropped = math.MaxUint64 // sentinel docNum to represent a deleted doc
 // Merge takes a slice of segments and bit masks describing which
 // documents may be dropped, and creates a new segment containing the
 // remaining data.  This new segment is built at the specified path.
-func (*ZapPlugin) Merge(segments []seg.Segment, drops []*roaring.Bitmap, path string,
+func (*ZapPlugin) Merge(segments []seg.Segment, drops []seg.Bitmap, path string,
 	closeCh chan struct{}, s seg.StatsReporter) (
 	[][]uint64, uint64, error) {
 	segmentBases := make([]*SegmentBase, len(segments))
+	dropsRoaring := make([]*roaring.Bitmap, len(segments))
 	for segmenti, segment := range segments {
 		switch segmentx := segment.(type) {
 		case *Segment:
@@ -48,8 +49,11 @@ func (*ZapPlugin) Merge(segments []seg.Segment, drops []*roaring.Bitmap, path st
 		default:
 			panic(fmt.Sprintf("oops, unexpected segment type: %T", segment))
 		}
+		if drops[segmenti] != nil {
+			dropsRoaring[segmenti] = (*roaring.Bitmap)(drops[segmenti].(*bitmap))
+		}
 	}
-	return mergeSegmentBases(segmentBases, drops, path, DefaultChunkMode, closeCh, s)
+	return mergeSegmentBases(segmentBases, dropsRoaring, path, DefaultChunkMode, closeCh, s)
 }
 
 func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, path string,

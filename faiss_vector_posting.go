@@ -403,6 +403,10 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 						vectorIDsToInclude = append(vectorIDsToInclude, docVecIDMap[uint32(id)]...)
 					}
 
+					if len(vectorIDsToInclude) == 0 {
+						return rv, nil
+					}
+
 					// Retrieve the mapping of centroid IDs to vectors within
 					// the cluster.
 					clusterAssignment, _ := vecIndex.ObtainClusterToVecIDsFromIVFIndex()
@@ -475,9 +479,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 							}
 						}
 
-						if len(vectorIDsToInclude) > 0 {
-							selector, err = faiss.NewIDSelectorNot(ineligibleVectorIDs)
-						}
+						selector, err = faiss.NewIDSelectorNot(ineligibleVectorIDs)
 					} else {
 						// Getting the vector IDs corresponding to the eligible
 						// doc IDs.
@@ -510,49 +512,45 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 							}
 						}
 
-						if len(vectorIDsToInclude) > 0 {
-							selector, err = faiss.NewIDSelectorBatch(vectorIDsToInclude)
-						}
+						selector, err = faiss.NewIDSelectorBatch(vectorIDsToInclude)
 					}
 					if err != nil {
 						return nil, err
 					}
 
-					if len(vectorIDsToInclude) > 0 {
-						// Ordering the retrieved centroid IDs by increasing order
-						// of distance i.e. decreasing order of proximity to query vector.
-						closestCentroidIDs, centroidDistances, _ :=
-							vecIndex.ObtainClustersWithDistancesFromIVFIndex(qVector,
-								eligibleCentroidIDs)
+					// Ordering the retrieved centroid IDs by increasing order
+					// of distance i.e. decreasing order of proximity to query vector.
+					closestCentroidIDs, centroidDistances, _ :=
+						vecIndex.ObtainClustersWithDistancesFromIVFIndex(qVector,
+							eligibleCentroidIDs)
 
-						// Getting the nprobe value set at index time.
-						nprobe := vecIndex.GetNProbe()
+					// Getting the nprobe value set at index time.
+					nprobe := vecIndex.GetNProbe()
 
-						eligibleDocsTillNow := int64(0)
-						minEligibleCentroids := 0
-						for i, centroidID := range closestCentroidIDs {
-							eligibleDocsTillNow += int64(centroidVecIDMap[centroidID].GetCardinality())
-							if eligibleDocsTillNow >= k && i >= int(nprobe-1) {
-								// Continue till at least 'K' cumulative vectors are
-								// collected or 'nprobe' clusters are examined, whichever
-								// comes later.
-								minEligibleCentroids = i + 1
-								break
-							}
+					eligibleDocsTillNow := int64(0)
+					minEligibleCentroids := 0
+					for i, centroidID := range closestCentroidIDs {
+						eligibleDocsTillNow += int64(centroidVecIDMap[centroidID].GetCardinality())
+						if eligibleDocsTillNow >= k && i >= int(nprobe-1) {
+							// Continue till at least 'K' cumulative vectors are
+							// collected or 'nprobe' clusters are examined, whichever
+							// comes later.
 							minEligibleCentroids = i + 1
+							break
 						}
-
-						// Search the clusters specified by 'closestCentroidIDs' for
-						// vectors whose IDs are present in 'vectorIDsToInclude'
-						scores, ids, err := vecIndex.SearchClustersFromIVFIndex(
-							selector, len(vectorIDsToInclude), closestCentroidIDs,
-							minEligibleCentroids, k, qVector, centroidDistances, params)
-						if err != nil {
-							return nil, err
-						}
-
-						addIDsToPostingsList(rv, ids, scores)
+						minEligibleCentroids = i + 1
 					}
+
+					// Search the clusters specified by 'closestCentroidIDs' for
+					// vectors whose IDs are present in 'vectorIDsToInclude'
+					scores, ids, err := vecIndex.SearchClustersFromIVFIndex(
+						selector, len(vectorIDsToInclude), closestCentroidIDs,
+						minEligibleCentroids, k, qVector, centroidDistances, params)
+					if err != nil {
+						return nil, err
+					}
+
+					addIDsToPostingsList(rv, ids, scores)
 					return rv, nil
 				}
 				return rv, nil

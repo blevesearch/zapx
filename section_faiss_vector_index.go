@@ -36,10 +36,10 @@ const defaultFaissOMPThreads = 1
 func init() {
 	rand.Seed(time.Now().UTC().UnixNano())
 	registerSegmentSection(SectionFaissVectorIndex, &faissVectorIndexSection{})
-	isFieldNotApplicableToInvertedTextSection = func(field index.Field) bool {
+	invertedIndexExclusionChecks = append(invertedIndexExclusionChecks, func(field index.Field) bool {
 		_, ok := field.(index.VectorField)
 		return ok
-	}
+	})
 	faiss.SetOMPThreads(defaultFaissOMPThreads)
 }
 

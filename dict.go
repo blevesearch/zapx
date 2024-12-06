@@ -38,6 +38,13 @@ type Dictionary struct {
 // represents an immutable, empty dictionary
 var emptyDictionary = &Dictionary{}
 
+func (d *Dictionary) Cardinality() int {
+	if d.fst != nil {
+		return d.fst.Len()
+	}
+	return 0
+}
+
 // PostingsList returns the postings list for the specified term
 func (d *Dictionary) PostingsList(term []byte, except *roaring.Bitmap,
 	prealloc segment.PostingsList) (segment.PostingsList, error) {

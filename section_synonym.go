@@ -719,7 +719,7 @@ func mergeSynonyms(synItr *SynonymsIterator, newDocNums []uint64, newRoaring *ro
 	synTermMap map[uint32]string, termSynMap map[string]uint32, newSynonymID uint32) (uint32, error) {
 	next, err := synItr.Next()
 	for next != nil && err == nil {
-		synNewDocNum := newDocNums[next.DocNum()]
+		synNewDocNum := newDocNums[next.Number()]
 		if synNewDocNum == docDropped {
 			return 0, fmt.Errorf("see hit with dropped docNum")
 		}

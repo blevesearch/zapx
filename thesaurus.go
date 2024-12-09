@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/RoaringBitmap/roaring"
+	index "github.com/blevesearch/bleve_index_api"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 	"github.com/blevesearch/vellum"
 )
@@ -111,4 +112,48 @@ func (t *Thesaurus) Contains(key []byte) (bool, error) {
 		return t.fst.Contains(key)
 	}
 	return false, nil
+}
+
+// AutomatonIterator returns an iterator which only visits terms
+// having the the vellum automaton and start/end key range
+func (t *Thesaurus) AutomatonIterator(a segment.Automaton,
+	startKeyInclusive, endKeyExclusive []byte) segment.ThesaurusIterator {
+	if t.fst != nil {
+		rv := &ThesaurusIterator{
+			t: t,
+		}
+
+		itr, err := t.fst.Search(a, startKeyInclusive, endKeyExclusive)
+		if err == nil {
+			rv.itr = itr
+		} else if err != vellum.ErrIteratorDone {
+			rv.err = err
+		}
+
+		return rv
+	}
+	return emptyThesaurusIterator
+}
+
+var emptyThesaurusIterator = &ThesaurusIterator{}
+
+// ThesaurusIterator is an iterator for term dictionary
+type ThesaurusIterator struct {
+	t     *Thesaurus
+	itr   vellum.Iterator
+	err   error
+	entry index.ThesaurusEntry
+}
+
+// Next returns the next entry in the dictionary
+func (i *ThesaurusIterator) Next() (*index.ThesaurusEntry, error) {
+	if i.err != nil && i.err != vellum.ErrIteratorDone {
+		return nil, i.err
+	} else if i.itr == nil || i.err == vellum.ErrIteratorDone {
+		return nil, nil
+	}
+	term, _ := i.itr.Current()
+	i.entry.Term = string(term)
+	i.err = i.itr.Next()
+	return &i.entry, nil
 }

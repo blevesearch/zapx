@@ -35,7 +35,7 @@ func init() {
 	var si SynonymsIterator
 	reflectStaticSizeSynonymsIterator = int(reflect.TypeOf(si).Size())
 	var s Synonym
-	reflectStaticSizePosting = int(reflect.TypeOf(s).Size())
+	reflectStaticSizeSynonym = int(reflect.TypeOf(s).Size())
 }
 
 type SynonymsList struct {
@@ -205,7 +205,7 @@ type Synonym struct {
 }
 
 func (p *Synonym) Size() int {
-	sizeInBytes := reflectStaticSizePosting + SizeOfPtr +
+	sizeInBytes := reflectStaticSizeSynonym + SizeOfPtr +
 		len(p.term)
 
 	return sizeInBytes
@@ -215,11 +215,7 @@ func (s *Synonym) Term() string {
 	return s.term
 }
 
-func (s *Synonym) SynonymID() uint32 {
-	return s.synID
-}
-
-func (s *Synonym) DocNum() uint32 {
+func (s *Synonym) Number() uint32 {
 	return s.docNum
 }
 

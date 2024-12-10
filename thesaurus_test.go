@@ -85,7 +85,7 @@ func checkWithDeletes(except *roaring.Bitmap, collectionName string, testSynonym
 			return errors.New("expected empty postings list")
 		}
 	}
-	synSeg, ok := seg.(segment.SynonymSegment)
+	synSeg, ok := seg.(segment.ThesaurusSegment)
 	if !ok {
 		return errors.New("expected synonym segment")
 	}

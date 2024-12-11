@@ -739,5 +739,3 @@ func mergeSynonyms(synItr *SynonymsIterator, newDocNums []uint64, newRoaring *ro
 	}
 	return newSynonymID, nil
 }
-
-// -----------------------------------------------------------------------------

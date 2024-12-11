@@ -90,9 +90,7 @@ func (s *SynonymsList) iterator(rv *SynonymsIterator) *SynonymsIterator {
 	rv.except = s.except
 	rv.Actual = s.synonyms.Iterator()
 	rv.ActualBM = s.synonyms
-
 	rv.synIDTermMap = s.synIDTermMap
-
 	return rv
 }
 

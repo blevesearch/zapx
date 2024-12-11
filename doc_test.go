@@ -330,5 +330,3 @@ func newStubSynonymDocument(id string, synonymField index.SynonymField) index.Sy
 	}
 	return rv
 }
-
-// -----------------------------------------------------------------------------

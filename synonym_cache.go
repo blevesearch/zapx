@@ -65,7 +65,6 @@ func (sc *synonymIndexCache) loadOrCreate(fieldID uint16, mem []byte) (*vellum.F
 
 func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte) (*vellum.FST, map[uint32][]byte, error) {
 	var pos uint64
-	// read the length of the vellum data
 	vellumLen, read := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	if vellumLen == 0 || read <= 0 {
 		return nil, nil, fmt.Errorf("vellum length is 0")
@@ -77,12 +76,12 @@ func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte) (*
 		return nil, nil, fmt.Errorf("vellum err: %v", err)
 	}
 	pos += vellumLen
-	synTermMap := make(map[uint32][]byte)
 	numSyns, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 	if numSyns == 0 {
 		return nil, nil, fmt.Errorf("no synonyms found")
 	}
+	synTermMap := make(map[uint32][]byte, numSyns)
 	for i := 0; i < int(numSyns); i++ {
 		synID, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)

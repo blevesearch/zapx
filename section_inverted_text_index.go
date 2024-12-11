@@ -450,8 +450,6 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 	}
 
 	for fieldID, terms := range io.DictKeys {
-		dict := io.Dicts[fieldID]
-
 		if cap(docTermMap) < len(io.results) {
 			docTermMap = make([][]byte, len(io.results))
 		} else {
@@ -460,6 +458,8 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 				docTermMap[docNum] = docTermMap[docNum][:0]
 			}
 		}
+
+		dict := io.Dicts[fieldID]
 
 		for _, term := range terms { // terms are already sorted
 			pid := dict[term] - 1

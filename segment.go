@@ -478,7 +478,7 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 	return rv, nil
 }
 
-// Thesaurus returns the term thesaurus for the specified field
+// Thesaurus returns the thesaurus with the specified name, or an empty thesaurus if not found.
 func (s *SegmentBase) Thesaurus(name string) (segment.Thesaurus, error) {
 	thesaurus, err := s.thesaurus(name)
 	if err == nil && thesaurus == nil {
@@ -499,14 +499,10 @@ func (sb *SegmentBase) thesaurus(name string) (rv *Thesaurus, err error) {
 			name:    name,
 			fieldID: fieldIDPlus1 - 1,
 		}
-		// the below loop loads the following:
-		// 1. doc values(first 2 iterations) - adhering to the sections format. never
-		// valid values for synonym section.
 		for i := 0; i < 2; i++ {
 			_, n := binary.Uvarint(sb.mem[thesaurusStart : thesaurusStart+binary.MaxVarintLen64])
 			thesaurusStart += uint64(n)
 		}
-		// 2. thesaurus location - valid value for synonym section.
 		thesLoc, n := binary.Uvarint(sb.mem[thesaurusStart : thesaurusStart+binary.MaxVarintLen64])
 		thesaurusStart += uint64(n)
 		fst, synTermMap, err := sb.synIndexCache.loadOrCreate(rv.fieldID, sb.mem[thesLoc:])

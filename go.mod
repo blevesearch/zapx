@@ -9,7 +9,7 @@ require (
 	github.com/blevesearch/mmap-go v1.0.4
 	github.com/blevesearch/scorch_segment_api/v2 v2.3.0
 	github.com/blevesearch/vellum v1.1.0
-	github.com/golang/snappy v0.0.1
+	github.com/golang/snappy v0.0.4
 	github.com/spf13/cobra v1.7.0
 )
 

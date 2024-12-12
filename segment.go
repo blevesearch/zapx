@@ -695,7 +695,7 @@ func (s *Segment) Close() (err error) {
 }
 
 func (s *Segment) closeActual() (err error) {
-	// clear contents from the vector index cache before un-mmapping
+	// clear contents from the vector and synonym index cache before un-mmapping
 	s.vecIndexCache.Clear()
 	s.synIndexCache.Clear()
 
@@ -765,6 +765,25 @@ func (s *Segment) DictAddr(field string) (uint64, error) {
 	}
 
 	return s.dictLocs[fieldIDPlus1-1], nil
+}
+
+// ThesAddr is a helper function to compute the file offset where the
+// thesaurus is stored with the specified name.
+func (s *Segment) ThesAddr(name string) (uint64, error) {
+	fieldIDPlus1, ok := s.fieldsMap[name]
+	if !ok {
+		return 0, fmt.Errorf("no such thesaurus '%s'", name)
+	}
+	thesaurusStart := s.fieldsSectionsMap[fieldIDPlus1-1][SectionSynonymIndex]
+	if thesaurusStart == 0 {
+		return 0, fmt.Errorf("no such thesaurus '%s'", name)
+	}
+	for i := 0; i < 2; i++ {
+		_, n := binary.Uvarint(s.mem[thesaurusStart : thesaurusStart+binary.MaxVarintLen64])
+		thesaurusStart += uint64(n)
+	}
+	thesLoc, _ := binary.Uvarint(s.mem[thesaurusStart : thesaurusStart+binary.MaxVarintLen64])
+	return thesLoc, nil
 }
 
 func (s *Segment) getSectionDvOffsets(fieldID int, secID uint16) (uint64, uint64, uint64, error) {

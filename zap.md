@@ -186,7 +186,7 @@ In a synonyms index, the relationship between a term and its synonyms is represe
         |                              |                                                     |   
         | +~~~~~~~~~~+~~~~~~~~+~~~~~~~~~~~~~~~~~+                                            |
     +-----> DV Start | DV End | ThesaurusOffset |                                            |   
-    |   | +~~~~~~~~~~+~~~~~~~~+~~~~~~~~~~~~~~~~~+                         +------------------+
+    |   | +~~~~~~~~~~+~~~~~~~~+~~~~~~~~~~~~~~~~~+                        +-------------------+
     |   |                                                                |
     |   |                                                                |
     |   |================================================================+- Sections Info
@@ -199,7 +199,7 @@ In a synonyms index, the relationship between a term and its synonyms is represe
 
          SI  - Synonym Index
          VL  - Vellum Length
-         VD  - Vellum Data (TERM -> OFFSET)
+         VD  - Vellum Data (Term -> Offset)
          RL  - Roaring64 Length
          NST - Number of entries in the term ID to term map
          TID - Term ID

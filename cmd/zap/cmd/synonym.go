@@ -42,7 +42,7 @@ var thesCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("error determining address: %v", err)
 		}
-		fmt.Printf("thesaurus with name starts at %d (%x)\n", pos, pos)
+		fmt.Printf("thesaurus with name %s starts at %d (%x)\n", args[1], pos, pos)
 
 		data := segment.Data()
 		vellumLen, read := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])

@@ -195,10 +195,9 @@ func (so *synonymIndexOpaque) realloc() {
 					for _, syn := range synonyms {
 						_, exists := termSynMap[syn]
 						if !exists {
+							termSynMap[syn] = sidNext
+							synTermMap[sidNext] = syn
 							sidNext++
-							sidPlus1 := sidNext
-							termSynMap[syn] = sidPlus1
-							synTermMap[sidPlus1] = syn
 						}
 					}
 				})

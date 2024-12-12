@@ -25,9 +25,9 @@ import (
 )
 
 var thesCmd = &cobra.Command{
-	Use:   "thes [path] [name]",
-	Short: "thes prints the thesaurus with the specified name",
-	Long:  `The thes command lets you print the thesaurus with the specified name.`,
+	Use:   "thesaurus [path] [name]",
+	Short: "thesaurus prints the thesaurus with the specified name",
+	Long:  `The thesaurus command lets you print the thesaurus with the specified name.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		pos := segment.FieldsIndexOffset()
 		if pos == 0 {

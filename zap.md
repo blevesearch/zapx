@@ -202,19 +202,21 @@ In a synonyms index, the relationship between a term and its synonyms is represe
          VD  - Vellum Data (Term -> Offset)
          RL  - Roaring64 Length
          NST - Number of entries in the term ID to term map
-         TID - Term ID
+         TID - Term ID (32-bit)
          TL  - Term Length
 
 ### Synonym Encoding
 
         ROARING64 BITMAP
-        
+
+        Each 64-bit entry consists of two parts: the first 32 bits represent the Term ID (TID), and the next 32 bits represent the Document Number (DN).
+
         [{~~~~~+~~~~~}{~~~~~+~~~~~}...{~~~~~+~~~~~}]
          | TID |  DN || TID |  DN |   | TID |  DN |
         [{~~~~~+~~~~~}{~~~~~+~~~~~}...{~~~~~+~~~~~}]
 
-            TID - Term ID
-            DN  - Document Number
+            TID - Term ID (32-bit)
+            DN  - Document Number (32-bit)
 
 ## Doc Values
 

@@ -34,14 +34,14 @@ func init() {
 type invertedTextIndexSection struct {
 }
 
-// This function checks whether the inverted index section should process
-// a particular field, avoiding unnecessary work if another section will handle it.
-var isFieldExcludedFromInvertedIndex = func(field index.Field) bool {
-	for _, excludeField := range invertedIndexExclusionChecks {
+// This function checks whether the inverted text index section should avoid processing
+// a particular field, preventing unnecessary work if another section will handle it.
+var isFieldExcludedFromInvertedTextIndexSection = func(field index.Field) bool {
+	for _, excludeField := range invertedTextIndexSectionExclusionChecks {
 		if excludeField(field) {
 			// atleast one section has agreed to exclude this field
-			// from inverted index processing and has agreed to process it
-			// independently
+			// from inverted text index section processing and has
+			// agreed to process it independently
 			return true
 		}
 	}
@@ -50,11 +50,11 @@ var isFieldExcludedFromInvertedIndex = func(field index.Field) bool {
 	return false
 }
 
-// List of checks to determine if a field is excluded from the inverted index section
-var invertedIndexExclusionChecks = make([]func(field index.Field) bool, 0)
+// List of checks to determine if a field is excluded from the inverted text index section
+var invertedTextIndexSectionExclusionChecks = make([]func(field index.Field) bool, 0)
 
 func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint32, field index.Field, fieldID uint16) {
-	if !isFieldExcludedFromInvertedIndex(field) {
+	if !isFieldExcludedFromInvertedTextIndexSection(field) {
 		invIndexOpaque := i.getInvertedIndexOpaque(opaque)
 		invIndexOpaque.process(field, fieldID, docNum)
 	}

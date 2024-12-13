@@ -31,7 +31,7 @@ import (
 
 func init() {
 	registerSegmentSection(SectionSynonymIndex, &synonymIndexSection{})
-	invertedIndexExclusionChecks = append(invertedIndexExclusionChecks, func(field index.Field) bool {
+	invertedTextIndexSectionExclusionChecks = append(invertedTextIndexSectionExclusionChecks, func(field index.Field) bool {
 		_, ok := field.(index.SynonymField)
 		return ok
 	})

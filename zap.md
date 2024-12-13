@@ -209,7 +209,8 @@ In a synonyms index, the relationship between a term and its synonyms is represe
 
         ROARING64 BITMAP
 
-        Each 64-bit entry consists of two parts: the first 32 bits represent the Term ID (TID), and the next 32 bits represent the Document Number (DN).
+        Each 64-bit entry consists of two parts: the first 32 bits represent the Term ID (TID),
+        and the next 32 bits represent the Document Number (DN).
 
         [{~~~~~+~~~~~}{~~~~~+~~~~~}...{~~~~~+~~~~~}]
          | TID |  DN || TID |  DN |   | TID |  DN |

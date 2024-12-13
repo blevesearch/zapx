@@ -24,7 +24,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var thesCmd = &cobra.Command{
+var thesaurusCmd = &cobra.Command{
 	Use:   "thesaurus [path] [name]",
 	Short: "thesaurus prints the thesaurus with the specified name",
 	Long:  `The thesaurus command lets you print the thesaurus with the specified name.`,
@@ -38,7 +38,7 @@ var thesCmd = &cobra.Command{
 			return fmt.Errorf("must specify thesaurus name")
 		}
 
-		pos, err := segment.ThesAddr(args[1])
+		pos, err := segment.ThesaurusAddr(args[1])
 		if err != nil {
 			return fmt.Errorf("error determining address: %v", err)
 		}
@@ -136,5 +136,5 @@ func decodeSynonym(synonymCode uint64) (synonymID uint32, docID uint32) {
 }
 
 func init() {
-	RootCmd.AddCommand(thesCmd)
+	RootCmd.AddCommand(thesaurusCmd)
 }

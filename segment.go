@@ -479,22 +479,14 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 }
 
 // Thesaurus returns the thesaurus with the specified name, or an empty thesaurus if not found.
-func (s *SegmentBase) Thesaurus(name string) (segment.Thesaurus, error) {
-	thesaurus, err := s.thesaurus(name)
-	if err == nil && thesaurus == nil {
-		return emptyThesaurus, nil
-	}
-	return thesaurus, err
-}
-
-func (sb *SegmentBase) thesaurus(name string) (rv *Thesaurus, err error) {
+func (sb *SegmentBase) Thesaurus(name string) (segment.Thesaurus, error) {
 	fieldIDPlus1 := sb.fieldsMap[name]
 	if fieldIDPlus1 == 0 {
 		return nil, nil
 	}
 	thesaurusStart := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionSynonymIndex]
 	if thesaurusStart > 0 {
-		rv = &Thesaurus{
+		rv := &Thesaurus{
 			sb:      sb,
 			name:    name,
 			fieldID: fieldIDPlus1 - 1,
@@ -515,8 +507,9 @@ func (sb *SegmentBase) thesaurus(name string) (rv *Thesaurus, err error) {
 		if err != nil {
 			return nil, fmt.Errorf("thesaurus name %s vellum reader err: %v", name, err)
 		}
+		return rv, nil
 	}
-	return rv, nil
+	return emptyThesaurus, nil
 }
 
 // visitDocumentCtx holds data structures that are reusable across
@@ -767,9 +760,9 @@ func (s *Segment) DictAddr(field string) (uint64, error) {
 	return s.dictLocs[fieldIDPlus1-1], nil
 }
 
-// ThesAddr is a helper function to compute the file offset where the
+// ThesaurusAddr is a helper function to compute the file offset where the
 // thesaurus is stored with the specified name.
-func (s *Segment) ThesAddr(name string) (uint64, error) {
+func (s *Segment) ThesaurusAddr(name string) (uint64, error) {
 	fieldIDPlus1, ok := s.fieldsMap[name]
 	if !ok {
 		return 0, fmt.Errorf("no such thesaurus '%s'", name)

@@ -38,6 +38,7 @@ func init() {
 	reflectStaticSizeSynonym = int(reflect.TypeOf(s).Size())
 }
 
+// SynonymsList represents a list of synonyms for a term, stored in a Roaring64 bitmap.
 type SynonymsList struct {
 	sb             *SegmentBase
 	synonymsOffset uint64
@@ -49,7 +50,7 @@ type SynonymsList struct {
 	buffer *bytes.Reader
 }
 
-// represents an immutable, empty synonyms list
+// immutable, empty synonyms list
 var emptySynonymsList = &SynonymsList{}
 
 func (p *SynonymsList) Size() int {
@@ -62,7 +63,8 @@ func (p *SynonymsList) Size() int {
 	return sizeInBytes
 }
 
-// Iterator returns an iterator for this postings list
+// Iterator creates and returns a SynonymsIterator for the SynonymsList.
+// If the synonyms bitmap is nil, it returns an empty iterator.
 func (s *SynonymsList) Iterator(prealloc segment.SynonymsIterator) segment.SynonymsIterator {
 	if s.synonyms == nil {
 		return emptySynonymsIterator
@@ -80,6 +82,8 @@ func (s *SynonymsList) Iterator(prealloc segment.SynonymsIterator) segment.Synon
 	return s.iterator(preallocSI)
 }
 
+// iterator initializes a SynonymsIterator for the SynonymsList and returns it.
+// If a preallocated iterator is provided, it resets and reuses it; otherwise, it creates a new one.
 func (s *SynonymsList) iterator(rv *SynonymsIterator) *SynonymsIterator {
 	if rv == nil {
 		rv = &SynonymsIterator{}
@@ -94,6 +98,8 @@ func (s *SynonymsList) iterator(rv *SynonymsIterator) *SynonymsIterator {
 	return rv
 }
 
+// read initializes a SynonymsList by reading data from the given synonymsOffset in the Thesaurus.
+// It reads and parses the Roaring64 bitmap that represents the synonyms.
 func (rv *SynonymsList) read(synonymsOffset uint64, t *Thesaurus) error {
 	rv.synonymsOffset = synonymsOffset
 
@@ -121,7 +127,8 @@ func (rv *SynonymsList) read(synonymsOffset uint64, t *Thesaurus) error {
 }
 
 // -----------------------------------------------------------------------------
-// SynonymsIterator provides a way to iterate through the synonyms list
+
+// SynonymsIterator provides a way to iterate through the synonyms list.
 type SynonymsIterator struct {
 	synonyms *SynonymsList
 	except   *roaring.Bitmap
@@ -133,6 +140,7 @@ type SynonymsIterator struct {
 	nextSyn      Synonym
 }
 
+// immutable, empty synonyms iterator
 var emptySynonymsIterator = &SynonymsIterator{}
 
 func (i *SynonymsIterator) Size() int {
@@ -142,10 +150,13 @@ func (i *SynonymsIterator) Size() int {
 	return sizeInBytes
 }
 
+// Next returns the next Synonym in the iteration or an error if the end is reached.
 func (i *SynonymsIterator) Next() (segment.Synonym, error) {
 	return i.next()
 }
 
+// next retrieves the next synonym from the iterator, populates the nextSyn field,
+// and returns it. If no valid synonym is found, it returns an error.
 func (i *SynonymsIterator) next() (segment.Synonym, error) {
 	synID, docNum, exists, err := i.nextSynonym()
 	if err != nil || !exists {
@@ -165,12 +176,14 @@ func (i *SynonymsIterator) next() (segment.Synonym, error) {
 	i.nextSyn = Synonym{} // clear the struct
 	rv := &i.nextSyn
 	rv.term = string(term)
-	rv.synID = synID
 	rv.docNum = docNum
 
 	return rv, nil
 }
 
+// nextSynonym decodes the next synonym from the roaring bitmap iterator,
+// ensuring it is not in the "except" set. Returns the synonymID, docNum,
+// and a flag indicating success.
 func (i *SynonymsIterator) nextSynonym() (uint32, uint32, bool, error) {
 	// If no synonyms are available, return early
 	if i.Actual == nil || i.synonyms == nil || i.synonyms == emptySynonymsList {
@@ -196,12 +209,13 @@ func (i *SynonymsIterator) nextSynonym() (uint32, uint32, bool, error) {
 	return 0, 0, false, nil
 }
 
+// Synonym represents a single synonym, containing the term, synonymID, and document number.
 type Synonym struct {
 	term   string
-	synID  uint32
 	docNum uint32
 }
 
+// Size returns the memory size of the Synonym, including the length of the term string.
 func (p *Synonym) Size() int {
 	sizeInBytes := reflectStaticSizeSynonym + SizeOfPtr +
 		len(p.term)
@@ -209,14 +223,17 @@ func (p *Synonym) Size() int {
 	return sizeInBytes
 }
 
+// Term returns the term of the Synonym.
 func (s *Synonym) Term() string {
 	return s.term
 }
 
+// Number returns the document number of the Synonym.
 func (s *Synonym) Number() uint32 {
 	return s.docNum
 }
 
+// decodeSynonym decodes a synonymCode into its synonymID and document ID components.
 func decodeSynonym(synonymCode uint64) (synonymID uint32, docID uint32) {
 	return uint32(synonymCode >> 32), uint32(synonymCode)
 }

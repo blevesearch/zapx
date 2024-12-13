@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"math"
 	"sort"
 
@@ -49,7 +48,7 @@ type synonymIndexOpaque struct {
 	// the index opaque using the key "fieldsMap"
 	// used for ensuring accurate mapping between fieldID and
 	// thesaurusID
-	//  name -> field id
+	//  name -> field id + 1
 	FieldsMap map[string]uint16
 
 	// ThesaurusMap adds 1 to thesaurus id to avoid zero value issues
@@ -92,6 +91,7 @@ type synonymIndexOpaque struct {
 	thesaurusAddrs map[int]int
 }
 
+// Set the fieldsMap and results in the synonym index opaque before the section processes a synonym field.
 func (so *synonymIndexOpaque) Set(key string, value interface{}) {
 	switch key {
 	case "results":
@@ -101,12 +101,13 @@ func (so *synonymIndexOpaque) Set(key string, value interface{}) {
 	}
 }
 
+// Reset the synonym index opaque after a batch of documents have been processed into a segment.
 func (so *synonymIndexOpaque) Reset() (err error) {
 	// cleanup stuff over here
 	so.results = nil
 	so.init = false
 	so.ThesaurusMap = nil
-	so.ThesaurusInv = nil
+	so.ThesaurusInv = so.ThesaurusInv[:0]
 	for i := range so.Thesauri {
 		so.Thesauri[i] = nil
 	}
@@ -124,21 +125,25 @@ func (so *synonymIndexOpaque) Reset() (err error) {
 		err = so.builder.Reset(&so.builderBuf)
 	}
 	so.FieldIDtoThesaurusID = nil
-	so.SynonymTermToID = nil
-	so.SynonymIDtoTerm = nil
+	so.SynonymTermToID = so.SynonymTermToID[:0]
+	so.SynonymIDtoTerm = so.SynonymIDtoTerm[:0]
 
 	so.tmp0 = so.tmp0[:0]
 	return err
 }
 
 func (so *synonymIndexOpaque) process(field index.SynonymField, fieldID uint16, docNum uint32) {
+	// if this is the first time we are processing a synonym field in this batch
+	// we need to allocate memory for the thesauri and related data structures
 	if !so.init && so.results != nil {
 		so.realloc()
 		so.init = true
 	}
 
+	// get the thesaurus id for this field
 	tid := so.FieldIDtoThesaurusID[fieldID]
 
+	// get the thesaurus for this field
 	thesaurus := so.Thesauri[tid]
 
 	termSynMap := so.SynonymTermToID[tid]
@@ -155,12 +160,16 @@ func (so *synonymIndexOpaque) process(field index.SynonymField, fieldID uint16, 
 	})
 }
 
+// a one-time call to allocate memory for the thesauri and synonyms which takes
+// all the documents in the result batch and the fieldsMap and predetermines the
+// size of the data structures in the synonymIndexOpaque
 func (so *synonymIndexOpaque) realloc() {
 	var pidNext int
 	var sidNext uint32
 	so.ThesaurusMap = map[string]uint16{}
 	so.FieldIDtoThesaurusID = map[uint16]int{}
 
+	// count the number of unique thesauri from the batch of documents
 	for _, result := range so.results {
 		if synDoc, ok := result.(index.SynonymDocument); ok {
 			synDoc.VisitSynonymFields(func(synField index.SynonymField) {
@@ -174,7 +183,7 @@ func (so *synonymIndexOpaque) realloc() {
 		if synDoc, ok := result.(index.SynonymDocument); ok {
 			synDoc.VisitSynonymFields(func(synField index.SynonymField) {
 				fieldIDPlus1 := so.FieldsMap[synField.Name()]
-				thesaurusID := uint16(so.getOrDefineThesaurus(fieldIDPlus1-1, synField.Name()))
+				thesaurusID := so.getOrDefineThesaurus(fieldIDPlus1-1, synField.Name())
 
 				thesaurus := so.Thesauri[thesaurusID]
 				thesaurusKeys := so.ThesaurusKeys[thesaurusID]
@@ -183,6 +192,7 @@ func (so *synonymIndexOpaque) realloc() {
 
 				termSynMap := so.SynonymTermToID[thesaurusID]
 
+				// iterate over all the term-synonyms pair from the field
 				synField.IterateSynonyms(func(term string, synonyms []string) {
 					_, exists := thesaurus[term]
 					if !exists {
@@ -226,9 +236,11 @@ func (so *synonymIndexOpaque) realloc() {
 	}
 }
 
+// getOrDefineThesaurus returns the thesaurus id for the given field id and thesaurus name.
 func (so *synonymIndexOpaque) getOrDefineThesaurus(fieldID uint16, thesaurusName string) int {
 	thesaurusIDPlus1, exists := so.ThesaurusMap[thesaurusName]
 	if !exists {
+		// need to create a new thesaurusID for this thesaurusName and
 		thesaurusIDPlus1 = uint16(len(so.ThesaurusInv) + 1)
 		so.ThesaurusMap[thesaurusName] = thesaurusIDPlus1
 		so.ThesaurusInv = append(so.ThesaurusInv, thesaurusName)
@@ -239,6 +251,7 @@ func (so *synonymIndexOpaque) getOrDefineThesaurus(fieldID uint16, thesaurusName
 
 		so.SynonymTermToID = append(so.SynonymTermToID, make(map[string]uint32))
 
+		// map the fieldID to the thesaurusID
 		so.FieldIDtoThesaurusID[fieldID] = int(thesaurusIDPlus1 - 1)
 
 		n := len(so.ThesaurusKeys)
@@ -253,6 +266,7 @@ func (so *synonymIndexOpaque) getOrDefineThesaurus(fieldID uint16, thesaurusName
 	return int(thesaurusIDPlus1 - 1)
 }
 
+// grabBuf returns a reusable buffer of the given size from the synonymIndexOpaque.
 func (so *synonymIndexOpaque) grabBuf(size int) []byte {
 	buf := so.tmp0
 	if cap(buf) < size {
@@ -369,6 +383,9 @@ func (s *synonymIndexSection) getSynonymIndexOpaque(opaque map[int]resetable) *s
 	return opaque[SectionSynonymIndex].(*synonymIndexOpaque)
 }
 
+// Implementations of the Section interface for the synonym index section.
+// InitOpaque initializes the synonym index opaque, which sets the FieldsMap and
+// results in the opaque before the section processes a synonym field.
 func (s *synonymIndexSection) InitOpaque(args map[string]interface{}) resetable {
 	rv := &synonymIndexOpaque{
 		thesaurusAddrs: map[int]int{},
@@ -380,6 +397,8 @@ func (s *synonymIndexSection) InitOpaque(args map[string]interface{}) resetable 
 	return rv
 }
 
+// Process processes a synonym field by adding the synonyms to the thesaurus
+// pointed to by the fieldID, implements the Process API for the synonym index section.
 func (s *synonymIndexSection) Process(opaque map[int]resetable, docNum uint32, field index.Field, fieldID uint16) {
 	if fieldID == math.MaxUint16 {
 		return
@@ -390,12 +409,19 @@ func (s *synonymIndexSection) Process(opaque map[int]resetable, docNum uint32, f
 	}
 }
 
+// Persist serializes and writes the thesauri processed to the writer, along
+// with the synonym postings lists, and the synonym term map. Implements the
+// Persist API for the synonym index section.
 func (s *synonymIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
 	synIndexOpaque := s.getSynonymIndexOpaque(opaque)
 	_, err = synIndexOpaque.writeThesauri(w)
 	return 0, err
 }
 
+// AddrForField returns the file offset of the thesaurus for the given fieldID,
+// it uses the FieldIDtoThesaurusID map to translate the fieldID to the thesaurusID,
+// and returns the corresponding thesaurus offset from the thesaurusAddrs map.
+// Implements the AddrForField API for the synonym index section.
 func (s *synonymIndexSection) AddrForField(opaque map[int]resetable, fieldID int) int {
 	synIndexOpaque := s.getSynonymIndexOpaque(opaque)
 	tid, exists := synIndexOpaque.FieldIDtoThesaurusID[uint16(fieldID)]
@@ -405,6 +431,10 @@ func (s *synonymIndexSection) AddrForField(opaque map[int]resetable, fieldID int
 	return synIndexOpaque.thesaurusAddrs[tid]
 }
 
+// Merge merges the thesauri, synonym postings lists and synonym term maps from
+// the segments into a single thesaurus and serializes and writes the merged
+// thesaurus and associated data to the writer. Implements the Merge API for the
+// synonym index section.
 func (s *synonymIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
 	drops []*roaring.Bitmap, fieldsInv []string, newDocNumsIn [][]uint64,
 	w *CountHashWriter, closeCh chan struct{}) error {
@@ -421,10 +451,31 @@ func (s *synonymIndexSection) Merge(opaque map[int]resetable, segments []*Segmen
 
 // -----------------------------------------------------------------------------
 
+// encodeSynonym encodes a synonymID and a docID into a single uint64 value.
+// The encoding format splits the 64 bits as follows:
+//
+//	63        32 31         0
+//	+-----------+----------+
+//	| synonymID |  docNum  |
+//	+-----------+----------+
+//
+// The upper 32 bits (63-32) store the synonymID, and the lower 32 bits (31-0) store the docID.
+//
+// Parameters:
+//
+//	synonymID - A 32-bit unsigned integer representing the ID of the synonym.
+//	docID     - A 32-bit unsigned integer representing the document ID.
+//
+// Returns:
+//
+//	A 64-bit unsigned integer that combines the synonymID and docID.
 func encodeSynonym(synonymID uint32, docID uint32) uint64 {
 	return uint64(synonymID)<<32 | uint64(docID)
 }
 
+// writeSynonyms serilizes and writes the synonym postings list to the writer, by first
+// serializing the postings list to a byte slice and then writing the length
+// of the byte slice followed by the byte slice itself.
 func writeSynonyms(postings *roaring64.Bitmap, w *CountHashWriter, bufMaxVarintLen64 []byte) (
 	offset uint64, err error) {
 	termCardinality := postings.GetCardinality()
@@ -434,7 +485,18 @@ func writeSynonyms(postings *roaring64.Bitmap, w *CountHashWriter, bufMaxVarintL
 
 	postingsOffset := uint64(w.Count())
 
-	err = writeRoaringSynonymWithLen(postings, w, bufMaxVarintLen64)
+	buf, err := postings.ToBytes()
+	if err != nil {
+		return 0, err
+	}
+	// write out the length
+	n := binary.PutUvarint(bufMaxVarintLen64, uint64(len(buf)))
+	_, err = w.Write(bufMaxVarintLen64[:n])
+	if err != nil {
+		return 0, err
+	}
+	// write out the roaring bytes
+	_, err = w.Write(buf)
 	if err != nil {
 		return 0, err
 	}
@@ -442,6 +504,9 @@ func writeSynonyms(postings *roaring64.Bitmap, w *CountHashWriter, bufMaxVarintL
 	return postingsOffset, nil
 }
 
+// writeSynTermMap serializes and writes the synonym term map to the writer, by first
+// writing the length of the map followed by the map entries, where each entry
+// consists of the synonym ID, the length of the term, and the term itself.
 func writeSynTermMap(synTermMap map[uint32]string, w *CountHashWriter, bufMaxVarintLen64 []byte) error {
 	if len(synTermMap) == 0 {
 		return nil
@@ -469,31 +534,6 @@ func writeSynTermMap(synTermMap map[uint32]string, w *CountHashWriter, bufMaxVar
 		if err != nil {
 			return err
 		}
-	}
-
-	return nil
-}
-
-// writes out the length of the roaring bitmap in bytes as varint
-// then writes out the roaring bitmap itself
-func writeRoaringSynonymWithLen(r *roaring64.Bitmap, w io.Writer,
-	reuseBufVarint []byte) error {
-	buf, err := r.ToBytes()
-	if err != nil {
-		return err
-	}
-
-	// write out the length
-	n := binary.PutUvarint(reuseBufVarint, uint64(len(buf)))
-	_, err = w.Write(reuseBufVarint[:n])
-	if err != nil {
-		return err
-	}
-
-	// write out the roaring bytes
-	_, err = w.Write(buf)
-	if err != nil {
-		return err
 	}
 
 	return nil
@@ -626,7 +666,27 @@ func mergeAndPersistSynonymSection(segments []*SegmentBase, dropsIn []*roaring.B
 			}
 			synItr = synonyms.iterator(synItr)
 
-			newSynonymID, err = mergeSynonyms(synItr, newDocNums[itrI], newRoaring, synTermMap, termSynMap, newSynonymID)
+			var next seg.Synonym
+			next, err = synItr.Next()
+			for next != nil && err == nil {
+				synNewDocNum := newDocNums[itrI][next.Number()]
+				if synNewDocNum == docDropped {
+					return nil, nil, fmt.Errorf("see hit with dropped docNum")
+				}
+				nextTerm := next.Term()
+				var synNewID uint32
+				if synID, ok := termSynMap[nextTerm]; ok {
+					synNewID = synID
+				} else {
+					synNewID = newSynonymID
+					termSynMap[nextTerm] = newSynonymID
+					synTermMap[newSynonymID] = nextTerm
+					newSynonymID++
+				}
+				synNewCode := encodeSynonym(synNewID, uint32(synNewDocNum))
+				newRoaring.Add(synNewCode)
+				next, err = synItr.Next()
+			}
 			if err != nil {
 				return nil, nil, err
 			}
@@ -687,6 +747,9 @@ func mergeAndPersistSynonymSection(segments []*SegmentBase, dropsIn []*roaring.B
 
 		thesStart := w.Count()
 
+		// the synonym index section does not have any doc value data
+		// so we write two special entries to indicate that
+		// the field is not uninverted and the thesaurus offset
 		n = binary.PutUvarint(bufMaxVarintLen64, fieldNotUninverted)
 		_, err = w.Write(bufMaxVarintLen64[:n])
 		if err != nil {
@@ -699,6 +762,7 @@ func mergeAndPersistSynonymSection(segments []*SegmentBase, dropsIn []*roaring.B
 			return nil, nil, err
 		}
 
+		// write out the thesaurus offset from which the vellum data starts
 		n = binary.PutUvarint(bufMaxVarintLen64, thesOffset)
 		_, err = w.Write(bufMaxVarintLen64[:n])
 		if err != nil {
@@ -712,29 +776,4 @@ func mergeAndPersistSynonymSection(segments []*SegmentBase, dropsIn []*roaring.B
 	}
 
 	return thesaurusAddrs, fieldIDtoThesaurusID, nil
-}
-
-func mergeSynonyms(synItr *SynonymsIterator, newDocNums []uint64, newRoaring *roaring64.Bitmap,
-	synTermMap map[uint32]string, termSynMap map[string]uint32, newSynonymID uint32) (uint32, error) {
-	next, err := synItr.Next()
-	for next != nil && err == nil {
-		synNewDocNum := newDocNums[next.Number()]
-		if synNewDocNum == docDropped {
-			return 0, fmt.Errorf("see hit with dropped docNum")
-		}
-		nextTerm := next.Term()
-		var synNewID uint32
-		if synID, ok := termSynMap[nextTerm]; ok {
-			synNewID = synID
-		} else {
-			synNewID = newSynonymID
-			termSynMap[nextTerm] = newSynonymID
-			synTermMap[newSynonymID] = nextTerm
-			newSynonymID++
-		}
-		synNewCode := encodeSynonym(synNewID, uint32(synNewDocNum))
-		newRoaring.Add(synNewCode)
-		next, err = synItr.Next()
-	}
-	return newSynonymID, nil
 }

@@ -24,24 +24,28 @@ import (
 
 func newSynonymIndexCache() *synonymIndexCache {
 	return &synonymIndexCache{
-		cache:   make(map[uint16]*synonymCacheEntry),
-		closeCh: make(chan struct{}),
+		cache: make(map[uint16]*synonymCacheEntry),
 	}
 }
 
 type synonymIndexCache struct {
-	closeCh chan struct{}
-	m       sync.RWMutex
+	m sync.RWMutex
 
 	cache map[uint16]*synonymCacheEntry
 }
 
+// Clear clears the synonym cache which would mean tha the termID to term map would no longer be available.
 func (sc *synonymIndexCache) Clear() {
 	sc.m.Lock()
 	sc.cache = nil
 	sc.m.Unlock()
 }
 
+// loadOrCreate loads the synonym index cache for the specified fieldID if it is already present,
+// or creates it if not. The synonym index cache for a fieldID consists of a tuple:
+// - A Vellum FST (Finite State Transducer) representing the thesaurus.
+// - A map associating synonym IDs to their corresponding terms.
+// This function returns the loaded or newly created tuple (FST and map).
 func (sc *synonymIndexCache) loadOrCreate(fieldID uint16, mem []byte) (*vellum.FST, map[uint32][]byte, error) {
 	sc.m.RLock()
 	entry, ok := sc.cache[fieldID]
@@ -63,6 +67,7 @@ func (sc *synonymIndexCache) loadOrCreate(fieldID uint16, mem []byte) (*vellum.F
 	return sc.createAndCacheLOCKED(fieldID, mem)
 }
 
+// createAndCacheLOCKED creates the synonym index cache for the specified fieldID and caches it.
 func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte) (*vellum.FST, map[uint32][]byte, error) {
 	var pos uint64
 	vellumLen, read := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
@@ -98,6 +103,7 @@ func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte) (*
 	return fst, synTermMap, nil
 }
 
+// insertLOCKED inserts the vellum FST and the map of synonymID to term into the cache for the specified fieldID.
 func (sc *synonymIndexCache) insertLOCKED(fieldID uint16, fst *vellum.FST, synTermMap map[uint32][]byte) {
 	_, ok := sc.cache[fieldID]
 	if !ok {
@@ -108,6 +114,8 @@ func (sc *synonymIndexCache) insertLOCKED(fieldID uint16, fst *vellum.FST, synTe
 	}
 }
 
+// synonymCacheEntry is a tuple of the vellum FST and the map of synonymID to term,
+// and is the value stored in the synonym cache, for a given fieldID.
 type synonymCacheEntry struct {
 	fst        *vellum.FST
 	synTermMap map[uint32][]byte

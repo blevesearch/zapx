@@ -479,14 +479,22 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 }
 
 // Thesaurus returns the thesaurus with the specified name, or an empty thesaurus if not found.
-func (sb *SegmentBase) Thesaurus(name string) (segment.Thesaurus, error) {
+func (s *SegmentBase) Thesaurus(name string) (segment.Thesaurus, error) {
+	thesaurus, err := s.thesaurus(name)
+	if err == nil && thesaurus == nil {
+		return emptyThesaurus, nil
+	}
+	return thesaurus, err
+}
+
+func (sb *SegmentBase) thesaurus(name string) (rv *Thesaurus, err error) {
 	fieldIDPlus1 := sb.fieldsMap[name]
 	if fieldIDPlus1 == 0 {
 		return nil, nil
 	}
 	thesaurusStart := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionSynonymIndex]
 	if thesaurusStart > 0 {
-		rv := &Thesaurus{
+		rv = &Thesaurus{
 			sb:      sb,
 			name:    name,
 			fieldID: fieldIDPlus1 - 1,
@@ -507,9 +515,8 @@ func (sb *SegmentBase) Thesaurus(name string) (segment.Thesaurus, error) {
 		if err != nil {
 			return nil, fmt.Errorf("thesaurus name %s vellum reader err: %v", name, err)
 		}
-		return rv, nil
 	}
-	return emptyThesaurus, nil
+	return rv, nil
 }
 
 // visitDocumentCtx holds data structures that are reusable across

@@ -212,9 +212,9 @@ In a synonyms index, the relationship between a term and its synonyms is represe
         Each 64-bit entry consists of two parts: the first 32 bits represent the Term ID (TID),
         and the next 32 bits represent the Document Number (DN).
 
-        [{~~~~~+~~~~~}{~~~~~+~~~~~}...{~~~~~+~~~~~}]
-         | TID |  DN || TID |  DN |   | TID |  DN |
-        [{~~~~~+~~~~~}{~~~~~+~~~~~}...{~~~~~+~~~~~}]
+        [{~~~~~+~~~~}{~~~~~+~~~~}...{~~~~~+~~~~}]
+         | TID | DN || TID | DN |   | TID | DN |
+        [{~~~~~+~~~~}{~~~~~+~~~~}...{~~~~~+~~~~}]
 
             TID - Term ID (32-bit)
             DN  - Document Number (32-bit)

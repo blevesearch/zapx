@@ -169,7 +169,13 @@ func (s *Segment) Size() int {
 	// do not include the mmap'ed part
 	return sizeInBytes + s.SegmentBase.Size() - cap(s.mem)
 }
-
+func (sb *SegmentBase) RefCount() int64 { return 0 }
+func (s *Segment) RefCount() int64 {
+	s.m.Lock()
+	rv := s.refs
+	s.m.Unlock()
+	return rv
+}
 func (s *Segment) AddRef() {
 	s.m.Lock()
 	s.refs++

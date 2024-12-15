@@ -184,7 +184,7 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 		rv.buf = buf
 	}
 
-	rv.postings = p
+	rv.Postings = p
 	rv.includeFreqNorm = includeFreq || includeNorm || includeLocs
 	rv.includeLocs = includeLocs
 
@@ -296,7 +296,7 @@ func (rv *PostingsList) init1Hit(fstVal uint64) error {
 
 // PostingsIterator provides a way to iterate through the postings list
 type PostingsIterator struct {
-	postings *PostingsList
+	Postings *PostingsList
 	all      roaring.IntPeekable
 	Actual   roaring.IntPeekable
 	ActualBM *roaring.Bitmap
@@ -436,7 +436,7 @@ func (i *PostingsIterator) readLocation(l *Location) error {
 		return fmt.Errorf("error reading location num array pos: %v", err)
 	}
 
-	l.field = i.postings.sb.fieldsInv[fieldID]
+	l.field = i.Postings.sb.fieldsInv[fieldID]
 	l.pos = pos
 	l.start = start
 	l.end = end
@@ -562,12 +562,12 @@ func (i *PostingsIterator) nextDocNumAtOrAfter(atOrAfter uint64) (uint64, bool, 
 		return 0, false, nil
 	}
 
-	if i.postings == nil || i.postings == emptyPostingsList {
+	if i.Postings == nil || i.Postings == emptyPostingsList {
 		// couldn't find anything
 		return 0, false, nil
 	}
 
-	if i.postings.postings == i.ActualBM {
+	if i.Postings.postings == i.ActualBM {
 		return i.nextDocNumAtOrAfterClean(atOrAfter)
 	}
 
@@ -580,10 +580,10 @@ func (i *PostingsIterator) nextDocNumAtOrAfter(atOrAfter uint64) (uint64, bool, 
 
 	n := i.Actual.Next()
 	allN := i.all.Next()
-	nChunk := n / uint32(i.postings.chunkSize)
+	nChunk := n / uint32(i.Postings.chunkSize)
 
 	// when allN becomes >= to here, then allN is in the same chunk as nChunk.
-	allNReachesNChunk := nChunk * uint32(i.postings.chunkSize)
+	allNReachesNChunk := nChunk * uint32(i.Postings.chunkSize)
 
 	// n is the next actual hit (excluding some postings), and
 	// allN is the next hit in the full postings, and
@@ -683,13 +683,13 @@ func (i *PostingsIterator) nextDocNumAtOrAfterClean(
 	// freq-norm's needed, so maintain freq-norm chunk reader
 	sameChunkNexts := 0 // # of times we called Next() in the same chunk
 	n := i.Actual.Next()
-	nChunk := n / uint32(i.postings.chunkSize)
+	nChunk := n / uint32(i.Postings.chunkSize)
 
 	for uint64(n) < atOrAfter && i.Actual.HasNext() {
 		n = i.Actual.Next()
 
 		nChunkPrev := nChunk
-		nChunk = n / uint32(i.postings.chunkSize)
+		nChunk = n / uint32(i.Postings.chunkSize)
 
 		if nChunk != nChunkPrev {
 			sameChunkNexts = 0

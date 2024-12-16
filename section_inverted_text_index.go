@@ -36,6 +36,14 @@ type invertedTextIndexSection struct {
 
 // This function checks whether the inverted text index section should avoid processing
 // a particular field, preventing unnecessary work if another section will handle it.
+//
+// NOTE: The exclusion check is applicable only to the InvertedTextIndexSection
+// because it serves as a catch-all section. This section processes every field
+// unless explicitly excluded, similar to a "default" case in a switch statement.
+// Other sections, such as VectorSection and SynonymSection, rely on inclusion
+// checks to process only specific field types (e.g., index.VectorField or
+// index.SynonymField). Any new section added in the future must define its
+// special field type and inclusion logic explicitly.
 var isFieldExcludedFromInvertedTextIndexSection = func(field index.Field) bool {
 	for _, excludeField := range invertedTextIndexSectionExclusionChecks {
 		if excludeField(field) {

@@ -58,6 +58,7 @@ type resetable interface {
 const (
 	SectionInvertedTextIndex = iota
 	SectionFaissVectorIndex
+	SectionSynonymIndex
 )
 
 // -----------------------------------------------------------------------------

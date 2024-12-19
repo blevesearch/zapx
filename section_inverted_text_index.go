@@ -34,16 +34,35 @@ func init() {
 type invertedTextIndexSection struct {
 }
 
-// this function is something that tells the inverted index section whether to
-// process a particular field or not - since it might be processed by another
-// section this function helps in avoiding unnecessary work.
-// (only used by faiss vector section currently, will need a separate API for every
-// section we introduce in the future or a better way forward - TODO)
-var isFieldNotApplicableToInvertedTextSection func(field index.Field) bool
+// This function checks whether the inverted text index section should avoid processing
+// a particular field, preventing unnecessary work if another section will handle it.
+//
+// NOTE: The exclusion check is applicable only to the InvertedTextIndexSection
+// because it serves as a catch-all section. This section processes every field
+// unless explicitly excluded, similar to a "default" case in a switch statement.
+// Other sections, such as VectorSection and SynonymSection, rely on inclusion
+// checks to process only specific field types (e.g., index.VectorField or
+// index.SynonymField). Any new section added in the future must define its
+// special field type and inclusion logic explicitly.
+var isFieldExcludedFromInvertedTextIndexSection = func(field index.Field) bool {
+	for _, excludeField := range invertedTextIndexSectionExclusionChecks {
+		if excludeField(field) {
+			// atleast one section has agreed to exclude this field
+			// from inverted text index section processing and has
+			// agreed to process it independently
+			return true
+		}
+	}
+	// no section has excluded this field from inverted index processing
+	// so it should be processed by the inverted index section
+	return false
+}
+
+// List of checks to determine if a field is excluded from the inverted text index section
+var invertedTextIndexSectionExclusionChecks = make([]func(field index.Field) bool, 0)
 
 func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint32, field index.Field, fieldID uint16) {
-	if isFieldNotApplicableToInvertedTextSection == nil ||
-		!isFieldNotApplicableToInvertedTextSection(field) {
+	if !isFieldExcludedFromInvertedTextIndexSection(field) {
 		invIndexOpaque := i.getInvertedIndexOpaque(opaque)
 		invIndexOpaque.process(field, fieldID, docNum)
 	}

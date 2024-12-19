@@ -35,7 +35,7 @@ type Thesaurus struct {
 	fstReader *vellum.Reader
 }
 
-// // represents an immutable, empty Thesaurus
+// represents an immutable, empty Thesaurus
 var emptyThesaurus = &Thesaurus{}
 
 // SynonymsList returns the synonyms list for the specified term

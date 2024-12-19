@@ -83,11 +83,21 @@ type synonymIndexOpaque struct {
 	//  synonym postings list -> synonym bitmap
 	Synonyms []*roaring64.Bitmap
 
-	builder    *vellum.Builder
+	// A reusable vellum FST builder that will be stored in the synonym opaque
+	// and reused across multiple document batches during the persist phase
+	// of the synonym index section, the FST builder is used to build the
+	// FST for each thesaurus, which maps terms to their corresponding synonym bitmaps.
+	builder *vellum.Builder
+
+	// A reusable buffer for the vellum FST builder. It streams data written
+	// into the builder into a byte slice. The final byte slice represents
+	// the serialized vellum FST, which will be written to disk
 	builderBuf bytes.Buffer
 
+	// A reusable buffer for temporary use within the synonym index opaque
 	tmp0 []byte
 
+	// A map linking thesaurus IDs to their corresponding thesaurus' file offsets
 	thesaurusAddrs map[int]int
 }
 

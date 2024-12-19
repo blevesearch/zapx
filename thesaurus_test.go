@@ -326,7 +326,7 @@ func TestSynonymSegment(t *testing.T) {
 		}
 	}()
 
-	// // multiple segment test
+	// multiple segment test
 	numSegs := 3
 	numDocs := 5
 	segData := make([][]testSynonymDefinition, numSegs)

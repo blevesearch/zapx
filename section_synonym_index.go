@@ -145,7 +145,7 @@ func (so *synonymIndexOpaque) Reset() (err error) {
 func (so *synonymIndexOpaque) process(field index.SynonymField, fieldID uint16, docNum uint32) {
 	// if this is the first time we are processing a synonym field in this batch
 	// we need to allocate memory for the thesauri and related data structures
-	if !so.init && so.results != nil {
+	if !so.init {
 		so.realloc()
 		so.init = true
 	}
@@ -434,6 +434,9 @@ func (s *synonymIndexSection) Persist(opaque map[int]resetable, w *CountHashWrit
 // Implements the AddrForField API for the synonym index section.
 func (s *synonymIndexSection) AddrForField(opaque map[int]resetable, fieldID int) int {
 	synIndexOpaque := s.getSynonymIndexOpaque(opaque)
+	if synIndexOpaque == nil || synIndexOpaque.FieldIDtoThesaurusID == nil {
+		return 0
+	}
 	tid, exists := synIndexOpaque.FieldIDtoThesaurusID[uint16(fieldID)]
 	if !exists {
 		return 0
@@ -578,8 +581,6 @@ func mergeAndPersistSynonymSection(segments []*SegmentBase, dropsIn []*roaring.B
 
 	fieldIDtoThesaurusID := make(map[uint16]int)
 
-	synTermMap := make(map[uint32]string)
-	termSynMap := make(map[string]uint32)
 	var thesaurusID int
 	var newSynonymID uint32
 
@@ -591,12 +592,8 @@ func mergeAndPersistSynonymSection(segments []*SegmentBase, dropsIn []*roaring.B
 		thesauri = thesauri[:0]
 		itrs = itrs[:0]
 		newSynonymID = 0
-		for syn := range synTermMap {
-			delete(synTermMap, syn)
-		}
-		for syn := range termSynMap {
-			delete(termSynMap, syn)
-		}
+		synTermMap := make(map[uint32]string)
+		termSynMap := make(map[string]uint32)
 
 		for segmentI, segment := range segments {
 			// check for the closure in meantime

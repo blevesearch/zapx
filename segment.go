@@ -492,19 +492,20 @@ func (sb *SegmentBase) thesaurus(name string) (rv *Thesaurus, err error) {
 	if fieldIDPlus1 == 0 {
 		return nil, nil
 	}
-	thesaurusStart := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionSynonymIndex]
-	if thesaurusStart > 0 {
+	pos := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionSynonymIndex]
+	if pos > 0 {
 		rv = &Thesaurus{
 			sb:      sb,
 			name:    name,
 			fieldID: fieldIDPlus1 - 1,
 		}
+		// skip the doc value offsets as doc values are not supported in thesaurus
 		for i := 0; i < 2; i++ {
-			_, n := binary.Uvarint(sb.mem[thesaurusStart : thesaurusStart+binary.MaxVarintLen64])
-			thesaurusStart += uint64(n)
+			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += uint64(n)
 		}
-		thesLoc, n := binary.Uvarint(sb.mem[thesaurusStart : thesaurusStart+binary.MaxVarintLen64])
-		thesaurusStart += uint64(n)
+		thesLoc, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += uint64(n)
 		fst, synTermMap, err := sb.synIndexCache.loadOrCreate(rv.fieldID, sb.mem[thesLoc:])
 		if err != nil {
 			return nil, fmt.Errorf("thesaurus name %s err: %v", name, err)

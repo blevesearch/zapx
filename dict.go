@@ -48,6 +48,13 @@ func (d *Dictionary) PostingsList(term []byte, except *roaring.Bitmap,
 	return d.postingsList(term, except, preallocPL)
 }
 
+func (d *Dictionary) Cardinality() int {
+	if d.fst != nil {
+		return d.fst.Len()
+	}
+	return 0
+}
+
 func (d *Dictionary) postingsList(term []byte, except *roaring.Bitmap, rv *PostingsList) (*PostingsList, error) {
 	if d.fstReader == nil {
 		if rv == nil || rv == emptyPostingsList {

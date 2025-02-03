@@ -89,6 +89,10 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 // SegmentBase is a memory only, read-only implementation of the
 // segment.Segment interface, using zap's data representation.
 type SegmentBase struct {
+	// atomic access to these variables, moved to top to correct alignment issues on ARM, 386 and 32-bit MIPS.
+	bytesRead    uint64
+	bytesWritten uint64
+
 	mem                 []byte
 	memCRC              uint32
 	chunkMode           uint32
@@ -104,10 +108,6 @@ type SegmentBase struct {
 	fieldDvReaders      []map[uint16]*docValueReader // naive chunk cache per field; section->field->reader
 	fieldDvNames        []string                     // field names cached in fieldDvReaders
 	size                uint64
-
-	// atomic access to these variables
-	bytesRead    uint64
-	bytesWritten uint64
 
 	m         sync.Mutex
 	fieldFSTs map[uint16]*vellum.FST

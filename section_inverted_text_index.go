@@ -915,6 +915,8 @@ func (i *invertedTextIndexSection) InitOpaque(args map[string]interface{}) reset
 }
 
 type invertedIndexOpaque struct {
+	bytesWritten uint64 // atomic access to this variable, moved to top to correct alignment issues on ARM, 386 and 32-bit MIPS.
+
 	results []index.Document
 
 	chunkMode uint32
@@ -967,9 +969,8 @@ type invertedIndexOpaque struct {
 
 	fieldAddrs map[int]int
 
-	bytesWritten uint64
-	fieldsSame   bool
-	numDocs      uint64
+	fieldsSame bool
+	numDocs    uint64
 }
 
 func (io *invertedIndexOpaque) Reset() (err error) {

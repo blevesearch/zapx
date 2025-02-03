@@ -531,14 +531,13 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					minEligibleCentroids := 0
 					for i, centroidID := range closestCentroidIDs {
 						eligibleDocsTillNow += int64(centroidVecIDMap[centroidID].GetCardinality())
-						if eligibleDocsTillNow >= k && i >= int(nprobe-1) {
+						minEligibleCentroids = i + 1
+						if i > int(nprobe) {
 							// Continue till at least 'K' cumulative vectors are
 							// collected or 'nprobe' clusters are examined, whichever
 							// comes later.
-							minEligibleCentroids = i + 1
 							break
 						}
-						minEligibleCentroids = i + 1
 					}
 
 					// Search the clusters specified by 'closestCentroidIDs' for

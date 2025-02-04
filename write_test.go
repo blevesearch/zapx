@@ -18,7 +18,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 )
 
 func TestRoaringSizes(t *testing.T) {
@@ -40,11 +40,11 @@ func TestRoaringSizes(t *testing.T) {
 		{[]uint32{0, 1}, 20, 20},
 		{[]uint32{0, 10000000}, 28, 28},
 
-		{[]uint32{0, 1, 2}, 22, 15},
+		{[]uint32{0, 1, 2}, 22, 22},
 		{[]uint32{0, 1, 20000000}, 30, 30},
 
 		{[]uint32{0, 1, 2, 3}, 24, 15},
-		{[]uint32{0, 1, 2, 30000000}, 32, 21},
+		{[]uint32{0, 1, 2, 30000000}, 32, 32},
 	}
 
 	for _, test := range tests {

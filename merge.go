@@ -50,9 +50,6 @@ func (*ZapPlugin) Merge(segments []seg.Segment, drops []*roaring.Bitmap, path st
 		default:
 			panic(fmt.Sprintf("oops, unexpected segment type: %T", segment))
 		}
-		if s, ok := segment.(seg.UpdatableSegment); ok {
-			segmentBases[segmenti].updatedFields = s.UpdatedFields()
-		}
 	}
 	return mergeSegmentBases(segmentBases, drops, path, DefaultChunkMode, closeCh, s)
 }
@@ -114,11 +111,11 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 	return newDocNums, uint64(cr.Count()), nil
 }
 
-func filterFields(fieldsInv []string, fieldInfo map[string]*index.FieldInfo) []string {
+func filterFields(fieldsInv []string, fieldInfo map[string]*index.UpdateFieldInfo) []string {
 	rv := make([]string, 0)
 	for _, field := range fieldsInv {
 		if val, ok := fieldInfo[field]; ok {
-			if val.All {
+			if val.RemoveAll {
 				continue
 			}
 		}
@@ -379,7 +376,7 @@ type varintEncoder func(uint64) (int, error)
 
 func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 	fieldsMap map[string]uint16, fieldsInv []string, fieldsSame bool, newSegDocCount uint64,
-	w *CountHashWriter, closeCh chan struct{}, updatedFields map[string]*index.FieldInfo) (uint64, [][]uint64, error) {
+	w *CountHashWriter, closeCh chan struct{}, updatedFields map[string]*index.UpdateFieldInfo) (uint64, [][]uint64, error) {
 	var rv [][]uint64 // The remapped or newDocNums for each segment.
 
 	var newDocNum uint64
@@ -632,21 +629,18 @@ func mergeFields(segments []*SegmentBase) (bool, []string) {
 	return fieldsSame, rv
 }
 
-func mergeUpdatedFields(segments []*SegmentBase) map[string]*index.FieldInfo {
-	fieldInfo := make(map[string]*index.FieldInfo)
+func mergeUpdatedFields(segments []*SegmentBase) map[string]*index.UpdateFieldInfo {
+	fieldInfo := make(map[string]*index.UpdateFieldInfo)
 
 	for _, segment := range segments {
 		for field, info := range segment.updatedFields {
 			if _, ok := fieldInfo[field]; !ok {
-				fieldInfo[field] = &index.FieldInfo{
-					All:   info.All,
-					Index: info.Index,
-					Store: info.Store,
-				}
+				fieldInfo[field] = info
 			} else {
-				fieldInfo[field].All = fieldInfo[field].All || info.All
+				fieldInfo[field].RemoveAll = fieldInfo[field].RemoveAll || info.RemoveAll
 				fieldInfo[field].Index = fieldInfo[field].Index || info.Index
 				fieldInfo[field].Store = fieldInfo[field].Store || info.Store
+				fieldInfo[field].DocValues = fieldInfo[field].Store || info.DocValues
 			}
 		}
 

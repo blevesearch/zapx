@@ -110,7 +110,7 @@ type SegmentBase struct {
 	fieldDvNames        []string                     // field names cached in fieldDvReaders
 	size                uint64
 
-	updatedFields map[string]index.FieldInfo
+	updatedFields map[string]*index.UpdateFieldInfo
 
 	m         sync.Mutex
 	fieldFSTs map[uint16]*vellum.FST
@@ -956,6 +956,10 @@ func (s *SegmentBase) loadDvReaders() error {
 	return nil
 }
 
-func (s *SegmentBase) UpdatedFields() map[string]index.FieldInfo {
+func (s *SegmentBase) GetUpdatedFields() map[string]*index.UpdateFieldInfo {
 	return s.updatedFields
+}
+
+func (s *SegmentBase) PutUpdatedFields(updatedFields map[string]*index.UpdateFieldInfo) {
+	s.updatedFields = updatedFields
 }

@@ -82,7 +82,7 @@ func (i *invertedTextIndexSection) AddrForField(opaque map[int]resetable, fieldI
 func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
 	fieldsInv []string, fieldsMap map[string]uint16, fieldsSame bool,
 	newDocNumsIn [][]uint64, newSegDocCount uint64, chunkMode uint32,
-	updatedFields map[string]*index.FieldInfo, w *CountHashWriter,
+	updatedFields map[string]*index.UpdateFieldInfo, w *CountHashWriter,
 	closeCh chan struct{}) (map[int]int, uint64, error) {
 	var bufMaxVarintLen64 []byte = make([]byte, binary.MaxVarintLen64)
 	var bufLoc []uint64
@@ -129,13 +129,13 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 
 			var dict *Dictionary
 			var err2 error
-			if !updatedFields[fieldName].Index {
+			if info, ok := updatedFields[fieldName]; ok && info.Index {
+				dict = nil
+			} else {
 				dict, err2 = segment.dictionary(fieldName)
 				if err2 != nil {
 					return nil, 0, err2
 				}
-			} else {
-				dict = nil
 			}
 			if dict != nil && dict.fst != nil {
 				itr, err2 := dict.fst.Iterator(nil, nil)
@@ -324,7 +324,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			if isClosed(closeCh) {
 				return nil, 0, seg.ErrClosed
 			}
-			if updatedFields[fieldName].DocValues {
+			if info, ok := updatedFields[fieldName]; ok && info.DocValues {
 				continue
 			}
 			fieldIDPlus1 := uint16(segment.fieldsMap[fieldName])
@@ -914,7 +914,8 @@ func (i *invertedIndexOpaque) getOrDefineField(fieldName string) int {
 
 func (i *invertedTextIndexSection) InitOpaque(args map[string]interface{}) resetable {
 	rv := &invertedIndexOpaque{
-		fieldAddrs: map[int]int{},
+		fieldAddrs:    map[int]int{},
+		updatedFields: make(map[string]*index.UpdateFieldInfo),
 	}
 	for k, v := range args {
 		rv.Set(k, v)
@@ -978,7 +979,7 @@ type invertedIndexOpaque struct {
 
 	fieldAddrs map[int]int
 
-	updatedFields map[string]*index.FieldInfo
+	updatedFields map[string]*index.UpdateFieldInfo
 
 	fieldsSame bool
 	numDocs    uint64
@@ -1047,6 +1048,6 @@ func (i *invertedIndexOpaque) Set(key string, val interface{}) {
 	case "numDocs":
 		i.numDocs = val.(uint64)
 	case "updatedFields":
-		i.updatedFields = val.(map[string]*index.FieldInfo)
+		i.updatedFields = val.(map[string]*index.UpdateFieldInfo)
 	}
 }

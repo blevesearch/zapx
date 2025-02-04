@@ -19,7 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/blevesearch/vellum"
 	"github.com/spf13/cobra"
 )

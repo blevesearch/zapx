@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/blevesearch/vellum"
 	zap "github.com/blevesearch/zapx/v16"
 	"github.com/spf13/cobra"

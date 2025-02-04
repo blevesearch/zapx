@@ -25,7 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/v2"
 	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 	seg "github.com/blevesearch/scorch_segment_api/v2"

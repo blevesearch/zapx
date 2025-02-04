@@ -105,7 +105,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			if _, ok := sb.fieldsMap[fieldName]; !ok {
 				continue
 			}
-			if vo.updatedFields[fieldName].Index {
+			if info, ok := vo.updatedFields[fieldName]; ok && info.Index {
 				continue
 			}
 
@@ -692,7 +692,7 @@ func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) reseta
 		fieldAddrs:    make(map[uint16]int),
 		vecIDMap:      make(map[int64]*vecInfo),
 		vecFieldMap:   make(map[uint16]*indexContent),
-		updatedFields: make(map[string]*index.FieldInfo),
+		updatedFields: make(map[string]*index.UpdateFieldInfo),
 	}
 	for k, v := range args {
 		rv.Set(k, v)
@@ -731,7 +731,7 @@ type vectorIndexOpaque struct {
 	// index to be build.
 	vecFieldMap map[uint16]*indexContent
 
-	updatedFields map[string]*index.FieldInfo
+	updatedFields map[string]*index.UpdateFieldInfo
 
 	tmp0 []byte
 }
@@ -781,6 +781,6 @@ func (v *vectorIndexOpaque) Reset() (err error) {
 func (v *vectorIndexOpaque) Set(key string, val interface{}) {
 	switch key {
 	case "updatedFields":
-		v.updatedFields = val.(map[string]*index.FieldInfo)
+		v.updatedFields = val.(map[string]*index.UpdateFieldInfo)
 	}
 }

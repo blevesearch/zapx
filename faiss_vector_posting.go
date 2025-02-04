@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"math"
 	"reflect"
+	"sort"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -433,6 +434,9 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 						for _, vecID := range vecIDs {
 							vecIDsUint32 = append(vecIDsUint32, uint32(vecID))
 						}
+						sort.Slice(vecIDsUint32, func(i, j int) bool {
+							return vecIDsUint32[i] < vecIDsUint32[j]
+						})
 						centroidVecIDMap[centroidID].AddMany(vecIDsUint32)
 					}
 
@@ -498,6 +502,9 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 								vecIDsUint32 = append(vecIDsUint32, uint32(vecID))
 							}
 						}
+						sort.Slice(vecIDsUint32, func(i, j int) bool {
+							return vecIDsUint32[i] < vecIDsUint32[j]
+						})
 						eligibleVecIDsBitmap.AddMany(vecIDsUint32)
 						for centroidID, vecIDs := range centroidVecIDMap {
 							vecIDs.And(eligibleVecIDsBitmap)

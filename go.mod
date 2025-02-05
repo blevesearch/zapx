@@ -1,19 +1,21 @@
 module github.com/blevesearch/zapx/v12
 
-go 1.19
+go 1.21
+
+toolchain go1.22.6
 
 require (
-	github.com/RoaringBitmap/roaring v1.2.3
-	github.com/blevesearch/bleve_index_api v1.0.6
+	github.com/RoaringBitmap/roaring/v2 v2.4.4
+	github.com/blevesearch/bleve_index_api v1.2.1
 	github.com/blevesearch/mmap-go v1.0.4
-	github.com/blevesearch/scorch_segment_api/v2 v2.1.6
+	github.com/blevesearch/scorch_segment_api/v2 v2.3.2
 	github.com/blevesearch/vellum v1.0.10
 	github.com/golang/snappy v0.0.1
 	github.com/spf13/cobra v1.4.0
 )
 
 require (
-	github.com/bits-and-blooms/bitset v1.2.0 // indirect
+	github.com/bits-and-blooms/bitset v1.12.0 // indirect
 	github.com/inconshreveable/mousetrap v1.0.0 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect

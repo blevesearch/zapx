@@ -423,7 +423,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 						return rv, nil
 					}
 
-					// CACHE THIS!
+					// TODO: WHY NOT CACHE THIS?
 					// Converting to roaring bitmap for ease of intersect ops with
 					// the set of eligible doc IDs.
 					centroidVecIDMap := make(map[int64]*roaring.Bitmap)

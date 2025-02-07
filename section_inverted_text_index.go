@@ -127,16 +127,15 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 				return nil, 0, seg.ErrClosed
 			}
 
-			var dict *Dictionary
-			var err2 error
 			if info, ok := updatedFields[fieldName]; ok && info.Index {
-				dict = nil
-			} else {
-				dict, err2 = segment.dictionary(fieldName)
-				if err2 != nil {
-					return nil, 0, err2
-				}
+				continue
 			}
+
+			dict, err2 := segment.dictionary(fieldName)
+			if err2 != nil {
+				return nil, 0, err2
+			}
+
 			if dict != nil && dict.fst != nil {
 				itr, err2 := dict.fst.Iterator(nil, nil)
 				if err2 != nil && err2 != vellum.ErrIteratorDone {

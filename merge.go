@@ -115,7 +115,7 @@ func filterFields(fieldsInv []string, fieldInfo map[string]*index.UpdateFieldInf
 	rv := make([]string, 0)
 	for _, field := range fieldsInv {
 		if val, ok := fieldInfo[field]; ok {
-			if val.RemoveAll {
+			if val.Deleted {
 				continue
 			}
 		}
@@ -637,7 +637,7 @@ func mergeUpdatedFields(segments []*SegmentBase) map[string]*index.UpdateFieldIn
 			if _, ok := fieldInfo[field]; !ok {
 				fieldInfo[field] = info
 			} else {
-				fieldInfo[field].RemoveAll = fieldInfo[field].RemoveAll || info.RemoveAll
+				fieldInfo[field].Deleted = fieldInfo[field].Deleted || info.Deleted
 				fieldInfo[field].Index = fieldInfo[field].Index || info.Index
 				fieldInfo[field].Store = fieldInfo[field].Store || info.Store
 				fieldInfo[field].DocValues = fieldInfo[field].Store || info.DocValues

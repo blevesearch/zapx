@@ -309,6 +309,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 	segment.VectorIndex, error) {
 	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
+	var centroidVecIDMap map[int64]*roaring.Bitmap
 	var vecDocIDMap map[int64]uint32
 	var docVecIDMap map[uint32][]uint32
 	var vectorIDsToExclude []int64
@@ -409,10 +410,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					return rv, nil
 				}
 
-				// Retrieve the mapping of centroid IDs to vectors within
-				// the cluster.
-				clusterAssignment, _ := vecIndex.ObtainClusterToVecIDsFromIVFIndex()
-				if len(clusterAssignment) == 0 {
+				if len(centroidVecIDMap) == 0 {
 					// Accounting for a flat index
 					scores, ids, err := vecIndex.SearchWithIDs(qVector, k, vectorIDsToInclude, params)
 					if err != nil {
@@ -420,21 +418,6 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					}
 					addIDsToPostingsList(rv, ids, scores)
 					return rv, nil
-				}
-
-				// TODO: WHY NOT CACHE THIS?
-				// Converting to roaring bitmap for ease of intersect ops with
-				// the set of eligible doc IDs.
-				centroidVecIDMap := make(map[int64]*roaring.Bitmap)
-				for centroidID, vecIDs := range clusterAssignment {
-					if _, exists := centroidVecIDMap[centroidID]; !exists {
-						centroidVecIDMap[centroidID] = roaring.NewBitmap()
-					}
-					vecIDsUint32 := make([]uint32, len(vecIDs))
-					for i, vecID := range vecIDs {
-						vecIDsUint32[i] = uint32(vecID)
-					}
-					centroidVecIDMap[centroidID].AddMany(vecIDsUint32)
 				}
 
 				// Determining which clusters, identified by centroid ID,
@@ -584,7 +567,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 		pos += n
 	}
 
-	vecIndex, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
+	vecIndex, centroidVecIDMap, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
 		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], requiresFiltering,
 			except)
 

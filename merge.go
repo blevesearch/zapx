@@ -24,7 +24,6 @@ import (
 	"sort"
 
 	"github.com/RoaringBitmap/roaring/v2"
-	"github.com/RoaringBitmap/roaring"
 	index "github.com/blevesearch/bleve_index_api"
 	seg "github.com/blevesearch/scorch_segment_api/v2"
 	"github.com/golang/snappy"

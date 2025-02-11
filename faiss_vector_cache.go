@@ -144,6 +144,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	vecDocIDMap = make(map[int64]uint32, numVecs)
 	if loadDocVecIDMap {
 		docVecIDMap = make(map[uint32][]uint32, numVecs)
+		centroidVecIDMap = make(map[int64]*roaring.Bitmap)
 	}
 	isExceptNotEmpty := except != nil && !except.IsEmpty()
 	for i := 0; i < int(numVecs); i++ {
@@ -171,26 +172,34 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		return nil, nil, nil, nil, nil, err
 	}
 
-	clusterAssignment, _ := index.ObtainClusterToVecIDsFromIVFIndex()
-	centroidVecIDMap = make(map[int64]*roaring.Bitmap)
-	for centroidID, vecIDs := range clusterAssignment {
-		if _, exists := centroidVecIDMap[centroidID]; !exists {
-			centroidVecIDMap[centroidID] = roaring.NewBitmap()
+	if loadDocVecIDMap {
+		clusterAssignment, _ := index.ObtainClusterToVecIDsFromIVFIndex()
+		for centroidID, vecIDs := range clusterAssignment {
+			if _, exists := centroidVecIDMap[centroidID]; !exists {
+				centroidVecIDMap[centroidID] = roaring.NewBitmap()
+			}
+			vecIDsUint32 := make([]uint32, len(vecIDs))
+			for i, vecID := range vecIDs {
+				vecIDsUint32[i] = uint32(vecID)
+			}
+			centroidVecIDMap[centroidID].AddMany(vecIDsUint32)
 		}
-		vecIDsUint32 := make([]uint32, len(vecIDs))
-		for i, vecID := range vecIDs {
-			vecIDsUint32[i] = uint32(vecID)
-		}
-		centroidVecIDMap[centroidID].AddMany(vecIDsUint32)
 	}
 
-	vc.insertLOCKED(fieldID, index, vecDocIDMap, loadDocVecIDMap, docVecIDMap)
+	cacheEntryStub := &cacheEntryReqs{
+		index:       index,
+		vecDocIDMap: vecDocIDMap,
+	}
+	if loadDocVecIDMap {
+		cacheEntryStub.loadDocVecIDMap = loadDocVecIDMap
+		cacheEntryStub.docVecIDMap = docVecIDMap
+		cacheEntryStub.clusterAssignment = centroidVecIDMap
+	}
+	vc.insertLOCKED(fieldID, cacheEntryStub)
 	return index, centroidVecIDMap, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
 }
 
-func (vc *vectorIndexCache) insertLOCKED(fieldIDPlus1 uint16,
-	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, loadDocVecIDMap bool,
-	docVecIDMap map[uint32][]uint32) {
+func (vc *vectorIndexCache) insertLOCKED(fieldIDPlus1 uint16, stub *cacheEntryReqs) {
 	// the first time we've hit the cache, try to spawn a monitoring routine
 	// which will reconcile the moving averages for all the fields being hit
 	if len(vc.cache) == 0 {
@@ -204,8 +213,9 @@ func (vc *vectorIndexCache) insertLOCKED(fieldIDPlus1 uint16,
 		// this makes the average to be kept above the threshold value for a
 		// longer time and thereby the index to be resident in the cache
 		// for longer time.
-		vc.cache[fieldIDPlus1] = createCacheEntry(index, vecDocIDMap,
-			loadDocVecIDMap, docVecIDMap, 0.4)
+		stub.alpha = 0.4
+
+		vc.cache[fieldIDPlus1] = createCacheEntry(stub)
 	}
 }
 
@@ -298,19 +308,30 @@ func (e *ewma) add(val uint64) {
 
 // -----------------------------------------------------------------------------
 
-func createCacheEntry(index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
-	loadDocVecIDMap bool, docVecIDMap map[uint32][]uint32, alpha float64) *cacheEntry {
+// required info to create a cache entry.
+type cacheEntryReqs struct {
+	alpha       float64
+	index       *faiss.IndexImpl
+	vecDocIDMap map[int64]uint32
+	// Used to indicate if the below fields are populated - will only be
+	// used for pre-filtered queries.
+	loadDocVecIDMap   bool
+	docVecIDMap       map[uint32][]uint32
+	clusterAssignment map[int64]*roaring.Bitmap
+}
+
+func createCacheEntry(stub *cacheEntryReqs) *cacheEntry {
 	ce := &cacheEntry{
-		index:       index,
-		vecDocIDMap: vecDocIDMap,
+		index:       stub.index,
+		vecDocIDMap: stub.vecDocIDMap,
 		tracker: &ewma{
-			alpha:  alpha,
+			alpha:  stub.alpha,
 			sample: 1,
 		},
 		refs: 1,
 	}
-	if loadDocVecIDMap {
-		ce.docVecIDMap = docVecIDMap
+	if stub.loadDocVecIDMap {
+		ce.docVecIDMap = stub.docVecIDMap
 	}
 	return ce
 }

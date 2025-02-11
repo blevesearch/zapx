@@ -52,21 +52,22 @@ func (vc *vectorIndexCache) Clear() {
 	vc.m.Unlock()
 }
 
-// loadDocVecIDMap indicates if a non-nil docVecIDMap should be returned.
+// loadPreFilteringConstructs indicates if pre-filtering constructs(docVecIDMap
+// and clusterAssignment) should be returned.
 // It is true when a filtered kNN query accesses the cache since it requires the
 // map. It's false otherwise.
 func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte,
-	loadDocVecIDMap bool, except *roaring.Bitmap) (
+	loadPreFilteringConstructs bool, except *roaring.Bitmap) (
 	index *faiss.IndexImpl, clusterAssignment map[int64]*roaring.Bitmap,
 	vecDocIDMap map[int64]uint32, docVecIDMap map[uint32][]uint32, vecIDsToExclude []int64, err error) {
 	index, clusterAssignment, vecDocIDMap, docVecIDMap, vecIDsToExclude, err = vc.loadFromCache(
-		fieldID, loadDocVecIDMap, mem, except)
+		fieldID, loadPreFilteringConstructs, mem, except)
 	return index, clusterAssignment, vecDocIDMap, docVecIDMap, vecIDsToExclude, err
 }
 
 // function to load the vectorDocIDMap and if required, docVecIDMap from cache
 // If not, it will create these and add them to the cache.
-func (vc *vectorIndexCache) loadFromCache(fieldID uint16, loadDocVecIDMap bool,
+func (vc *vectorIndexCache) loadFromCache(fieldID uint16, loadPreFilteringConstructs bool,
 	mem []byte, except *roaring.Bitmap) (index *faiss.IndexImpl, clusterAssignment map[int64]*roaring.Bitmap,
 	vecDocIDMap map[int64]uint32, docVecIDMap map[uint32][]uint32,
 	vecIDsToExclude []int64, err error) {
@@ -77,7 +78,7 @@ func (vc *vectorIndexCache) loadFromCache(fieldID uint16, loadDocVecIDMap bool,
 	if ok {
 		index, clusterAssignment, vecDocIDMap, docVecIDMap = entry.load()
 		vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
-		if !loadDocVecIDMap || (loadDocVecIDMap && len(entry.docVecIDMap) > 0) {
+		if !loadPreFilteringConstructs || (loadPreFilteringConstructs && len(entry.docVecIDMap) > 0) {
 			vc.m.RUnlock()
 			return index, clusterAssignment, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
 		}
@@ -96,7 +97,7 @@ func (vc *vectorIndexCache) loadFromCache(fieldID uint16, loadDocVecIDMap bool,
 	// acquiring a lock since this is modifying the cache.
 	vc.m.Lock()
 	defer vc.m.Unlock()
-	return vc.createAndCacheLOCKED(fieldID, mem, loadDocVecIDMap, except)
+	return vc.createAndCacheLOCKED(fieldID, mem, loadPreFilteringConstructs, except)
 }
 
 func (vc *vectorIndexCache) addDocVecIDMapToCacheLOCKED(ce *cacheEntry) map[uint32][]uint32 {
@@ -117,7 +118,7 @@ func (vc *vectorIndexCache) addDocVecIDMapToCacheLOCKED(ce *cacheEntry) map[uint
 
 // Rebuilding the cache on a miss.
 func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
-	loadDocVecIDMap bool, except *roaring.Bitmap) (
+	loadPreFilteringConstructs bool, except *roaring.Bitmap) (
 	index *faiss.IndexImpl, centroidVecIDMap map[int64]*roaring.Bitmap,
 	vecDocIDMap map[int64]uint32, docVecIDMap map[uint32][]uint32,
 	vecIDsToExclude []int64, err error) {
@@ -128,7 +129,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	if entry != nil {
 		index, centroidVecIDMap, vecDocIDMap, docVecIDMap = entry.load()
 		vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
-		if !loadDocVecIDMap || (loadDocVecIDMap && len(entry.docVecIDMap) > 0) {
+		if !loadPreFilteringConstructs || (loadPreFilteringConstructs && len(entry.docVecIDMap) > 0) {
 			return index, centroidVecIDMap, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
 		}
 		docVecIDMap = vc.addDocVecIDMapToCacheLOCKED(entry)
@@ -142,7 +143,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	pos += n
 
 	vecDocIDMap = make(map[int64]uint32, numVecs)
-	if loadDocVecIDMap {
+	if loadPreFilteringConstructs {
 		docVecIDMap = make(map[uint32][]uint32, numVecs)
 		centroidVecIDMap = make(map[int64]*roaring.Bitmap)
 	}
@@ -159,7 +160,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 			continue
 		}
 		vecDocIDMap[vecID] = docIDUint32
-		if loadDocVecIDMap {
+		if loadPreFilteringConstructs {
 			docVecIDMap[docIDUint32] = append(docVecIDMap[docIDUint32], uint32(vecID))
 		}
 	}
@@ -172,7 +173,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		return nil, nil, nil, nil, nil, err
 	}
 
-	if loadDocVecIDMap {
+	if loadPreFilteringConstructs {
 		clusterAssignment, _ := index.ObtainClusterToVecIDsFromIVFIndex()
 		for centroidID, vecIDs := range clusterAssignment {
 			if _, exists := centroidVecIDMap[centroidID]; !exists {
@@ -190,8 +191,8 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		index:       index,
 		vecDocIDMap: vecDocIDMap,
 	}
-	if loadDocVecIDMap {
-		cacheEntryStub.loadDocVecIDMap = loadDocVecIDMap
+	if loadPreFilteringConstructs {
+		cacheEntryStub.loadPreFilteringConstructs = loadPreFilteringConstructs
 		cacheEntryStub.docVecIDMap = docVecIDMap
 		cacheEntryStub.clusterAssignment = centroidVecIDMap
 	}
@@ -315,9 +316,9 @@ type cacheEntryReqs struct {
 	vecDocIDMap map[int64]uint32
 	// Used to indicate if the below fields are populated - will only be
 	// used for pre-filtered queries.
-	loadDocVecIDMap   bool
-	docVecIDMap       map[uint32][]uint32
-	clusterAssignment map[int64]*roaring.Bitmap
+	loadPreFilteringConstructs bool
+	docVecIDMap                map[uint32][]uint32
+	clusterAssignment          map[int64]*roaring.Bitmap
 }
 
 func createCacheEntry(stub *cacheEntryReqs) *cacheEntry {
@@ -330,7 +331,7 @@ func createCacheEntry(stub *cacheEntryReqs) *cacheEntry {
 		},
 		refs: 1,
 	}
-	if stub.loadDocVecIDMap {
+	if stub.loadPreFilteringConstructs {
 		ce.docVecIDMap = stub.docVecIDMap
 	}
 	return ce

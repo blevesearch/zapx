@@ -96,6 +96,8 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		vecSegs = vecSegs[:0]
 		vecToDocID := make(map[int64]uint64)
 
+		var staleDocsExist bool
+
 		// todo: would parallely fetching the following stuff from segments
 		// be beneficial in terms of perf?
 		for segI, sb := range segments {
@@ -146,19 +148,17 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 				// remap the docID from the old segment to the new document nos.
 				// provided. furthermore, also drop the now-invalid doc nums
 				// of that segment
-				var vecIDNotDeleted bool // indicates if the vector ID was not deleted.
-				var newDocID uint64      // new docID in the new segment
 				if newDocNumsIn[segI][uint32(docID)] != docDropped {
-					newDocID = newDocNumsIn[segI][uint32(docID)]
-					vecIDNotDeleted = true
-				}
-				// if the remapped doc ID is valid, track it
-				// as part of vecs to be reconstructed (for larger indexes).
-				// this would account only the valid vector IDs, so the deleted
-				// ones won't be reconstructed in the final index.
-				if vecIDNotDeleted {
+					newDocID := newDocNumsIn[segI][uint32(docID)]
+
+					// if the remapped doc ID is valid, track it
+					// as part of vecs to be reconstructed (for larger indexes).
+					// this would account only the valid vector IDs, so the deleted
+					// ones won't be reconstructed in the final index.
 					vecToDocID[vecID] = newDocID
 					indexes[curIdx].vecIds = append(indexes[curIdx].vecIds, vecID)
+				} else {
+					staleDocsExist = true
 				}
 			}
 
@@ -174,7 +174,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		if err != nil {
 			return err
 		}
-		err = vo.mergeAndWriteVectorIndexes(vecSegs, indexes, w, closeCh)
+		err = vo.mergeAndWriteVectorIndexes(vecSegs, indexes, staleDocsExist, w, closeCh)
 		if err != nil {
 			return err
 		}
@@ -250,11 +250,7 @@ func (v *vectorIndexOpaque) flushVectorIndex(indexBytes []byte, w *CountHashWrit
 
 	// write the vector index data
 	_, err = w.Write(indexBytes)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
 // Divide the estimated nprobe with this value to optimize
@@ -274,10 +270,12 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 	return nprobe
 }
 
-// todo: naive implementation. need to keep in mind the perf implications and improve on this.
+// mergeAndWriteVectorIndexes for field
+// TODO: naive implementation. need to keep in mind the perf implications and improve on this.
 // perhaps, parallelized merging can help speed things up over here.
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
-	vecIndexes []*vecIndexInfo, w *CountHashWriter, closeCh chan struct{}) error {
+	vecIndexes []*vecIndexInfo, staleDocsExist bool,
+	w *CountHashWriter, closeCh chan struct{}) error {
 
 	// safe to assume that all the indexes are of the same config values, given
 	// that they are extracted from the field mapping info.
@@ -326,6 +324,51 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	// not a valid merge operation as there are no valid indexes to merge.
 	if !validMerge {
 		return nil
+	}
+
+	if !staleDocsExist && indexOptimizedFor == index.IndexOptimizedForLatency {
+		// No stale docs => straight forward merge without any deletes
+		// Let's do this only if the index is optimized for latency, because
+		// what we're about to do can affect recall (!)
+		//
+		// Now let's see if all the vec indexes involved in this merge operation
+		// are centroid based indexes (IVF), where we can try and leverage
+		// the MergeFrom API to perform an in-place merge of the indexes.
+		var allIVF = true
+		var indexOfLargestVec, maxVecsOfIndex int
+		for i := range vecIndexes {
+			if !vecIndexes[i].index.IsTrained() {
+				allIVF = false
+				break
+			}
+			if len(vecIndexes[i].vecIds) > maxVecsOfIndex {
+				maxVecsOfIndex = len(vecIndexes[i].vecIds)
+				indexOfLargestVec = i
+			}
+		}
+
+		if allIVF {
+			for i := range vecIndexes {
+				if i == indexOfLargestVec {
+					continue
+				}
+				err := vecIndexes[indexOfLargestVec].index.MergeFrom(vecIndexes[i].index, 0 /* FIXME ? */)
+				if err != nil {
+					freeReconstructedIndexes(vecIndexes)
+					return err
+				}
+			}
+
+			mergedIndexBytes, err := faiss.WriteIndexIntoBuffer(vecIndexes[indexOfLargestVec].index)
+			if err != nil {
+				return err
+			}
+
+			// free all the reconstructed indexes
+			freeReconstructedIndexes(vecIndexes)
+
+			return v.flushVectorIndex(mergedIndexBytes, w)
+		}
 	}
 
 	finalVecIDs := make([]int64, 0, finalVecIDCap)
@@ -379,7 +422,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	// the reconstructed ones anymore and doing so will hold up memory which can
 	// be detrimental while creating indexes during introduction.
 	freeReconstructedIndexes(vecIndexes)
-	vecIndexes = nil
 
 	faissIndex, err := faiss.IndexFactory(dims, indexDescription, metric)
 	if err != nil {
@@ -414,20 +456,13 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		return err
 	}
 
-	indexData = nil
-	finalVecIDs = nil
 	var mergedIndexBytes []byte
 	mergedIndexBytes, err = faiss.WriteIndexIntoBuffer(faissIndex)
 	if err != nil {
 		return err
 	}
 
-	err = v.flushVectorIndex(mergedIndexBytes, w)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return v.flushVectorIndex(mergedIndexBytes, w)
 }
 
 // todo: can be parallelized.

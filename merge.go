@@ -110,6 +110,7 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 	return newDocNums, uint64(cr.Count()), nil
 }
 
+// Remove fields that have been completely deleted from fieldsInv
 func filterFields(fieldsInv []string, fieldInfo map[string]*index.UpdateFieldInfo) []string {
 	rv := make([]string, 0)
 	for _, field := range fieldsInv {
@@ -414,6 +415,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 		// optimize when the field mapping is the same across all
 		// segments and there are no deletions, via byte-copying
 		// of stored docs bytes directly to the writer
+		// cannot copy directly if fields might have been deleted
 		if fieldsSame && (dropsI == nil || dropsI.GetCardinality() == 0) && len(updatedFields) == 0 {
 			err := segment.copyStoredDocs(newDocNum, docNumOffsets, w)
 			if err != nil {
@@ -489,6 +491,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 			// now walk the non-"_id" fields in order
 			for fieldID := 1; fieldID < len(fieldsInv); fieldID++ {
 				if val, ok := updatedFields[fieldsInv[fieldID]]; ok {
+					// early exit when stored value is supposed to be deleted
 					if val.Store {
 						continue
 					}
@@ -628,6 +631,7 @@ func mergeFields(segments []*SegmentBase) (bool, []string) {
 	return fieldsSame, rv
 }
 
+// Combine updateFieldInfo from all segments
 func mergeUpdatedFields(segments []*SegmentBase) map[string]*index.UpdateFieldInfo {
 	fieldInfo := make(map[string]*index.UpdateFieldInfo)
 

@@ -126,7 +126,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			if isClosed(closeCh) {
 				return nil, 0, seg.ErrClosed
 			}
-
+			// early exit if index data is supposed to be deleted
 			if info, ok := updatedFields[fieldName]; ok && info.Index {
 				continue
 			}
@@ -135,7 +135,6 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			if err2 != nil {
 				return nil, 0, err2
 			}
-
 			if dict != nil && dict.fst != nil {
 				itr, err2 := dict.fst.Iterator(nil, nil)
 				if err2 != nil && err2 != vellum.ErrIteratorDone {
@@ -250,6 +249,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 
 			postItr = postings.iterator(true, true, true, postItr)
 
+			// can only safely copy data if no field data has been deleted
 			if fieldsSame && len(updatedFields) == 0 {
 				// can optimize by copying freq/norm/loc bytes directly
 				lastDocNum, lastFreq, lastNorm, err = mergeTermFreqNormLocsByCopying(
@@ -323,6 +323,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			if isClosed(closeCh) {
 				return nil, 0, seg.ErrClosed
 			}
+			// early exit if docvalues data is supposed to be deleted
 			if info, ok := updatedFields[fieldName]; ok && info.DocValues {
 				continue
 			}

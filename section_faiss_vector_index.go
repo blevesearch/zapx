@@ -105,6 +105,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			if _, ok := sb.fieldsMap[fieldName]; !ok {
 				continue
 			}
+			// early exit if index data is supposed to be deleted
 			if info, ok := vo.updatedFields[fieldName]; ok && info.Index {
 				continue
 			}

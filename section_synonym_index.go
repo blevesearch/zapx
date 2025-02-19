@@ -606,16 +606,13 @@ func mergeAndPersistSynonymSection(segments []*SegmentBase, dropsIn []*roaring.B
 			if isClosed(closeCh) {
 				return nil, nil, seg.ErrClosed
 			}
-
-			var thes *Thesaurus
-			var err2 error
+			// early exit if index data is supposed to be deleted
 			if info, ok := updatedFields[fieldName]; ok && info.Index {
-				thes = nil
-			} else {
-				thes, err2 = segment.thesaurus(fieldName)
-				if err2 != nil {
-					return nil, nil, err2
-				}
+				continue
+			}
+			thes, err2 := segment.thesaurus(fieldName)
+			if err2 != nil {
+				return nil, nil, err2
 			}
 			if thes != nil && thes.fst != nil {
 				itr, err2 := thes.fst.Iterator(nil, nil)

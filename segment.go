@@ -956,10 +956,12 @@ func (s *SegmentBase) loadDvReaders() error {
 	return nil
 }
 
+// Getter method to retrieve updateFieldInfo within segment base
 func (s *SegmentBase) GetUpdatedFields() map[string]*index.UpdateFieldInfo {
 	return s.updatedFields
 }
 
+// Setter method to store updateFieldInfo within segment base
 func (s *SegmentBase) PutUpdatedFields(updatedFields map[string]*index.UpdateFieldInfo) {
 	s.updatedFields = updatedFields
 }

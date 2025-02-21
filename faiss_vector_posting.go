@@ -382,172 +382,16 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					return rv, nil
 				}
 
-				if len(eligibleDocIDs) > 0 {
-					// Non-zero documents eligible per the filter query.
+				// Check and proceed only if non-zero documents eligible per the filter query.
+				if len(eligibleDocIDs) == 0 {
+					return rv, nil
+				}
 
-					// If every element in the index is eligible(eg. high selectivity
-					// cases), then this can basically be considered unfiltered kNN.
-					if len(eligibleDocIDs) == int(sb.numDocs) {
-						scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k,
-							vectorIDsToExclude, params)
-						if err != nil {
-							return nil, err
-						}
-
-						addIDsToPostingsList(rv, ids, scores)
-						return rv, nil
-					}
-
-					// vector IDs corresponding to the local doc numbers to be
-					// considered for the search
-					vectorIDsToInclude := make([]int64, 0, len(eligibleDocIDs))
-					for _, id := range eligibleDocIDs {
-						vectorIDsToInclude = append(vectorIDsToInclude, docVecIDMap[uint32(id)]...)
-					}
-
-					if len(vectorIDsToInclude) == 0 {
-						return rv, nil
-					}
-
-					// Retrieve the mapping of centroid IDs to vectors within
-					// the cluster.
-					clusterAssignment, _ := vecIndex.ObtainClusterToVecIDsFromIVFIndex()
-					// Accounting for a flat index
-					if len(clusterAssignment) == 0 {
-						scores, ids, err := vecIndex.SearchWithIDs(qVector, k,
-							vectorIDsToInclude, params)
-						if err != nil {
-							return nil, err
-						}
-
-						addIDsToPostingsList(rv, ids, scores)
-						return rv, nil
-					}
-
-					// Converting to roaring bitmap for ease of intersect ops with
-					// the set of eligible doc IDs.
-					centroidVecIDMap := make(map[int64]*roaring.Bitmap)
-					for centroidID, vecIDs := range clusterAssignment {
-						if _, exists := centroidVecIDMap[centroidID]; !exists {
-							centroidVecIDMap[centroidID] = roaring.NewBitmap()
-						}
-						vecIDsUint32 := make([]uint32, 0, len(vecIDs))
-						for _, vecID := range vecIDs {
-							vecIDsUint32 = append(vecIDsUint32, uint32(vecID))
-						}
-						centroidVecIDMap[centroidID].AddMany(vecIDsUint32)
-					}
-
-					// Determining which clusters, identified by centroid ID,
-					// have at least one eligible vector and hence, ought to be
-					// probed.
-					eligibleCentroidIDs := make([]int64, 0)
-
-					var selector faiss.Selector
-					var err error
-					// If there are more elements to be included than excluded, it
-					// might be quicker to use an exclusion selector as a filter
-					// instead of an inclusion selector.
-					if float32(len(eligibleDocIDs))/float32(len(docVecIDMap)) > 0.5 {
-						ineligibleVecIDsBitmap := roaring.NewBitmap()
-						eligibleDocIDsMap := make(map[uint64]struct{})
-						for _, eligibleDocID := range eligibleDocIDs {
-							eligibleDocIDsMap[(eligibleDocID)] = struct{}{}
-						}
-
-						ineligibleVectorIDs := make([]int64, 0, len(vecDocIDMap)-
-							len(vectorIDsToInclude))
-
-						for docID, vecIDs := range docVecIDMap {
-							if _, exists := eligibleDocIDsMap[uint64(docID)]; !exists {
-								for _, vecID := range vecIDs {
-									ineligibleVecIDsBitmap.Add(uint32(vecID))
-									ineligibleVectorIDs = append(ineligibleVectorIDs, vecID)
-								}
-							}
-						}
-
-						for centroidID, vecIDs := range centroidVecIDMap {
-							vecIDs.AndNot(ineligibleVecIDsBitmap)
-							// At least one eligible vec in cluster.
-							if !vecIDs.IsEmpty() {
-								// The mapping is now reduced to those vectors which
-								// are also eligible docs for the filter query.
-								centroidVecIDMap[centroidID] = vecIDs
-								eligibleCentroidIDs = append(eligibleCentroidIDs, centroidID)
-							} else {
-								// don't consider clusters with no eligible IDs.
-								delete(centroidVecIDMap, centroidID)
-							}
-						}
-
-						selector, err = faiss.NewIDSelectorNot(ineligibleVectorIDs)
-					} else {
-						// Getting the vector IDs corresponding to the eligible
-						// doc IDs.
-						// The docVecIDMap maps each docID to vectorIDs corresponding
-						// to it.
-						// Usually, each docID has one vecID mapped to it unless
-						// the vector is nested, in which case there can be multiple
-						// vectorIDs mapped to the same docID.
-						// Eg. docID d1 -> vecID v1, for the first case
-						// d1 -> {v1,v2}, for the second case.
-						eligibleVecIDsBitmap := roaring.NewBitmap()
-						vecIDsUint32 := make([]uint32, 0)
-						for _, eligibleDocID := range eligibleDocIDs {
-							vecIDs := docVecIDMap[uint32(eligibleDocID)]
-							for _, vecID := range vecIDs {
-								vecIDsUint32 = append(vecIDsUint32, uint32(vecID))
-							}
-						}
-						eligibleVecIDsBitmap.AddMany(vecIDsUint32)
-						for centroidID, vecIDs := range centroidVecIDMap {
-							vecIDs.And(eligibleVecIDsBitmap)
-							if !vecIDs.IsEmpty() {
-								// The mapping is now reduced to those vectors which
-								// are also eligible docs for the filter query.
-								centroidVecIDMap[centroidID] = vecIDs
-								eligibleCentroidIDs = append(eligibleCentroidIDs, centroidID)
-							} else {
-								// don't consider clusters with no eligible IDs.
-								delete(centroidVecIDMap, centroidID)
-							}
-						}
-
-						selector, err = faiss.NewIDSelectorBatch(vectorIDsToInclude)
-					}
-					if err != nil {
-						return nil, err
-					}
-
-					// Ordering the retrieved centroid IDs by increasing order
-					// of distance i.e. decreasing order of proximity to query vector.
-					closestCentroidIDs, centroidDistances, _ :=
-						vecIndex.ObtainClustersWithDistancesFromIVFIndex(qVector,
-							eligibleCentroidIDs)
-
-					// Getting the nprobe value set at index time.
-					nprobe := vecIndex.GetNProbe()
-
-					eligibleDocsTillNow := int64(0)
-					minEligibleCentroids := 0
-					for i, centroidID := range closestCentroidIDs {
-						eligibleDocsTillNow += int64(centroidVecIDMap[centroidID].GetCardinality())
-						if eligibleDocsTillNow >= k && i >= int(nprobe-1) {
-							// Continue till at least 'K' cumulative vectors are
-							// collected or 'nprobe' clusters are examined, whichever
-							// comes later.
-							minEligibleCentroids = i + 1
-							break
-						}
-						minEligibleCentroids = i + 1
-					}
-
-					// Search the clusters specified by 'closestCentroidIDs' for
-					// vectors whose IDs are present in 'vectorIDsToInclude'
-					scores, ids, err := vecIndex.SearchClustersFromIVFIndex(
-						selector, len(vectorIDsToInclude), closestCentroidIDs,
-						minEligibleCentroids, k, qVector, centroidDistances, params)
+				// If every element in the index is eligible (full selectivity),
+				// then this can basically be considered unfiltered kNN.
+				if len(eligibleDocIDs) == int(sb.numDocs) {
+					scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k,
+						vectorIDsToExclude, params)
 					if err != nil {
 						return nil, err
 					}
@@ -555,7 +399,164 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					addIDsToPostingsList(rv, ids, scores)
 					return rv, nil
 				}
+
+				// vector IDs corresponding to the local doc numbers to be
+				// considered for the search
+				vectorIDsToInclude := make([]int64, 0, len(eligibleDocIDs))
+				for _, id := range eligibleDocIDs {
+					vectorIDsToInclude = append(vectorIDsToInclude, docVecIDMap[uint32(id)]...)
+				}
+
+				if len(vectorIDsToInclude) == 0 {
+					return rv, nil
+				}
+
+				// Retrieve the mapping of centroid IDs to vectors within
+				// the cluster.
+				clusterAssignment, _ := vecIndex.ObtainClusterToVecIDsFromIVFIndex()
+				// Accounting for a flat index
+				if len(clusterAssignment) == 0 {
+					scores, ids, err := vecIndex.SearchWithIDs(qVector, k,
+						vectorIDsToInclude, params)
+					if err != nil {
+						return nil, err
+					}
+
+					addIDsToPostingsList(rv, ids, scores)
+					return rv, nil
+				}
+
+				// Converting to roaring bitmap for ease of intersect ops with
+				// the set of eligible doc IDs.
+				centroidVecIDMap := make(map[int64]*roaring.Bitmap)
+				for centroidID, vecIDs := range clusterAssignment {
+					if _, exists := centroidVecIDMap[centroidID]; !exists {
+						centroidVecIDMap[centroidID] = roaring.NewBitmap()
+					}
+					vecIDsUint32 := make([]uint32, 0, len(vecIDs))
+					for _, vecID := range vecIDs {
+						vecIDsUint32 = append(vecIDsUint32, uint32(vecID))
+					}
+					centroidVecIDMap[centroidID].AddMany(vecIDsUint32)
+				}
+
+				// Determining which clusters, identified by centroid ID,
+				// have at least one eligible vector and hence, ought to be
+				// probed.
+				eligibleCentroidIDs := make([]int64, 0)
+
+				var selector faiss.Selector
+				var err error
+				// If there are more elements to be included than excluded, it
+				// might be quicker to use an exclusion selector as a filter
+				// instead of an inclusion selector.
+				if float32(len(eligibleDocIDs))/float32(len(docVecIDMap)) > 0.5 {
+					ineligibleVecIDsBitmap := roaring.NewBitmap()
+					eligibleDocIDsMap := make(map[uint64]struct{})
+					for _, eligibleDocID := range eligibleDocIDs {
+						eligibleDocIDsMap[(eligibleDocID)] = struct{}{}
+					}
+
+					ineligibleVectorIDs := make([]int64, 0, len(vecDocIDMap)-
+						len(vectorIDsToInclude))
+
+					for docID, vecIDs := range docVecIDMap {
+						if _, exists := eligibleDocIDsMap[uint64(docID)]; !exists {
+							for _, vecID := range vecIDs {
+								ineligibleVecIDsBitmap.Add(uint32(vecID))
+								ineligibleVectorIDs = append(ineligibleVectorIDs, vecID)
+							}
+						}
+					}
+
+					for centroidID, vecIDs := range centroidVecIDMap {
+						vecIDs.AndNot(ineligibleVecIDsBitmap)
+						// At least one eligible vec in cluster.
+						if !vecIDs.IsEmpty() {
+							// The mapping is now reduced to those vectors which
+							// are also eligible docs for the filter query.
+							centroidVecIDMap[centroidID] = vecIDs
+							eligibleCentroidIDs = append(eligibleCentroidIDs, centroidID)
+						} else {
+							// don't consider clusters with no eligible IDs.
+							delete(centroidVecIDMap, centroidID)
+						}
+					}
+
+					selector, err = faiss.NewIDSelectorNot(ineligibleVectorIDs)
+				} else {
+					// Getting the vector IDs corresponding to the eligible
+					// doc IDs.
+					// The docVecIDMap maps each docID to vectorIDs corresponding
+					// to it.
+					// Usually, each docID has one vecID mapped to it unless
+					// the vector is nested, in which case there can be multiple
+					// vectorIDs mapped to the same docID.
+					// Eg. docID d1 -> vecID v1, for the first case
+					// d1 -> {v1,v2}, for the second case.
+					eligibleVecIDsBitmap := roaring.NewBitmap()
+					vecIDsUint32 := make([]uint32, 0)
+					for _, eligibleDocID := range eligibleDocIDs {
+						vecIDs := docVecIDMap[uint32(eligibleDocID)]
+						for _, vecID := range vecIDs {
+							vecIDsUint32 = append(vecIDsUint32, uint32(vecID))
+						}
+					}
+					eligibleVecIDsBitmap.AddMany(vecIDsUint32)
+					for centroidID, vecIDs := range centroidVecIDMap {
+						vecIDs.And(eligibleVecIDsBitmap)
+						if !vecIDs.IsEmpty() {
+							// The mapping is now reduced to those vectors which
+							// are also eligible docs for the filter query.
+							centroidVecIDMap[centroidID] = vecIDs
+							eligibleCentroidIDs = append(eligibleCentroidIDs, centroidID)
+						} else {
+							// don't consider clusters with no eligible IDs.
+							delete(centroidVecIDMap, centroidID)
+						}
+					}
+
+					selector, err = faiss.NewIDSelectorBatch(vectorIDsToInclude)
+				}
+				if err != nil {
+					return nil, err
+				}
+
+				// Ordering the retrieved centroid IDs by increasing order
+				// of distance i.e. decreasing order of proximity to query vector.
+				closestCentroidIDs, centroidDistances, _ :=
+					vecIndex.ObtainClustersWithDistancesFromIVFIndex(qVector,
+						eligibleCentroidIDs)
+
+				// Getting the nprobe value set at index time.
+				nprobe := vecIndex.GetNProbe()
+
+				eligibleDocsTillNow := int64(0)
+				minEligibleCentroids := 0
+				for i, centroidID := range closestCentroidIDs {
+					eligibleDocsTillNow += int64(centroidVecIDMap[centroidID].GetCardinality())
+					if eligibleDocsTillNow >= k && i >= int(nprobe-1) {
+						// Continue till at least 'K' cumulative vectors are
+						// collected or 'nprobe' clusters are examined, whichever
+						// comes later.
+						minEligibleCentroids = i + 1
+						break
+					}
+					minEligibleCentroids = i + 1
+				}
+
+				// Search the clusters specified by 'closestCentroidIDs' for
+				// vectors whose IDs are present in 'vectorIDsToInclude'
+				scores, ids, err := vecIndex.SearchClustersFromIVFIndex(
+					selector, len(vectorIDsToInclude), closestCentroidIDs,
+					minEligibleCentroids, k, qVector, centroidDistances, params)
+				if err != nil {
+					return nil, err
+				}
+
+				addIDsToPostingsList(rv, ids, scores)
 				return rv, nil
+
 			},
 			close: func() {
 				// skipping the closing because the index is cached and it's being

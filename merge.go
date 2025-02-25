@@ -24,6 +24,7 @@ import (
 	"sort"
 
 	"github.com/RoaringBitmap/roaring/v2"
+	index "github.com/blevesearch/bleve_index_api"
 	seg "github.com/blevesearch/scorch_segment_api/v2"
 	"github.com/golang/snappy"
 )
@@ -109,6 +110,20 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 	return newDocNums, uint64(cr.Count()), nil
 }
 
+// Remove fields that have been completely deleted from fieldsInv
+func filterFields(fieldsInv []string, fieldInfo map[string]*index.UpdateFieldInfo) []string {
+	rv := make([]string, 0)
+	for _, field := range fieldsInv {
+		if val, ok := fieldInfo[field]; ok {
+			if val.Deleted {
+				continue
+			}
+		}
+		rv = append(rv, field)
+	}
+	return rv
+}
+
 func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	chunkMode uint32, cr *CountHashWriter, closeCh chan struct{}) (
 	newDocNums [][]uint64, numDocs, storedIndexOffset uint64,
@@ -117,6 +132,8 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 
 	var fieldsSame bool
 	fieldsSame, fieldsInv = mergeFields(segments)
+	updatedFields := mergeUpdatedFields(segments)
+	fieldsInv = filterFields(fieldsInv, updatedFields)
 	fieldsMap = mapFields(fieldsInv)
 
 	numDocs = computeNewDocCount(segments, drops)
@@ -130,15 +147,16 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	// offsets in the fields section index of the file (the final merged file).
 	mergeOpaque := map[int]resetable{}
 	args := map[string]interface{}{
-		"chunkMode":  chunkMode,
-		"fieldsSame": fieldsSame,
-		"fieldsMap":  fieldsMap,
-		"numDocs":    numDocs,
+		"chunkMode":     chunkMode,
+		"fieldsSame":    fieldsSame,
+		"fieldsMap":     fieldsMap,
+		"numDocs":       numDocs,
+		"updatedFields": updatedFields,
 	}
 
 	if numDocs > 0 {
 		storedIndexOffset, newDocNums, err = mergeStoredAndRemap(segments, drops,
-			fieldsMap, fieldsInv, fieldsSame, numDocs, cr, closeCh)
+			fieldsMap, fieldsInv, fieldsSame, numDocs, cr, closeCh, updatedFields)
 		if err != nil {
 			return nil, 0, 0, nil, nil, 0, err
 		}
@@ -358,7 +376,7 @@ type varintEncoder func(uint64) (int, error)
 
 func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 	fieldsMap map[string]uint16, fieldsInv []string, fieldsSame bool, newSegDocCount uint64,
-	w *CountHashWriter, closeCh chan struct{}) (uint64, [][]uint64, error) {
+	w *CountHashWriter, closeCh chan struct{}, updatedFields map[string]*index.UpdateFieldInfo) (uint64, [][]uint64, error) {
 	var rv [][]uint64 // The remapped or newDocNums for each segment.
 
 	var newDocNum uint64
@@ -397,7 +415,8 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 		// optimize when the field mapping is the same across all
 		// segments and there are no deletions, via byte-copying
 		// of stored docs bytes directly to the writer
-		if fieldsSame && (dropsI == nil || dropsI.GetCardinality() == 0) {
+		// cannot copy directly if fields might have been deleted
+		if fieldsSame && (dropsI == nil || dropsI.GetCardinality() == 0) && len(updatedFields) == 0 {
 			err := segment.copyStoredDocs(newDocNum, docNumOffsets, w)
 			if err != nil {
 				return 0, nil, err
@@ -471,6 +490,12 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 
 			// now walk the non-"_id" fields in order
 			for fieldID := 1; fieldID < len(fieldsInv); fieldID++ {
+				if val, ok := updatedFields[fieldsInv[fieldID]]; ok {
+					// early exit when stored value is supposed to be deleted
+					if val.Store {
+						continue
+					}
+				}
 				storedFieldValues := vals[fieldID]
 
 				stf := typs[fieldID]
@@ -604,6 +629,26 @@ func mergeFields(segments []*SegmentBase) (bool, []string) {
 	sort.Strings(rv[1:]) // leave _id as first
 
 	return fieldsSame, rv
+}
+
+// Combine updateFieldInfo from all segments
+func mergeUpdatedFields(segments []*SegmentBase) map[string]*index.UpdateFieldInfo {
+	fieldInfo := make(map[string]*index.UpdateFieldInfo)
+
+	for _, segment := range segments {
+		for field, info := range segment.updatedFields {
+			if _, ok := fieldInfo[field]; !ok {
+				fieldInfo[field] = info
+			} else {
+				fieldInfo[field].Deleted = fieldInfo[field].Deleted || info.Deleted
+				fieldInfo[field].Index = fieldInfo[field].Index || info.Index
+				fieldInfo[field].Store = fieldInfo[field].Store || info.Store
+				fieldInfo[field].DocValues = fieldInfo[field].Store || info.DocValues
+			}
+		}
+
+	}
+	return fieldInfo
 }
 
 func isClosed(closeCh chan struct{}) bool {

@@ -302,6 +302,10 @@ func (s *stubVecDocument) AddIDField() {
 
 }
 
+func (s *stubVecDocument) Indexed() bool {
+	return true
+}
+
 func newVecStubDocument(id string, fields []index.Field) *stubVecDocument {
 	return &stubVecDocument{
 		id:     id,

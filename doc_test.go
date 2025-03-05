@@ -45,7 +45,10 @@ func (s *stubDocument) NumPlainTextBytes() uint64 {
 }
 
 func (s *stubDocument) AddIDField() {
+}
 
+func (s *stubDocument) Indexed() bool {
+	return true
 }
 
 func newStubDocument(id string, fields []*stubField, compositeName string) *stubDocument {
@@ -313,6 +316,10 @@ func (s *stubSynonymDocument) StoredFieldsBytes() uint64 {
 
 func (s *stubSynonymDocument) AddIDField() {
 	s.fields = append(s.fields, newStubFieldSplitString("_id", nil, s.id, true, false, false))
+}
+
+func (s *stubSynonymDocument) Indexed() bool {
+	return true
 }
 
 func (s *stubSynonymDocument) VisitSynonymFields(visitor index.SynonymFieldVisitor) {

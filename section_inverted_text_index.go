@@ -559,6 +559,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 			}
 
 			if postingsOffset > uint64(0) {
+				// Ignore terms with ##. They are glue bytes for encoded polygons
 				if !strings.HasPrefix(term, "##") {
 					err = io.builder.Insert([]byte(term), postingsOffset)
 					if err != nil {

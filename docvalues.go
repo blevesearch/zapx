@@ -24,7 +24,6 @@ import (
 
 	index "github.com/blevesearch/bleve_index_api"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
-	"github.com/golang/snappy"
 )
 
 var reflectStaticSizedocValueReader int
@@ -217,10 +216,7 @@ func (di *docValueReader) iterateAllDocValues(s *SegmentBase, visitor docNumTerm
 		}
 
 		// uncompress the already loaded data
-		uncompressed, err := snappy.Decode(di.uncompressed[:cap(di.uncompressed)], di.curChunkData)
-		if err != nil {
-			return err
-		}
+		uncompressed := di.curChunkData
 		di.uncompressed = uncompressed
 
 		start := uint64(0)
@@ -246,16 +242,12 @@ func (di *docValueReader) visitDocValues(docNum uint64,
 	}
 
 	var uncompressed []byte
-	var err error
 	// use the uncompressed copy if available
 	if len(di.uncompressed) > 0 {
 		uncompressed = di.uncompressed
 	} else {
 		// uncompress the already loaded data
-		uncompressed, err = snappy.Decode(di.uncompressed[:cap(di.uncompressed)], di.curChunkData)
-		if err != nil {
-			return err
-		}
+		uncompressed = di.curChunkData
 		di.uncompressed = uncompressed
 	}
 

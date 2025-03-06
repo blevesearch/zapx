@@ -24,7 +24,6 @@ import (
 
 	index "github.com/blevesearch/bleve_index_api"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
-	"github.com/golang/snappy"
 )
 
 var NewSegmentBufferNumResultsBump int = 100
@@ -372,7 +371,7 @@ func (s *interim) writeStoredFields() (
 
 		metaBytes := s.metaBuf.Bytes()
 
-		compressed = snappy.Encode(compressed[:cap(compressed)], data)
+		compressed = data
 		s.incrementBytesWritten(uint64(len(compressed)))
 		docStoredOffsets[docNum] = uint64(s.w.Count())
 

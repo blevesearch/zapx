@@ -18,13 +18,11 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"log"
 	"math"
 	"sort"
 	"strconv"
 
 	zap "github.com/blevesearch/zapx/v16"
-	"github.com/golang/snappy"
 	"github.com/spf13/cobra"
 )
 
@@ -162,11 +160,7 @@ func dumpDocValueResults(data []byte, args []string, field string, id int, field
 		return nil
 	}
 	// uncompress the already loaded data
-	uncompressed, err := snappy.Decode(nil, curChunkData)
-	if err != nil {
-		log.Printf("snappy err %+v ", err)
-		return err
-	}
+	uncompressed := curChunkData
 
 	var termSeparator byte = 0xff
 	var termSeparatorSplitSlice = []byte{termSeparator}

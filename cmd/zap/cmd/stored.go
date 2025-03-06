@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/golang/snappy"
 	"github.com/spf13/cobra"
 )
 
@@ -63,10 +62,7 @@ var storedCmd = &cobra.Command{
 		idFieldValLen, _ := binary.Uvarint(meta)
 		fmt.Printf("Raw _id (len %d): % x\n", idFieldValLen, raw[:idFieldValLen])
 		fmt.Printf("Raw fields (len %d): % x\n", dataLen-idFieldValLen, raw[idFieldValLen:])
-		uncompressed, err := snappy.Decode(nil, raw[idFieldValLen:])
-		if err != nil {
-			panic(err)
-		}
+		uncompressed := raw[idFieldValLen:]
 		fmt.Printf("Uncompressed fields (len %d): % x\n", len(uncompressed), uncompressed)
 
 		return nil

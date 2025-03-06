@@ -28,7 +28,6 @@ import (
 	mmap "github.com/blevesearch/mmap-go"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 	"github.com/blevesearch/vellum"
-	"github.com/golang/snappy"
 )
 
 var reflectStaticSizeSegmentBase int
@@ -567,10 +566,7 @@ func (s *SegmentBase) visitStoredFields(vdc *visitDocumentCtx, num uint64,
 		// handle non-"_id" fields
 		compressed = compressed[idFieldValLen:]
 
-		uncompressed, err := snappy.Decode(vdc.buf[:cap(vdc.buf)], compressed)
-		if err != nil {
-			return err
-		}
+		uncompressed := compressed
 
 		for keepGoing {
 			field, err := binary.ReadUvarint(&vdc.reader)

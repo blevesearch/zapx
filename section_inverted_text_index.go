@@ -560,7 +560,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 
 			if postingsOffset > uint64(0) {
 				// Ignore terms with ##. They are glue bytes for encoded polygons
-				if !strings.HasPrefix(term, "##") {
+				if _, exists := io.geoShapeFields[uint16(fieldID)]; !exists || !strings.HasPrefix(term, "##") {
 					err = io.builder.Insert([]byte(term), postingsOffset)
 					if err != nil {
 						return nil, err
@@ -793,12 +793,20 @@ func (i *invertedIndexOpaque) realloc() {
 		if field.Options().IncludeDocValues() {
 			i.IncludeDocValues[fieldID] = true
 		}
+
+		if field.EncodedFieldType() == 's' {
+			i.geoShapeFields[fieldID] = struct{}{}
+		}
 	}
 
 	if cap(i.IncludeDocValues) >= len(i.FieldsInv) {
 		i.IncludeDocValues = i.IncludeDocValues[:len(i.FieldsInv)]
 	} else {
 		i.IncludeDocValues = make([]bool, len(i.FieldsInv))
+	}
+
+	if i.geoShapeFields == nil {
+		i.geoShapeFields = make(map[uint16]struct{})
 	}
 
 	for _, result := range i.results {
@@ -971,6 +979,8 @@ type invertedIndexOpaque struct {
 
 	tmp0 []byte
 
+	geoShapeFields map[uint16]struct{}
+
 	fieldAddrs map[int]int
 
 	fieldsSame bool
@@ -1021,6 +1031,7 @@ func (io *invertedIndexOpaque) Reset() (err error) {
 	io.reusableFieldTFs = io.reusableFieldTFs[:0]
 
 	io.tmp0 = io.tmp0[:0]
+	io.geoShapeFields = nil
 	atomic.StoreUint64(&io.bytesWritten, 0)
 	io.fieldsSame = false
 	io.numDocs = 0

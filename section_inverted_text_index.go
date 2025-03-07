@@ -611,6 +611,11 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 		fdvEncoder := newChunkedContentCoder(chunkSize, uint64(len(io.results)-1), w, false)
 		if io.IncludeDocValues[fieldID] {
 			for docNum, docTerms := range docTermMap {
+				if fieldTermMap, ok := io.specialTerms[int(docNum)]; ok {
+					if sTerm, ok := fieldTermMap[fieldID]; ok {
+						docTerms = append(append(docTerms, sTerm...), termSeparator)
+					}
+				}
 				if len(docTerms) > 0 {
 					err = fdvEncoder.Add(uint64(docNum), docTerms)
 					if err != nil {
@@ -755,7 +760,7 @@ func (i *invertedIndexOpaque) realloc() {
 		i.FieldsMap[fieldName] = uint16(fieldID + 1)
 	}
 
-	visitField := func(field index.Field) {
+	visitField := func(field index.Field, docNum int) {
 		fieldID := uint16(i.getOrDefineField(field.Name()))
 
 		dict := i.Dicts[fieldID]
@@ -789,6 +794,15 @@ func (i *invertedIndexOpaque) realloc() {
 		if field.Options().IncludeDocValues() {
 			i.IncludeDocValues[fieldID] = true
 		}
+
+		if field.EncodedFieldType() == 's' {
+			if f, ok := field.(index.GeoShapeField); ok {
+				if _, exists := i.specialTerms[docNum]; !exists {
+					i.specialTerms[docNum] = make(map[int][]byte)
+				}
+				i.specialTerms[docNum][int(fieldID)] = f.EncodedShape()
+			}
+		}
 	}
 
 	if cap(i.IncludeDocValues) >= len(i.FieldsInv) {
@@ -797,14 +811,20 @@ func (i *invertedIndexOpaque) realloc() {
 		i.IncludeDocValues = make([]bool, len(i.FieldsInv))
 	}
 
-	for _, result := range i.results {
+	if i.specialTerms == nil {
+		i.specialTerms = map[int]map[int][]byte{}
+	}
+
+	for docNum, result := range i.results {
 		// walk each composite field
 		result.VisitComposite(func(field index.CompositeField) {
-			visitField(field)
+			visitField(field, docNum)
 		})
 
 		// walk each field
-		result.VisitFields(visitField)
+		result.VisitFields(func(field index.Field) {
+			visitField(field, docNum)
+		})
 	}
 
 	numPostingsLists := pidNext
@@ -958,6 +978,9 @@ type invertedIndexOpaque struct {
 	numTermsPerPostingsList []int // key is postings list id
 	numLocsPerPostingsList  []int // key is postings list id
 
+	// docNum -> fieldID -> term
+	specialTerms map[int]map[int][]byte
+
 	builder    *vellum.Builder
 	builderBuf bytes.Buffer
 
@@ -1017,6 +1040,7 @@ func (io *invertedIndexOpaque) Reset() (err error) {
 	io.reusableFieldTFs = io.reusableFieldTFs[:0]
 
 	io.tmp0 = io.tmp0[:0]
+	io.specialTerms = nil
 	atomic.StoreUint64(&io.bytesWritten, 0)
 	io.fieldsSame = false
 	io.numDocs = 0

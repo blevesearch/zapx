@@ -19,7 +19,6 @@ import (
 	"encoding/binary"
 	"math"
 	"sort"
-	"strings"
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/v2"
@@ -559,12 +558,9 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 			}
 
 			if postingsOffset > uint64(0) {
-				// Ignore terms with ##. They are glue bytes for encoded polygons
-				if _, exists := io.geoShapeFields[uint16(fieldID)]; !exists || !strings.HasPrefix(term, "##") {
-					err = io.builder.Insert([]byte(term), postingsOffset)
-					if err != nil {
-						return nil, err
-					}
+				err = io.builder.Insert([]byte(term), postingsOffset)
+				if err != nil {
+					return nil, err
 				}
 			}
 
@@ -615,6 +611,11 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 		fdvEncoder := newChunkedContentCoder(chunkSize, uint64(len(io.results)-1), w, false)
 		if io.IncludeDocValues[fieldID] {
 			for docNum, docTerms := range docTermMap {
+				if fieldTermMap, ok := io.specialTerms[int(docNum)]; ok {
+					if sTerm, ok := fieldTermMap[fieldID]; ok {
+						docTerms = append(append(docTerms, sTerm...), termSeparator)
+					}
+				}
 				if len(docTerms) > 0 {
 					err = fdvEncoder.Add(uint64(docNum), docTerms)
 					if err != nil {
@@ -759,7 +760,7 @@ func (i *invertedIndexOpaque) realloc() {
 		i.FieldsMap[fieldName] = uint16(fieldID + 1)
 	}
 
-	visitField := func(field index.Field) {
+	visitField := func(field index.Field, docNum int) {
 		fieldID := uint16(i.getOrDefineField(field.Name()))
 
 		dict := i.Dicts[fieldID]
@@ -795,7 +796,12 @@ func (i *invertedIndexOpaque) realloc() {
 		}
 
 		if field.EncodedFieldType() == 's' {
-			i.geoShapeFields[fieldID] = struct{}{}
+			if f, ok := field.(index.GeoShapeField); ok {
+				if _, exists := i.specialTerms[docNum]; !exists {
+					i.specialTerms[docNum] = make(map[int][]byte)
+				}
+				i.specialTerms[docNum][int(fieldID)] = f.EncodedShape()
+			}
 		}
 	}
 
@@ -805,18 +811,20 @@ func (i *invertedIndexOpaque) realloc() {
 		i.IncludeDocValues = make([]bool, len(i.FieldsInv))
 	}
 
-	if i.geoShapeFields == nil {
-		i.geoShapeFields = make(map[uint16]struct{})
+	if i.specialTerms == nil {
+		i.specialTerms = map[int]map[int][]byte{}
 	}
 
-	for _, result := range i.results {
+	for docNum, result := range i.results {
 		// walk each composite field
 		result.VisitComposite(func(field index.CompositeField) {
-			visitField(field)
+			visitField(field, docNum)
 		})
 
 		// walk each field
-		result.VisitFields(visitField)
+		result.VisitFields(func(field index.Field) {
+			visitField(field, docNum)
+		})
 	}
 
 	numPostingsLists := pidNext
@@ -970,6 +978,9 @@ type invertedIndexOpaque struct {
 	numTermsPerPostingsList []int // key is postings list id
 	numLocsPerPostingsList  []int // key is postings list id
 
+	// docNum -> fieldID -> term
+	specialTerms map[int]map[int][]byte
+
 	builder    *vellum.Builder
 	builderBuf bytes.Buffer
 
@@ -978,8 +989,6 @@ type invertedIndexOpaque struct {
 	reusableFieldTFs  []index.TokenFrequencies
 
 	tmp0 []byte
-
-	geoShapeFields map[uint16]struct{}
 
 	fieldAddrs map[int]int
 
@@ -1031,7 +1040,7 @@ func (io *invertedIndexOpaque) Reset() (err error) {
 	io.reusableFieldTFs = io.reusableFieldTFs[:0]
 
 	io.tmp0 = io.tmp0[:0]
-	io.geoShapeFields = nil
+	io.specialTerms = nil
 	atomic.StoreUint64(&io.bytesWritten, 0)
 	io.fieldsSame = false
 	io.numDocs = 0

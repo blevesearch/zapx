@@ -611,7 +611,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 		fdvEncoder := newChunkedContentCoder(chunkSize, uint64(len(io.results)-1), w, false)
 		if io.IncludeDocValues[fieldID] {
 			for docNum, docTerms := range docTermMap {
-				if fieldTermMap, ok := io.specialTerms[int(docNum)]; ok {
+				if fieldTermMap, ok := io.extraDocValues[int(docNum)]; ok {
 					if sTerm, ok := fieldTermMap[fieldID]; ok {
 						docTerms = append(append(docTerms, sTerm...), termSeparator)
 					}
@@ -795,13 +795,11 @@ func (i *invertedIndexOpaque) realloc() {
 			i.IncludeDocValues[fieldID] = true
 		}
 
-		if field.EncodedFieldType() == 's' {
-			if f, ok := field.(index.GeoShapeField); ok {
-				if _, exists := i.specialTerms[docNum]; !exists {
-					i.specialTerms[docNum] = make(map[int][]byte)
-				}
-				i.specialTerms[docNum][int(fieldID)] = f.EncodedShape()
+		if f, ok := field.(index.GeoShapeField); ok {
+			if _, exists := i.extraDocValues[docNum]; !exists {
+				i.extraDocValues[docNum] = make(map[int][]byte)
 			}
+			i.extraDocValues[docNum][int(fieldID)] = f.EncodedShape()
 		}
 	}
 
@@ -811,8 +809,8 @@ func (i *invertedIndexOpaque) realloc() {
 		i.IncludeDocValues = make([]bool, len(i.FieldsInv))
 	}
 
-	if i.specialTerms == nil {
-		i.specialTerms = map[int]map[int][]byte{}
+	if i.extraDocValues == nil {
+		i.extraDocValues = map[int]map[int][]byte{}
 	}
 
 	for docNum, result := range i.results {
@@ -979,7 +977,7 @@ type invertedIndexOpaque struct {
 	numLocsPerPostingsList  []int // key is postings list id
 
 	// docNum -> fieldID -> term
-	specialTerms map[int]map[int][]byte
+	extraDocValues map[int]map[int][]byte
 
 	builder    *vellum.Builder
 	builderBuf bytes.Buffer
@@ -1040,7 +1038,7 @@ func (io *invertedIndexOpaque) Reset() (err error) {
 	io.reusableFieldTFs = io.reusableFieldTFs[:0]
 
 	io.tmp0 = io.tmp0[:0]
-	io.specialTerms = nil
+	io.extraDocValues = nil
 	atomic.StoreUint64(&io.bytesWritten, 0)
 	io.fieldsSame = false
 	io.numDocs = 0

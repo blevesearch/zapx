@@ -99,8 +99,6 @@ type synonymIndexOpaque struct {
 
 	// A map linking thesaurus IDs to their corresponding thesaurus' file offsets
 	thesaurusAddrs map[int]int
-
-	updatedFields map[string]*index.UpdateFieldInfo
 }
 
 // Set the fieldsMap and results in the synonym index opaque before the section processes a synonym field.
@@ -110,8 +108,6 @@ func (so *synonymIndexOpaque) Set(key string, value interface{}) {
 		so.results = value.([]index.Document)
 	case "fieldsMap":
 		so.FieldsMap = value.(map[string]uint16)
-	case "updatedFields":
-		so.updatedFields = value.(map[string]*index.UpdateFieldInfo)
 	}
 }
 
@@ -403,7 +399,6 @@ func (s *synonymIndexSection) getSynonymIndexOpaque(opaque map[int]resetable) *s
 func (s *synonymIndexSection) InitOpaque(args map[string]interface{}) resetable {
 	rv := &synonymIndexOpaque{
 		thesaurusAddrs: map[int]int{},
-		updatedFields:  make(map[string]*index.UpdateFieldInfo),
 	}
 	for k, v := range args {
 		rv.Set(k, v)
@@ -457,7 +452,7 @@ func (s *synonymIndexSection) Merge(opaque map[int]resetable, segments []*Segmen
 	drops []*roaring.Bitmap, fieldsInv []string, newDocNumsIn [][]uint64,
 	w *CountHashWriter, closeCh chan struct{}) error {
 	so := s.getSynonymIndexOpaque(opaque)
-	thesaurusAddrs, fieldIDtoThesaurusID, err := mergeAndPersistSynonymSection(segments, drops, fieldsInv, newDocNumsIn, so.updatedFields, w, closeCh)
+	thesaurusAddrs, fieldIDtoThesaurusID, err := mergeAndPersistSynonymSection(segments, drops, fieldsInv, newDocNumsIn, w, closeCh)
 	if err != nil {
 		return err
 	}
@@ -558,8 +553,7 @@ func writeSynTermMap(synTermMap map[uint32]string, w *CountHashWriter, bufMaxVar
 }
 
 func mergeAndPersistSynonymSection(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
-	fieldsInv []string, newDocNumsIn [][]uint64,
-	updatedFields map[string]*index.UpdateFieldInfo, w *CountHashWriter,
+	fieldsInv []string, newDocNumsIn [][]uint64, w *CountHashWriter,
 	closeCh chan struct{}) (map[int]int, map[uint16]int, error) {
 
 	var bufMaxVarintLen64 []byte = make([]byte, binary.MaxVarintLen64)
@@ -605,10 +599,6 @@ func mergeAndPersistSynonymSection(segments []*SegmentBase, dropsIn []*roaring.B
 			// check for the closure in meantime
 			if isClosed(closeCh) {
 				return nil, nil, seg.ErrClosed
-			}
-			// early exit if index data is supposed to be deleted
-			if info, ok := updatedFields[fieldName]; ok && info.Index {
-				continue
 			}
 			thes, err2 := segment.thesaurus(fieldName)
 			if err2 != nil {

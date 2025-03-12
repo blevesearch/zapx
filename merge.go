@@ -112,16 +112,15 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 
 // Remove fields that have been completely deleted from fieldsInv
 func filterFields(fieldsInv []string, fieldInfo map[string]*index.UpdateFieldInfo) []string {
-	rv := make([]string, 0)
+	idx := 0
 	for _, field := range fieldsInv {
-		if val, ok := fieldInfo[field]; ok {
-			if val.Deleted {
-				continue
-			}
+		if val, ok := fieldInfo[field]; ok && val.Deleted {
+			continue
 		}
-		rv = append(rv, field)
+		fieldsInv[idx] = field
+		idx++
 	}
-	return rv
+	return fieldsInv[:idx]
 }
 
 func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
@@ -459,6 +458,9 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 					// no entry for field in fieldsMap
 					return false
 				}
+				if val, ok := updatedFields[fieldsInv[fieldID]]; ok && val.Store {
+					return true
+				}
 				vals[fieldID] = append(vals[fieldID], value)
 				typs[fieldID] = append(typs[fieldID], typ)
 
@@ -490,11 +492,8 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 
 			// now walk the non-"_id" fields in order
 			for fieldID := 1; fieldID < len(fieldsInv); fieldID++ {
-				if val, ok := updatedFields[fieldsInv[fieldID]]; ok {
-					// early exit when stored value is supposed to be deleted
-					if val.Store {
-						continue
-					}
+				if val, ok := updatedFields[fieldsInv[fieldID]]; ok && val.Store {
+					continue
 				}
 				storedFieldValues := vals[fieldID]
 
@@ -633,10 +632,13 @@ func mergeFields(segments []*SegmentBase) (bool, []string) {
 
 // Combine updateFieldInfo from all segments
 func mergeUpdatedFields(segments []*SegmentBase) map[string]*index.UpdateFieldInfo {
-	fieldInfo := make(map[string]*index.UpdateFieldInfo)
+	var fieldInfo map[string]*index.UpdateFieldInfo
 
 	for _, segment := range segments {
 		for field, info := range segment.updatedFields {
+			if fieldInfo == nil {
+				fieldInfo = make(map[string]*index.UpdateFieldInfo)
+			}
 			if _, ok := fieldInfo[field]; !ok {
 				fieldInfo[field] = info
 			} else {

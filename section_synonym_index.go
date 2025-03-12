@@ -600,6 +600,7 @@ func mergeAndPersistSynonymSection(segments []*SegmentBase, dropsIn []*roaring.B
 			if isClosed(closeCh) {
 				return nil, nil, seg.ErrClosed
 			}
+
 			thes, err2 := segment.thesaurus(fieldName)
 			if err2 != nil {
 				return nil, nil, err2

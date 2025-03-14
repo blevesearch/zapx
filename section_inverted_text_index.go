@@ -976,6 +976,8 @@ type invertedIndexOpaque struct {
 	numTermsPerPostingsList []int // key is postings list id
 	numLocsPerPostingsList  []int // key is postings list id
 
+	// store terms that are unnecessary for the term dictionaries but needed in doc values
+	// eg - encoded geoshapes
 	// docNum -> fieldID -> term
 	extraDocValues map[int]map[int][]byte
 

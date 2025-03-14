@@ -458,6 +458,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 					// no entry for field in fieldsMap
 					return false
 				}
+				// early exit if the stored portion of the field is deleted
 				if val, ok := updatedFields[fieldsInv[fieldID]]; ok && val.Store {
 					return true
 				}
@@ -492,6 +493,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 
 			// now walk the non-"_id" fields in order
 			for fieldID := 1; fieldID < len(fieldsInv); fieldID++ {
+				// early exit if the stored portion of the field is deleted
 				if val, ok := updatedFields[fieldsInv[fieldID]]; ok && val.Store {
 					continue
 				}

@@ -611,8 +611,8 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 		fdvEncoder := newChunkedContentCoder(chunkSize, uint64(len(io.results)-1), w, false)
 		if io.IncludeDocValues[fieldID] {
 			for docNum, docTerms := range docTermMap {
-				if fieldTermMap, ok := io.extraDocValues[int(docNum)]; ok {
-					if sTerm, ok := fieldTermMap[fieldID]; ok {
+				if fieldTermMap, ok := io.extraDocValues[docNum]; ok {
+					if sTerm, ok := fieldTermMap[uint16(fieldID)]; ok {
 						docTerms = append(append(docTerms, sTerm...), termSeparator)
 					}
 				}
@@ -797,9 +797,9 @@ func (i *invertedIndexOpaque) realloc() {
 
 		if f, ok := field.(index.GeoShapeField); ok {
 			if _, exists := i.extraDocValues[docNum]; !exists {
-				i.extraDocValues[docNum] = make(map[int][]byte)
+				i.extraDocValues[docNum] = make(map[uint16][]byte)
 			}
-			i.extraDocValues[docNum][int(fieldID)] = f.EncodedShape()
+			i.extraDocValues[docNum][fieldID] = f.EncodedShape()
 		}
 	}
 
@@ -810,7 +810,7 @@ func (i *invertedIndexOpaque) realloc() {
 	}
 
 	if i.extraDocValues == nil {
-		i.extraDocValues = map[int]map[int][]byte{}
+		i.extraDocValues = map[int]map[uint16][]byte{}
 	}
 
 	for docNum, result := range i.results {
@@ -979,7 +979,7 @@ type invertedIndexOpaque struct {
 	// store terms that are unnecessary for the term dictionaries but needed in doc values
 	// eg - encoded geoshapes
 	// docNum -> fieldID -> term
-	extraDocValues map[int]map[int][]byte
+	extraDocValues map[int]map[uint16][]byte
 
 	builder    *vellum.Builder
 	builderBuf bytes.Buffer

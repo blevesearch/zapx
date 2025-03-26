@@ -446,6 +446,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				} else {
 					selector, err = faiss.NewIDSelectorBatch(vectorIDsToInclude)
 				}
+				defer selector.Delete()
 				if err != nil {
 					return nil, err
 				}
@@ -462,11 +463,15 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				}
 				// Getting the nprobe value set at index time.
 				nprobe := int(vecIndex.GetNProbe())
+				// Determining the minimum number of centroids to be probed
+				// to ensure that at least 'k' vectors are collected while
+				// examining at least 'nprobe' centroids.
 				var eligibleDocsTillNow int64
-				minEligibleCentroids := len(closestCentroidIDs) // Default to all centroids
+				minEligibleCentroids := len(closestCentroidIDs)
 				for i, centroidID := range closestCentroidIDs {
 					eligibleDocsTillNow += clusterVectorCounts[centroidID]
-					// Stop once we've examined at least 'nprobe' centroids and collected at least 'k' vectors.
+					// Stop once we've examined at least 'nprobe' centroids and
+					// collected at least 'k' vectors.
 					if eligibleDocsTillNow >= k && i+1 >= nprobe {
 						minEligibleCentroids = i + 1
 						break

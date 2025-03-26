@@ -634,15 +634,17 @@ func mergeFields(segments []*SegmentBase) (bool, []string) {
 
 // Combine updateFieldInfo from all segments
 func mergeUpdatedFields(segments []*SegmentBase) map[string]*index.UpdateFieldInfo {
-	var fieldInfo map[string]*index.UpdateFieldInfo
+	fieldInfo := make(map[string]*index.UpdateFieldInfo)
 
 	for _, segment := range segments {
 		for field, info := range segment.updatedFields {
-			if fieldInfo == nil {
-				fieldInfo = make(map[string]*index.UpdateFieldInfo)
-			}
 			if _, ok := fieldInfo[field]; !ok {
-				fieldInfo[field] = info
+				fieldInfo[field] = &index.UpdateFieldInfo{
+					Deleted:   info.Deleted,
+					Index:     info.Index,
+					Store:     info.Store,
+					DocValues: info.DocValues,
+				}
 			} else {
 				fieldInfo[field].Deleted = fieldInfo[field].Deleted || info.Deleted
 				fieldInfo[field].Index = fieldInfo[field].Index || info.Index

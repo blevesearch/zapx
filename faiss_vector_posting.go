@@ -423,7 +423,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				// Determining which clusters, identified by centroid ID,
 				// have at least one eligible vector and hence, ought to be
 				// probed.
-				clusterVectorCounts, err := vecIndex.CountVectorsPerCluster(vectorIDsToInclude)
+				clusterVectorCounts, err := vecIndex.ObtainClusterVectorCountsFromIVFIndex(vectorIDsToInclude)
 				if err != nil {
 					return nil, err
 				}

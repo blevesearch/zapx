@@ -399,7 +399,12 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				// considered for the search
 				vectorIDsToInclude := make([]int64, 0, len(eligibleDocIDs))
 				for _, id := range eligibleDocIDs {
-					vectorIDsToInclude = append(vectorIDsToInclude, docVecIDMap[uint32(id)]...)
+					vecIDs := docVecIDMap[uint32(id)]
+					if len(vecIDs) == 1 {
+						vectorIDsToInclude = append(vectorIDsToInclude, vecIDs[0])
+					} else {
+						vectorIDsToInclude = append(vectorIDsToInclude, vecIDs...)
+					}
 				}
 				// In case a doc has invalid vector fields but valid non-vector fields,
 				// filter hit IDs may be ineligible for the kNN since the document does
@@ -439,7 +444,11 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					ineligibleVectorIDs := make([]int64, 0, len(vecDocIDMap)-len(vectorIDsToInclude))
 					for docID, vecIDs := range docVecIDMap {
 						if _, exists := eligibleDocIDsSet[uint64(docID)]; !exists {
-							ineligibleVectorIDs = append(ineligibleVectorIDs, vecIDs...)
+							if len(vecIDs) == 1 {
+								ineligibleVectorIDs = append(ineligibleVectorIDs, vecIDs[0])
+							} else {
+								ineligibleVectorIDs = append(ineligibleVectorIDs, vecIDs...)
+							}
 						}
 					}
 					selector, err = faiss.NewIDSelectorNot(ineligibleVectorIDs)

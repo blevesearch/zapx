@@ -446,10 +446,12 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				} else {
 					selector, err = faiss.NewIDSelectorBatch(vectorIDsToInclude)
 				}
-				defer selector.Delete()
 				if err != nil {
 					return nil, err
 				}
+				// If no error occured during the creation of the selector, then
+				// it should be deleted once the search is complete.
+				defer selector.Delete()
 				// Ordering the retrieved centroid IDs by increasing order
 				// of distance i.e. decreasing order of proximity to query vector.
 				centroidIDs := make([]int64, 0, len(clusterVectorCounts))

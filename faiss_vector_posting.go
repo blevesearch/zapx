@@ -491,8 +491,8 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				// Search the clusters specified by 'closestCentroidIDs' for
 				// vectors whose IDs are present in 'vectorIDsToInclude'
 				scores, ids, err := vecIndex.SearchClustersFromIVFIndex(
-					selector, len(vectorIDsToInclude), closestCentroidIDs,
-					minEligibleCentroids, k, qVector, centroidDistances, params)
+					selector, closestCentroidIDs, minEligibleCentroids,
+					k, qVector, centroidDistances, params)
 				if err != nil {
 					return nil, err
 				}

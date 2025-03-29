@@ -25,6 +25,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
+	"github.com/bits-and-blooms/bitset"
 	faiss "github.com/blevesearch/go-faiss"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
@@ -437,13 +438,13 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				// might be quicker to use an exclusion selector as a filter
 				// instead of an inclusion selector.
 				if float32(len(eligibleDocIDs))/float32(len(docVecIDMap)) > 0.5 {
-					eligibleDocIDsSet := make(map[uint64]struct{}, len(eligibleDocIDs))
+					bs := bitset.New(uint(len(eligibleDocIDs)))
 					for _, docID := range eligibleDocIDs {
-						eligibleDocIDsSet[docID] = struct{}{}
+						bs.Set(uint(docID))
 					}
 					ineligibleVectorIDs := make([]int64, 0, len(vecDocIDMap)-len(vectorIDsToInclude))
 					for docID, vecIDs := range docVecIDMap {
-						if _, exists := eligibleDocIDsSet[uint64(docID)]; !exists {
+						if !bs.Test(uint(docID)) {
 							if len(vecIDs) == 1 {
 								ineligibleVectorIDs = append(ineligibleVectorIDs, vecIDs[0])
 							} else {

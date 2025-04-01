@@ -401,6 +401,10 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				vectorIDsToInclude := make([]int64, 0, len(eligibleDocIDs))
 				for _, id := range eligibleDocIDs {
 					vecIDs := docVecIDMap[uint32(id)]
+					// In the common case where vecIDs has only one element, which occurs
+					// when a document has only one vector field, we can
+					// avoid the unnecessary overhead of slice unpacking (append(vecIDs...)).
+					// Directly append the single element for efficiency.
 					if len(vecIDs) == 1 {
 						vectorIDsToInclude = append(vectorIDsToInclude, vecIDs[0])
 					} else {
@@ -438,13 +442,21 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				// might be quicker to use an exclusion selector as a filter
 				// instead of an inclusion selector.
 				if float32(len(eligibleDocIDs))/float32(len(docVecIDMap)) > 0.5 {
+					// Use a bitset to efficiently track eligible document IDs.
+					// This reduces the lookup cost when checking if a document ID is eligible,
+					// compared to using a map or slice.
 					bs := bitset.New(uint(len(eligibleDocIDs)))
 					for _, docID := range eligibleDocIDs {
 						bs.Set(uint(docID))
 					}
 					ineligibleVectorIDs := make([]int64, 0, len(vecDocIDMap)-len(vectorIDsToInclude))
 					for docID, vecIDs := range docVecIDMap {
+						// Check if the document ID is NOT in the eligible set, marking it as ineligible.
 						if !bs.Test(uint(docID)) {
+							// In the common case where vecIDs has only one element, which occurs
+							// when a document has only one vector field, we can
+							// avoid the unnecessary overhead of slice unpacking (append(vecIDs...)).
+							// Directly append the single element for efficiency.
 							if len(vecIDs) == 1 {
 								ineligibleVectorIDs = append(ineligibleVectorIDs, vecIDs[0])
 							} else {

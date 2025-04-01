@@ -6,7 +6,7 @@ require (
 	github.com/RoaringBitmap/roaring/v2 v2.4.5
 	github.com/bits-and-blooms/bitset v1.22.0
 	github.com/blevesearch/bleve_index_api v1.2.6
-	github.com/blevesearch/go-faiss v1.0.24
+	github.com/blevesearch/go-faiss v1.0.25
 	github.com/blevesearch/mmap-go v1.0.4
 	github.com/blevesearch/scorch_segment_api/v2 v2.3.8
 	github.com/blevesearch/vellum v1.1.0

@@ -72,7 +72,9 @@ func (v *faissVectorIndexSection) AddrForField(opaque map[int]resetable, fieldID
 // the index pointer itself)
 type vecIndexInfo struct {
 	startOffset       int
+	binaryStartOffset int
 	indexSize         uint64
+	binaryIndexSize   uint64
 	vecIds            []int64
 	indexOptimizedFor string
 	index             *faiss.IndexImpl
@@ -157,6 +159,13 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 					indexes[curIdx].vecIds = append(indexes[curIdx].vecIds, vecID)
 				}
 			}
+
+			binaryIndexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+
+			indexes[curIdx].binaryStartOffset = pos
+			indexes[curIdx].binaryIndexSize = binaryIndexSize
+			pos += int(binaryIndexSize)
 
 			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
@@ -291,6 +300,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 			continue
 		}
 
+		// Binary index stored before the float index.
+
 		// read the index bytes. todo: parallelize this
 		indexBytes := segBase.mem[vecIndexes[segI].startOffset : vecIndexes[segI].startOffset+int(vecIndexes[segI].indexSize)]
 		index, err := faiss.ReadIndexFromBuffer(indexBytes, faissIOFlags)
@@ -400,6 +411,26 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		}
 	}
 
+	binaryFaissIndex, err := faiss.IndexBinaryFactory(dims, "BFlat", metric)
+	if err != nil {
+		return err
+	}
+	defer binaryFaissIndex.Close()
+	err = binaryFaissIndex.AddWithIDs(convertToBinary(indexData), finalVecIDs)
+	if err != nil {
+		return err
+	}
+
+	mergedBinaryIndexBytes, err := faiss.WriteIndexIntoBuffer(binaryFaissIndex)
+	if err != nil {
+		return err
+	}
+
+	err = v.flushVectorIndex(mergedBinaryIndexBytes, w)
+	if err != nil {
+		return err
+	}
+
 	err = faissIndex.AddWithIDs(indexData, finalVecIDs)
 	if err != nil {
 		return err
@@ -476,6 +507,52 @@ func determineIndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, in
 	}
 }
 
+// return packed binary vectors.
+func convertToBinary(vecs []float32) []uint8 {
+	var packed []uint8
+
+	// Temporary variable to hold the current byte
+	var currentByte uint8
+	bitCount := 0
+
+	// Iterate through the float32 slice and apply thresholding
+	for _, value := range vecs {
+		// Apply the threshold: convert the float32 to 1 or 0 based on threshold
+		var bit uint8
+		if value >= 0.0 {
+			bit = 1
+		} else {
+			bit = 0
+		}
+
+		// Shift the bit into the correct position in the byte
+		currentByte |= (bit << (7 - bitCount))
+
+		// Increment the bit counter
+		bitCount++
+
+		// When we have 8 bits, store the byte and reset for the next byte
+		if bitCount == 8 {
+			packed = append(packed, currentByte)
+			currentByte = 0
+			bitCount = 0
+		}
+
+		// Optionally, you can handle cases where the number of floats isn't a multiple of 8
+		// For example, if we finish the loop with fewer than 8 bits in currentByte,
+		// we can still append the remaining bits by padding with zeros.
+
+	}
+
+	// If there are any remaining bits, pack them into a byte and append
+	if bitCount > 0 {
+		currentByte <<= (8 - bitCount) // Shift remaining bits into the left-most positions
+		packed = append(packed, currentByte)
+	}
+
+	return packed
+}
+
 func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint64, err error) {
 	// for every fieldID, contents to store over here are:
 	//    1. the serialized representation of the dense vector index.
@@ -502,6 +579,16 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		nlist := determineCentroids(nvecs)
 		indexDescription, indexClass := determineIndexToUse(nvecs, nlist,
 			content.indexOptimizedFor)
+		binaryFaissIndex, err := faiss.IndexBinaryFactory(int(content.dim), "BFlat", metric)
+		if err != nil {
+			return 0, err
+		}
+		defer binaryFaissIndex.Close()
+		err = binaryFaissIndex.AddWithIDs(convertToBinary(vecs), ids)
+		if err != nil {
+			return 0, err
+		}
+
 		faissIndex, err := faiss.IndexFactory(int(content.dim), indexDescription, metric)
 		if err != nil {
 			return 0, err
@@ -549,6 +636,10 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			return 0, err
 		}
 
+		// TODO Write here whether the field has a binary index?
+		// If we are to support multiple types of indexes, there should be a count
+		// of how many and what type they are.
+
 		// write the number of unique vectors
 		n = binary.PutUvarint(tempBuf, uint64(faissIndex.Ntotal()))
 		_, err = w.Write(tempBuf[:n])
@@ -578,7 +669,23 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			}
 		}
 
-		// serialize the built index into a byte slice
+		// serialize the built indexes into byte slices
+		binaryBuf, err := faiss.WriteIndexIntoBuffer(binaryFaissIndex)
+		if err != nil {
+			return 0, err
+		}
+		n = binary.PutUvarint(tempBuf, uint64(len(binaryBuf)))
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return 0, err
+		}
+
+		// write the binary vector index data
+		_, err = w.Write(binaryBuf)
+		if err != nil {
+			return 0, err
+		}
+
 		buf, err := faiss.WriteIndexIntoBuffer(faissIndex)
 		if err != nil {
 			return 0, err

@@ -312,6 +312,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 	segment.VectorIndex, error) {
 	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
+	var binaryIndex *faiss.IndexImpl
 	var vecDocIDMap map[int64]uint32
 	var docVecIDMap map[uint32][]int64
 	var vectorIDsToExclude []int64
@@ -354,8 +355,11 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					return rv, nil
 				}
 
-				scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k,
-					vectorIDsToExclude, params)
+				binaryQueryVector := convertToBinary(qVector)
+				_, binIDs, _ := binaryIndex.SearchBinary(binaryQueryVector, k*4)
+
+				scores, ids, err := vecIndex.SearchWithIDs(qVector, k,
+					binIDs, params)
 				if err != nil {
 					return nil, err
 				}
@@ -547,9 +551,12 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 		pos += n
 	}
 
-	vecIndex, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
+	vecIndexes := make([]*faiss.IndexImpl, 0)
+	vecIndexes, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
 		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], requiresFiltering,
 			except)
+	vecIndex = vecIndexes[0]
+	binaryIndex = vecIndexes[1]
 
 	if vecIndex != nil {
 		vecIndexSize = vecIndex.Size()

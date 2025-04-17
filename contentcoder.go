@@ -19,8 +19,6 @@ import (
 	"encoding/binary"
 	"io"
 	"reflect"
-
-	"github.com/golang/snappy"
 )
 
 var reflectStaticSizeMetaData int
@@ -139,7 +137,7 @@ func (c *chunkedContentCoder) flushContents() error {
 	metaData := c.chunkMetaBuf.Bytes()
 	c.final = append(c.final, c.chunkMetaBuf.Bytes()...)
 	// write the compressed data to the final data
-	c.compressed = snappy.Encode(c.compressed[:cap(c.compressed)], c.chunkBuf.Bytes())
+	c.compressed = c.chunkBuf.Bytes()
 	c.incrementBytesWritten(uint64(len(c.compressed)))
 	c.final = append(c.final, c.compressed...)
 

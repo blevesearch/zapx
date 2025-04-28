@@ -551,12 +551,12 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 		pos += n
 	}
 
-	vecIndexes := make([]*faiss.IndexImpl, 0)
+	vecIndexes := make([]*faiss.IndexImpl, 2)
 	vecIndexes, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
 		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], requiresFiltering,
 			except)
-	vecIndex = vecIndexes[0]
-	binaryIndex = vecIndexes[1]
+	vecIndex = vecIndexes[1]
+	binaryIndex = vecIndexes[0]
 
 	if vecIndex != nil {
 		vecIndexSize = vecIndex.Size()

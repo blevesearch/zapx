@@ -19,6 +19,7 @@ package zap
 
 import (
 	"encoding/binary"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -162,28 +163,37 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		}
 	}
 
+	indexes = make([]*faiss.IndexImpl, 0)
 	binaryIndexSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
-	indexes[1], err = faiss.ReadIndexFromBuffer(mem[pos:pos+int(binaryIndexSize)], faissIOFlags)
+
+	// Read binary index with proper flags
+	binaryIndex, err := faiss.ReadBinaryIndexFromBuffer(mem[pos:pos+int(binaryIndexSize)], faissIOFlags)
 	if err != nil {
+		log.Printf("Error reading binary index: %v", err)
 		return nil, nil, nil, nil, err
 	}
+	indexes = append(indexes, binaryIndex)
+	pos += int(binaryIndexSize)
 
 	indexSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
-	indexes[0], err = faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faissIOFlags)
+	index, err := faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faissIOFlags)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	indexes = append(indexes, index)
 
 	cacheEntryStub := cacheEntryReqs{
-		index:       indexes[0],
-		binaryIndex: indexes[1],
+		index:       indexes[1],
+		binaryIndex: indexes[0],
 		vecDocIDMap: vecDocIDMap,
 	}
 
+	log.Printf("inserting into cache \n")
 	vc.insertLOCKED(fieldID, cacheEntryStub)
+	log.Printf("indexes len: %+v \n", len(indexes))
 	return indexes, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
 }
 
@@ -355,7 +365,7 @@ func (ce *cacheEntry) load() ([]*faiss.IndexImpl,
 	map[int64]uint32, map[uint32][]int64) {
 	ce.incHit()
 	ce.addRef()
-	return []*faiss.IndexImpl{ce.index, ce.binaryIndex}, ce.vecDocIDMap, ce.docVecIDMap
+	return []*faiss.IndexImpl{ce.binaryIndex, ce.index}, ce.vecDocIDMap, ce.docVecIDMap
 }
 
 func (ce *cacheEntry) close() {

@@ -300,8 +300,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 			continue
 		}
 
-		// Binary index stored before the float index.
-
 		// read the index bytes. todo: parallelize this
 		indexBytes := segBase.mem[vecIndexes[segI].startOffset : vecIndexes[segI].startOffset+int(vecIndexes[segI].indexSize)]
 		index, err := faiss.ReadIndexFromBuffer(indexBytes, faissIOFlags)
@@ -309,6 +307,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 			freeReconstructedIndexes(vecIndexes)
 			return err
 		}
+		// Will not be reconstructing binary indexes since we don't need to -
+		// will just convert them from the float vecs.
 		if len(vecIndexes[segI].vecIds) > 0 {
 			indexReconsLen := len(vecIndexes[segI].vecIds) * index.D()
 			if indexReconsLen > reconsCap {
@@ -411,7 +411,12 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		}
 	}
 
-	binaryFaissIndex, err := faiss.IndexBinaryFactory(dims, "BFlat", metric)
+	err = faissIndex.AddWithIDs(indexData, finalVecIDs)
+	if err != nil {
+		return err
+	}
+
+	binaryFaissIndex, err := faiss.IndexBinaryFactory(dims, "IDMap,BFlat", metric)
 	if err != nil {
 		return err
 	}
@@ -421,17 +426,12 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		return err
 	}
 
-	mergedBinaryIndexBytes, err := faiss.WriteIndexIntoBuffer(binaryFaissIndex)
+	mergedBinaryIndexBytes, err := faiss.WriteBinaryIndexIntoBuffer(binaryFaissIndex)
 	if err != nil {
 		return err
 	}
 
 	err = v.flushVectorIndex(mergedBinaryIndexBytes, w)
-	if err != nil {
-		return err
-	}
-
-	err = faissIndex.AddWithIDs(indexData, finalVecIDs)
 	if err != nil {
 		return err
 	}
@@ -579,7 +579,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		nlist := determineCentroids(nvecs)
 		indexDescription, indexClass := determineIndexToUse(nvecs, nlist,
 			content.indexOptimizedFor)
-		binaryFaissIndex, err := faiss.IndexBinaryFactory(int(content.dim), "BFlat", metric)
+		// TODO Added support to FAISS to allow BFlat indexes to accommodate custom IDs.
+		binaryFaissIndex, err := faiss.IndexBinaryFactory(int(content.dim), "IDMap,BFlat", metric)
 		if err != nil {
 			return 0, err
 		}
@@ -670,10 +671,11 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		}
 
 		// serialize the built indexes into byte slices
-		binaryBuf, err := faiss.WriteIndexIntoBuffer(binaryFaissIndex)
+		binaryBuf, err := faiss.WriteBinaryIndexIntoBuffer(binaryFaissIndex)
 		if err != nil {
 			return 0, err
 		}
+
 		n = binary.PutUvarint(tempBuf, uint64(len(binaryBuf)))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
@@ -686,6 +688,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			return 0, err
 		}
 
+		// serialize the built index into a byte slice
 		buf, err := faiss.WriteIndexIntoBuffer(faissIndex)
 		if err != nil {
 			return 0, err

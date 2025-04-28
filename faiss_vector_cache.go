@@ -191,9 +191,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		vecDocIDMap: vecDocIDMap,
 	}
 
-	log.Printf("inserting into cache \n")
 	vc.insertLOCKED(fieldID, cacheEntryStub)
-	log.Printf("indexes len: %+v \n", len(indexes))
 	return indexes, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
 }
 

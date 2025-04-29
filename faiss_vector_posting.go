@@ -355,6 +355,18 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					return rv, nil
 				}
 
+				if !vecIndex.IsIVFIndex() {
+					scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k,
+						vectorIDsToExclude, params)
+					if err != nil {
+						return nil, err
+					}
+
+					addIDsToPostingsList(rv, ids, scores)
+
+					return rv, nil
+				}
+
 				binaryQueryVector := convertToBinary(qVector)
 				_, binIDs, err := binaryIndex.SearchBinary(binaryQueryVector, k*4)
 				if err != nil {

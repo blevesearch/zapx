@@ -613,7 +613,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 			for docNum, docTerms := range docTermMap {
 				if fieldTermMap, ok := io.extraDocValues[docNum]; ok {
 					if sTerm, ok := fieldTermMap[uint16(fieldID)]; ok {
-						docTerms = append(append(docTerms, sTerm...), termSeparator)
+						docTerms = append(append([]byte{}, sTerm...), termSeparator)
 					}
 				}
 				if len(docTerms) > 0 {

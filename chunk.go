@@ -21,7 +21,7 @@ import (
 
 // LegacyChunkMode was the original chunk mode (always chunk size 1024)
 // this mode is still used for chunking doc values.
-var LegacyChunkMode uint32 = 1024
+var LegacyChunkMode uint32 = 1
 
 // DefaultChunkMode is the most recent improvement to chunking and should
 // be used by default.

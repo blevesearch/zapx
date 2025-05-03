@@ -368,7 +368,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				}
 
 				binaryQueryVector := convertToBinary(qVector)
-				_, binIDs, err := binaryIndex.SearchBinary(binaryQueryVector, k*2)
+				_, binIDs, err := binaryIndex.SearchBinary(binaryQueryVector, k*4)
 				if err != nil {
 					return nil, err
 				}

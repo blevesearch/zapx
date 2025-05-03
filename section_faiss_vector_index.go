@@ -389,6 +389,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	}
 	defer faissIndex.Close()
 
+	var nprobe int32
 	if indexClass == IndexTypeIVF {
 		// the direct map maintained in the IVF index is essential for the
 		// reconstruction of vectors based on vector IDs in the future merges.
@@ -398,7 +399,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 			return err
 		}
 
-		nprobe := calculateNprobe(nlist, indexOptimizedFor)
+		nprobe = calculateNprobe(nlist, indexOptimizedFor)
 		faissIndex.SetNProbe(nprobe)
 
 		// train the vector index, essentially performs k-means clustering to partition
@@ -416,15 +417,20 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		return err
 	}
 
-	binaryFaissIndex, err := faiss.IndexBinaryFactory(dims, "IDMap,BFlat", metric)
+	binaryFaissIndex, err := faiss.IndexBinaryFactory(dims, fmt.Sprintf("BIVF%d", nlist),
+		metric)
 	if err != nil {
 		return err
 	}
 	defer binaryFaissIndex.Close()
-	err = binaryFaissIndex.AddWithIDs(convertToBinary(indexData), finalVecIDs)
+	binaryFaissIndex.SetDirectMap(2)
+	bvecs := convertToBinary(indexData)
+	binaryFaissIndex.Train(bvecs)
+	err = binaryFaissIndex.AddWithIDs(bvecs, finalVecIDs)
 	if err != nil {
 		return err
 	}
+	binaryFaissIndex.SetNProbe(nprobe * 2)
 
 	mergedBinaryIndexBytes, err := faiss.WriteBinaryIndexIntoBuffer(binaryFaissIndex)
 	if err != nil {
@@ -579,16 +585,22 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		nlist := determineCentroids(nvecs)
 		indexDescription, indexClass := determineIndexToUse(nvecs, nlist,
 			content.indexOptimizedFor)
-		// TODO Added support to FAISS to allow BFlat indexes to accommodate custom IDs.
-		binaryFaissIndex, err := faiss.IndexBinaryFactory(int(content.dim), "IDMap,BFlat", metric)
+		nprobe := calculateNprobe(nlist, content.indexOptimizedFor)
+
+		binaryFaissIndex, err := faiss.IndexBinaryFactory(int(content.dim),
+			fmt.Sprintf("BIVF%d", nlist), metric)
 		if err != nil {
 			return 0, err
 		}
 		defer binaryFaissIndex.Close()
-		err = binaryFaissIndex.AddWithIDs(convertToBinary(vecs), ids)
+		binaryFaissIndex.SetDirectMap(2)
+		bvecs := convertToBinary(vecs)
+		binaryFaissIndex.Train(bvecs)
+		err = binaryFaissIndex.AddWithIDs(bvecs, ids)
 		if err != nil {
 			return 0, err
 		}
+		binaryFaissIndex.SetNProbe(nprobe * 2)
 
 		faissIndex, err := faiss.IndexFactory(int(content.dim), indexDescription, metric)
 		if err != nil {
@@ -603,7 +615,6 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 				return 0, err
 			}
 
-			nprobe := calculateNprobe(nlist, content.indexOptimizedFor)
 			faissIndex.SetNProbe(nprobe)
 
 			err = faissIndex.Train(vecs)

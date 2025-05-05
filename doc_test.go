@@ -48,6 +48,10 @@ func (s *stubDocument) AddIDField() {
 
 }
 
+func (s *stubDocument) Indexed() bool {
+	return true
+}
+
 func newStubDocument(id string, fields []*stubField, compositeName string) *stubDocument {
 	rv := &stubDocument{
 		id:     id,

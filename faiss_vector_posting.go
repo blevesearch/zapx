@@ -28,6 +28,7 @@ import (
 	"github.com/bits-and-blooms/bitset"
 	faiss "github.com/blevesearch/go-faiss"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
+	"container/heap"
 )
 
 var reflectStaticSizeVecPostingsList int
@@ -301,6 +302,31 @@ func (i *vectorIndexWrapper) Size() uint64 {
 	return i.size()
 }
 
+// distanceID represents a distance-ID pair for heap operations
+type distanceID struct {
+	distance float32
+	id       int64
+}
+
+// minHeap implements heap.Interface for distanceID
+type minHeap []*distanceID
+
+func (h minHeap) Len() int           { return len(h) }
+func (h minHeap) Less(i, j int) bool { return h[i].distance < h[j].distance }
+func (h minHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+
+func (h *minHeap) Push(x interface{}) {
+	*h = append(*h, x.(*distanceID))
+}
+
+func (h *minHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[0 : n-1]
+	return x
+}
+
 // InterpretVectorIndex returns a construct of closures (vectorIndexWrapper)
 // that will allow the caller to -
 // (1) search within an attached vector index
@@ -373,10 +399,27 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					return nil, err
 				}
 
-				scores, ids, err := vecIndex.SearchWithIDs(qVector, k,
-					binIDs, params)
-				if err != nil {
-					return nil, err
+				distances := make([]float32, k*4)
+				vecIndex.IVFDistCompute(qVector, binIDs, int(k*4), distances)
+
+				// Need to map distances to the original IDs to get the top K.
+				// Use a heap to keep track of the top K.
+				h := &minHeap{}
+				heap.Init(h)
+				for i := 0; i < len(binIDs); i++ {
+					heap.Push(h, &distanceID{distance: distances[i], id: binIDs[i]})
+					if h.Len() > int(k) {
+						heap.Pop(h)
+					}
+				}
+
+				// Pop the top K in reverse order to get them in ascending order
+				ids := make([]int64, k)
+				scores := make([]float32, k)
+				for i := int(k) - 1; i >= 0; i-- {
+					distanceID := heap.Pop(h).(*distanceID)
+					scores[i] = distanceID.distance
+					ids[i] = distanceID.id
 				}
 
 				addIDsToPostingsList(rv, ids, scores)

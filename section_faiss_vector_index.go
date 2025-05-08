@@ -389,6 +389,15 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	}
 	defer faissIndex.Close()
 
+	binaryIndexDescription := determineBinaryIndexToUse(nvecs, nlist)
+	binaryFaissIndex, err := faiss.IndexBinaryFactory(int(dims),
+		binaryIndexDescription, metric)
+	if err != nil {
+		return err
+	}
+	defer binaryFaissIndex.Close()
+	bvecs := convertToBinary(indexData)
+
 	var nprobe int32
 	if indexClass == IndexTypeIVF {
 		// the direct map maintained in the IVF index is essential for the
@@ -410,6 +419,18 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		if err != nil {
 			return err
 		}
+
+		err = binaryFaissIndex.SetDirectMap(2)
+		if err != nil {
+			return err
+		}
+
+		binaryFaissIndex.SetNProbe(nprobe * 2)
+
+		err = binaryFaissIndex.Train(bvecs)
+		if err != nil {
+			return err
+		}
 	}
 
 	err = faissIndex.AddWithIDs(indexData, finalVecIDs)
@@ -417,20 +438,10 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		return err
 	}
 
-	binaryFaissIndex, err := faiss.IndexBinaryFactory(dims, fmt.Sprintf("BIVF%d", nlist),
-		metric)
-	if err != nil {
-		return err
-	}
-	defer binaryFaissIndex.Close()
-	binaryFaissIndex.SetDirectMap(2)
-	bvecs := convertToBinary(indexData)
-	binaryFaissIndex.Train(bvecs)
 	err = binaryFaissIndex.AddWithIDs(bvecs, finalVecIDs)
 	if err != nil {
 		return err
 	}
-	binaryFaissIndex.SetNProbe(nprobe * 2)
 
 	mergedBinaryIndexBytes, err := faiss.WriteBinaryIndexIntoBuffer(binaryFaissIndex)
 	if err != nil {
@@ -513,6 +524,15 @@ func determineIndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, in
 	}
 }
 
+func determineBinaryIndexToUse(nvecs, nlist int) string {
+	switch {
+	case nvecs >= 1000:
+		return fmt.Sprintf("BIVF%d", nlist)
+	default:
+		return "IDMap,BFlat"
+	}
+}
+
 // return packed binary vectors.
 func convertToBinary(vecs []float32) []uint8 {
 	var packed []uint8
@@ -587,20 +607,15 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			content.indexOptimizedFor)
 		nprobe := calculateNprobe(nlist, content.indexOptimizedFor)
 
+		binaryIndexDescription := determineBinaryIndexToUse(nvecs, nlist)
 		binaryFaissIndex, err := faiss.IndexBinaryFactory(int(content.dim),
-			fmt.Sprintf("BIVF%d", nlist), metric)
+			binaryIndexDescription, metric)
 		if err != nil {
 			return 0, err
 		}
 		defer binaryFaissIndex.Close()
-		binaryFaissIndex.SetDirectMap(2)
+
 		bvecs := convertToBinary(vecs)
-		binaryFaissIndex.Train(bvecs)
-		err = binaryFaissIndex.AddWithIDs(bvecs, ids)
-		if err != nil {
-			return 0, err
-		}
-		binaryFaissIndex.SetNProbe(nprobe * 2)
 
 		faissIndex, err := faiss.IndexFactory(int(content.dim), indexDescription, metric)
 		if err != nil {
@@ -621,9 +636,26 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			if err != nil {
 				return 0, err
 			}
+
+			err = binaryFaissIndex.SetDirectMap(2)
+			if err != nil {
+				return 0, err
+			}
+
+			binaryFaissIndex.SetNProbe(nprobe * 2)
+
+			err = binaryFaissIndex.Train(bvecs)
+			if err != nil {
+				return 0, err
+			}
 		}
 
 		err = faissIndex.AddWithIDs(vecs, ids)
+		if err != nil {
+			return 0, err
+		}
+
+		err = binaryFaissIndex.AddWithIDs(bvecs, ids)
 		if err != nil {
 			return 0, err
 		}

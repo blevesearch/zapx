@@ -23,12 +23,12 @@ import (
 	"math"
 	"reflect"
 
+	"container/heap"
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bits-and-blooms/bitset"
 	faiss "github.com/blevesearch/go-faiss"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
-	"container/heap"
 )
 
 var reflectStaticSizeVecPostingsList int
@@ -308,18 +308,18 @@ type distanceID struct {
 	id       int64
 }
 
-// minHeap implements heap.Interface for distanceID
-type minHeap []*distanceID
+// maxHeap implements heap.Interface for distanceID
+type maxHeap []*distanceID
 
-func (h minHeap) Len() int           { return len(h) }
-func (h minHeap) Less(i, j int) bool { return h[i].distance < h[j].distance }
-func (h minHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h maxHeap) Len() int           { return len(h) }
+func (h maxHeap) Less(i, j int) bool { return h[i].distance > h[j].distance }
+func (h maxHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
 
-func (h *minHeap) Push(x interface{}) {
+func (h *maxHeap) Push(x interface{}) {
 	*h = append(*h, x.(*distanceID))
 }
 
-func (h *minHeap) Pop() interface{} {
+func (h *maxHeap) Pop() interface{} {
 	old := *h
 	n := len(old)
 	x := old[n-1]
@@ -404,7 +404,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 
 				// Need to map distances to the original IDs to get the top K.
 				// Use a heap to keep track of the top K.
-				h := &minHeap{}
+				h := &maxHeap{}
 				heap.Init(h)
 				for i := 0; i < len(binIDs); i++ {
 					heap.Push(h, &distanceID{distance: distances[i], id: binIDs[i]})

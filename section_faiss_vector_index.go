@@ -425,7 +425,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 			return err
 		}
 
-		binaryFaissIndex.SetNProbe(nprobe * 2)
+		binaryFaissIndex.SetNProbe(nprobe)
 
 		err = binaryFaissIndex.Train(bvecs)
 		if err != nil {
@@ -642,7 +642,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 				return 0, err
 			}
 
-			binaryFaissIndex.SetNProbe(nprobe * 2)
+			binaryFaissIndex.SetNProbe(nprobe)
 
 			err = binaryFaissIndex.Train(bvecs)
 			if err != nil {

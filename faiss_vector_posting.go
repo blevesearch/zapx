@@ -381,18 +381,6 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					return rv, nil
 				}
 
-				if !vecIndex.IsIVFIndex() {
-					scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k,
-						vectorIDsToExclude, params)
-					if err != nil {
-						return nil, err
-					}
-
-					addIDsToPostingsList(rv, ids, scores)
-
-					return rv, nil
-				}
-
 				binaryQueryVector := convertToBinary(qVector)
 				_, binIDs, err := binaryIndex.SearchBinaryWithoutIDs(binaryQueryVector,
 					k*4, vectorIDsToExclude, params)
@@ -401,7 +389,10 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				}
 
 				distances := make([]float32, k*4)
-				vecIndex.IVFDistCompute(qVector, binIDs, int(k*4), distances)
+				err = vecIndex.DistCompute(qVector, binIDs, int(k*4), distances)
+				if err != nil {
+					return nil, err
+				}
 
 				// Need to map distances to the original IDs to get the top K.
 				// Use a heap to keep track of the top K.

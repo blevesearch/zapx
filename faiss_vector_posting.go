@@ -215,7 +215,7 @@ func (i *VecPostingsIterator) nextCodeAtOrAfter(atOrAfter uint64) (uint64, bool,
 		allN = i.all.Next()
 	}
 
-	return uint64(n), true, nil
+	return n, true, nil
 }
 
 // a transformation function which stores both the score and the docNum as a single
@@ -329,7 +329,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 			// it isn't added to the final postings list.
 			if docID, ok := vecDocIDMap[vecID]; ok {
 				code := getVectorCode(docID, scores[i])
-				pl.postings.Add(uint64(code))
+				pl.postings.Add(code)
 			}
 		}
 	}

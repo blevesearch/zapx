@@ -23,6 +23,7 @@ import (
 	"math"
 	"reflect"
 
+	"container/heap"
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bits-and-blooms/bitset"
@@ -301,6 +302,31 @@ func (i *vectorIndexWrapper) Size() uint64 {
 	return i.size()
 }
 
+// distanceID represents a distance-ID pair for heap operations
+type distanceID struct {
+	distance float32
+	id       int64
+}
+
+// maxHeap implements heap.Interface for distanceID
+type maxHeap []*distanceID
+
+func (h maxHeap) Len() int           { return len(h) }
+func (h maxHeap) Less(i, j int) bool { return h[i].distance > h[j].distance }
+func (h maxHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+
+func (h *maxHeap) Push(x interface{}) {
+	*h = append(*h, x.(*distanceID))
+}
+
+func (h *maxHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[0 : n-1]
+	return x
+}
+
 // InterpretVectorIndex returns a construct of closures (vectorIndexWrapper)
 // that will allow the caller to -
 // (1) search within an attached vector index
@@ -312,6 +338,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 	segment.VectorIndex, error) {
 	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
+	var binaryIndex *faiss.IndexImpl
 	var vecDocIDMap map[int64]uint32
 	var docVecIDMap map[uint32][]int64
 	var vectorIDsToExclude []int64
@@ -354,10 +381,37 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					return rv, nil
 				}
 
-				scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k,
+				binaryQueryVector := convertToBinary(qVector)
+				_, binIDs, err := binaryIndex.SearchBinaryWithoutIDs(binaryQueryVector, k*4,
 					vectorIDsToExclude, params)
 				if err != nil {
 					return nil, err
+				}
+
+				distances := make([]float32, k*4)
+				err = vecIndex.DistCompute(qVector, binIDs, int(k*4), distances)
+				if err != nil {
+					return nil, err
+				}
+
+				// Need to map distances to the original IDs to get the top K.
+				// Use a heap to keep track of the top K.
+				h := &maxHeap{}
+				heap.Init(h)
+				for i := 0; i < len(binIDs); i++ {
+					heap.Push(h, &distanceID{distance: distances[i], id: binIDs[i]})
+					if h.Len() > int(k) {
+						heap.Pop(h)
+					}
+				}
+
+				// Pop the top K in reverse order to get them in ascending order
+				ids := make([]int64, k)
+				scores := make([]float32, k)
+				for i := int(k) - 1; i >= 0; i-- {
+					distanceID := heap.Pop(h).(*distanceID)
+					scores[i] = distanceID.distance
+					ids[i] = distanceID.id
 				}
 
 				addIDsToPostingsList(rv, ids, scores)
@@ -547,9 +601,12 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 		pos += n
 	}
 
-	vecIndex, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
+	vecIndexes := make([]*faiss.IndexImpl, 2)
+	vecIndexes, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
 		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], requiresFiltering,
 			except)
+	vecIndex = vecIndexes[1]
+	binaryIndex = vecIndexes[0]
 
 	if vecIndex != nil {
 		vecIndexSize = vecIndex.Size()

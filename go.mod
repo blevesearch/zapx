@@ -1,6 +1,8 @@
 module github.com/blevesearch/zapx/v16
 
-go 1.21
+go 1.22
+
+toolchain go1.23.0
 
 require (
 	github.com/RoaringBitmap/roaring/v2 v2.4.5
@@ -20,3 +22,5 @@ require (
 	github.com/spf13/pflag v1.0.5 // indirect
 	golang.org/x/sys v0.13.0 // indirect
 )
+
+replace github.com/blevesearch/go-faiss => ../go-faiss

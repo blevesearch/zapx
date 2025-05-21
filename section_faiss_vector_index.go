@@ -72,7 +72,9 @@ func (v *faissVectorIndexSection) AddrForField(opaque map[int]resetable, fieldID
 // the index pointer itself)
 type vecIndexInfo struct {
 	startOffset       int
+	binaryStartOffset int
 	indexSize         uint64
+	binaryIndexSize   uint64
 	vecIds            []int64
 	indexOptimizedFor string
 	index             *faiss.IndexImpl
@@ -157,6 +159,13 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 					indexes[curIdx].vecIds = append(indexes[curIdx].vecIds, vecID)
 				}
 			}
+
+			binaryIndexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+
+			indexes[curIdx].binaryStartOffset = pos
+			indexes[curIdx].binaryIndexSize = binaryIndexSize
+			pos += int(binaryIndexSize)
 
 			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
@@ -298,6 +307,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 			freeReconstructedIndexes(vecIndexes)
 			return err
 		}
+		// Will not be reconstructing binary indexes since we don't need to -
+		// will just convert them from the float vecs.
 		if len(vecIndexes[segI].vecIds) > 0 {
 			indexReconsLen := len(vecIndexes[segI].vecIds) * index.D()
 			if indexReconsLen > reconsCap {
@@ -378,6 +389,16 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	}
 	defer faissIndex.Close()
 
+	binaryIndexDescription := determineBinaryIndexToUse(nvecs, nlist)
+	binaryFaissIndex, err := faiss.IndexBinaryFactory(int(dims),
+		binaryIndexDescription, metric)
+	if err != nil {
+		return err
+	}
+	defer binaryFaissIndex.Close()
+	bvecs := convertToBinary(indexData)
+
+	var nprobe int32
 	if indexClass == IndexTypeIVF {
 		// the direct map maintained in the IVF index is essential for the
 		// reconstruction of vectors based on vector IDs in the future merges.
@@ -387,7 +408,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 			return err
 		}
 
-		nprobe := calculateNprobe(nlist, indexOptimizedFor)
+		nprobe = calculateNprobe(nlist, indexOptimizedFor)
 		faissIndex.SetNProbe(nprobe)
 
 		// train the vector index, essentially performs k-means clustering to partition
@@ -398,9 +419,36 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		if err != nil {
 			return err
 		}
+
+		err = binaryFaissIndex.SetDirectMap(2)
+		if err != nil {
+			return err
+		}
+
+		binaryFaissIndex.SetNProbe(nprobe)
+
+		err = binaryFaissIndex.Train(bvecs)
+		if err != nil {
+			return err
+		}
 	}
 
 	err = faissIndex.AddWithIDs(indexData, finalVecIDs)
+	if err != nil {
+		return err
+	}
+
+	err = binaryFaissIndex.AddWithIDs(bvecs, finalVecIDs)
+	if err != nil {
+		return err
+	}
+
+	mergedBinaryIndexBytes, err := faiss.WriteBinaryIndexIntoBuffer(binaryFaissIndex)
+	if err != nil {
+		return err
+	}
+
+	err = v.flushVectorIndex(mergedBinaryIndexBytes, w)
 	if err != nil {
 		return err
 	}
@@ -476,6 +524,61 @@ func determineIndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, in
 	}
 }
 
+func determineBinaryIndexToUse(nvecs, nlist int) string {
+	switch {
+	case nvecs >= 1000:
+		return fmt.Sprintf("BIVF%d", nlist)
+	default:
+		return "IDMap,BFlat"
+	}
+}
+
+// return packed binary vectors.
+func convertToBinary(vecs []float32) []uint8 {
+	var packed []uint8
+
+	// Temporary variable to hold the current byte
+	var currentByte uint8
+	bitCount := 0
+
+	// Iterate through the float32 slice and apply thresholding
+	for _, value := range vecs {
+		// Apply the threshold: convert the float32 to 1 or 0 based on threshold
+		var bit uint8
+		if value >= 0.0 {
+			bit = 1
+		} else {
+			bit = 0
+		}
+
+		// Shift the bit into the correct position in the byte
+		currentByte |= (bit << (7 - bitCount))
+
+		// Increment the bit counter
+		bitCount++
+
+		// When we have 8 bits, store the byte and reset for the next byte
+		if bitCount == 8 {
+			packed = append(packed, currentByte)
+			currentByte = 0
+			bitCount = 0
+		}
+
+		// Optionally, you can handle cases where the number of floats isn't a multiple of 8
+		// For example, if we finish the loop with fewer than 8 bits in currentByte,
+		// we can still append the remaining bits by padding with zeros.
+
+	}
+
+	// If there are any remaining bits, pack them into a byte and append
+	if bitCount > 0 {
+		currentByte <<= (8 - bitCount) // Shift remaining bits into the left-most positions
+		packed = append(packed, currentByte)
+	}
+
+	return packed
+}
+
 func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint64, err error) {
 	// for every fieldID, contents to store over here are:
 	//    1. the serialized representation of the dense vector index.
@@ -502,6 +605,18 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		nlist := determineCentroids(nvecs)
 		indexDescription, indexClass := determineIndexToUse(nvecs, nlist,
 			content.indexOptimizedFor)
+		nprobe := calculateNprobe(nlist, content.indexOptimizedFor)
+
+		binaryIndexDescription := determineBinaryIndexToUse(nvecs, nlist)
+		binaryFaissIndex, err := faiss.IndexBinaryFactory(int(content.dim),
+			binaryIndexDescription, metric)
+		if err != nil {
+			return 0, err
+		}
+		defer binaryFaissIndex.Close()
+
+		bvecs := convertToBinary(vecs)
+
 		faissIndex, err := faiss.IndexFactory(int(content.dim), indexDescription, metric)
 		if err != nil {
 			return 0, err
@@ -515,16 +630,32 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 				return 0, err
 			}
 
-			nprobe := calculateNprobe(nlist, content.indexOptimizedFor)
 			faissIndex.SetNProbe(nprobe)
 
 			err = faissIndex.Train(vecs)
 			if err != nil {
 				return 0, err
 			}
+
+			err = binaryFaissIndex.SetDirectMap(2)
+			if err != nil {
+				return 0, err
+			}
+
+			binaryFaissIndex.SetNProbe(nprobe)
+
+			err = binaryFaissIndex.Train(bvecs)
+			if err != nil {
+				return 0, err
+			}
 		}
 
 		err = faissIndex.AddWithIDs(vecs, ids)
+		if err != nil {
+			return 0, err
+		}
+
+		err = binaryFaissIndex.AddWithIDs(bvecs, ids)
 		if err != nil {
 			return 0, err
 		}
@@ -548,6 +679,10 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		if err != nil {
 			return 0, err
 		}
+
+		// TODO Write here whether the field has a binary index?
+		// If we are to support multiple types of indexes, there should be a count
+		// of how many and what type they are.
 
 		// write the number of unique vectors
 		n = binary.PutUvarint(tempBuf, uint64(faissIndex.Ntotal()))
@@ -576,6 +711,24 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			if err != nil {
 				return 0, err
 			}
+		}
+
+		// serialize the built indexes into byte slices
+		binaryBuf, err := faiss.WriteBinaryIndexIntoBuffer(binaryFaissIndex)
+		if err != nil {
+			return 0, err
+		}
+
+		n = binary.PutUvarint(tempBuf, uint64(len(binaryBuf)))
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return 0, err
+		}
+
+		// write the binary vector index data
+		_, err = w.Write(binaryBuf)
+		if err != nil {
+			return 0, err
 		}
 
 		// serialize the built index into a byte slice

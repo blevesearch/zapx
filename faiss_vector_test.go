@@ -29,7 +29,6 @@ func getStubDocScores(k int) (ids []uint64, scores []float32, err error) {
 }
 
 func TestVecPostingsIterator(t *testing.T) {
-
 	vecPL := &VecPostingsList{
 		postings: roaring64.New(),
 	}
@@ -181,7 +180,6 @@ var stubInvalidVecData = [][]float32{
 }
 
 func buildMultiDocDataset(stubVecs, stubVecs1 [][]float32) []index.Document {
-
 	doc1 := newStubDocument("a", []*stubField{
 		newStubFieldSplitString("_id", nil, "a", true, false, false),
 		newStubFieldSplitString("name", nil, "wow", true, false, true),
@@ -589,7 +587,7 @@ func TestPersistedVectorSegment(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		pl, err := vecIndex.Search([]float32{0.0, 0.0, 0.0}, 3, nil)
+		pl, err := vecIndex.Search(queryVec, 3, nil)
 		if err != nil {
 			vecIndex.Close()
 			t.Fatal(err)

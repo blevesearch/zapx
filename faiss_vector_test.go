@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring/v2"
@@ -488,7 +489,8 @@ func TestVectorSegment(t *testing.T) {
 	hitDocIDs := []uint64{2, 9, 9}
 	hitVecs := [][]float32{data[0], data[7][0:3], data[7][3:6]}
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
-		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", false, nil)
+		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", false, nil,
+			segment.InterpretVectorIndexOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -582,7 +584,8 @@ func TestPersistedVectorSegment(t *testing.T) {
 	hitDocIDs := []uint64{2, 9, 9}
 	hitVecs := [][]float32{data[0], data[7][0:3], data[7][3:6]}
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
-		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", false, nil)
+		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", false, nil,
+			segment.InterpretVectorIndexOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -745,4 +748,110 @@ func TestValidVectorMerge(t *testing.T) {
 	defer func() {
 		_ = os.RemoveAll(mergedSegPath1)
 	}()
+}
+
+func TestBatchingRequestsToVectorIndex(t *testing.T) {
+	docs := buildMultiDocDataset(stubVecData, stubVec1Data)
+
+	vecSegPlugin := &ZapPlugin{}
+	seg, _, err := vecSegPlugin.New(docs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := "./test-seg"
+	if unPersistedSeg, ok := seg.(segment.UnpersistedSegment); ok {
+		err = unPersistedSeg.Persist(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	segOnDisk, err := vecSegPlugin.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() {
+		cerr := segOnDisk.Close()
+		if cerr != nil {
+			t.Fatalf("error closing segment: %v", cerr)
+		}
+		_ = os.RemoveAll(path)
+	}()
+
+	expectedHits := [][]struct {
+		docID uint64
+		score float32
+	}{
+		{ // query: [0.0, 0.0, 0.0]
+			{docID: 2, score: 14},
+			{docID: 9, score: 0.84558594},
+			{docID: 9, score: 1.504926},
+		},
+		{ // query: [1.0, 2.0, 3.0]
+			{docID: 2, score: 0},
+			{docID: 8, score: 0.27308902},
+			{docID: 9, score: 8.041586},
+		},
+		{ // query: [12.0, 42.6, 78.65]
+			{docID: 3, score: 0},
+			{docID: 4, score: 6557.6226},
+			{docID: 8, score: 6848.291},
+		},
+	}
+
+	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
+		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", false, nil,
+			segment.InterpretVectorIndexOptions{
+				Batch: true,
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		wg := sync.WaitGroup{}
+		for i, queryVec := range [][]float32{
+			{0.0, 0.0, 0.0},
+			{1.0, 2.0, 3.0},
+			{12.0, 42.6, 78.65},
+		} {
+			wg.Add(1)
+			go func(i int, queryVec []float32) {
+				defer wg.Done()
+				pl, err := vecIndex.Search(queryVec, 3, nil)
+				if err != nil {
+					vecIndex.Close()
+					t.Fatal(err)
+				}
+				itr := pl.Iterator(nil)
+
+				hitCounter := 0
+				for {
+					next, err := itr.Next()
+					if err != nil {
+						vecIndex.Close()
+						t.Fatal(err)
+					}
+					if next == nil {
+						break
+					}
+
+					if next.Number() != expectedHits[i][hitCounter].docID ||
+						next.Score() != expectedHits[i][hitCounter].score {
+						t.Fatalf("[%d] expected %d %f, got %d %f",
+							i, expectedHits[i][hitCounter].docID, expectedHits[i][hitCounter].score,
+							next.Number(), next.Score())
+					}
+					hitCounter++
+				}
+
+				if hitCounter != 3 {
+					t.Fatalf("[%d] expected hitCounter: 3, got: %d", i, hitCounter)
+				}
+			}(i, queryVec)
+		}
+		wg.Wait()
+		vecIndex.Close()
+	}
 }

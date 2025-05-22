@@ -308,7 +308,7 @@ func (i *vectorIndexWrapper) Size() uint64 {
 // (3) close attached vector index
 // (4) get the size of the attached vector index
 func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool,
-	except *roaring.Bitmap) (
+	except *roaring.Bitmap, options segment.InterpretVectorIndexOptions) (
 	segment.VectorIndex, error) {
 	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
@@ -317,6 +317,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 	var vectorIDsToExclude []int64
 	var fieldIDPlus1 uint16
 	var vecIndexSize uint64
+	var batchExec *batchExecutor
 
 	// Utility function to add the corresponding docID and scores for each vector
 	// returned after the kNN query to the newly
@@ -354,6 +355,17 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					return rv, nil
 				}
 
+				if options.Batch && batchExec != nil {
+					// Queue request for batch processing
+					resultCh := batchExec.queueRequest(qVector, k, params, vecIndex,
+						vecDocIDMap, vectorIDsToExclude)
+
+					// Wait for batch processing result
+					rv := <-resultCh
+					return rv.pl, rv.err
+				}
+
+				// Fall back to individual search if batching is not enabled or params are present
 				scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k,
 					vectorIDsToExclude, params)
 				if err != nil {
@@ -547,9 +559,9 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 		pos += n
 	}
 
-	vecIndex, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
+	vecIndex, vecDocIDMap, docVecIDMap, vectorIDsToExclude, batchExec, err =
 		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], requiresFiltering,
-			except)
+			except, options)
 
 	if vecIndex != nil {
 		vecIndexSize = vecIndex.Size()

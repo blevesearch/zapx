@@ -25,6 +25,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2"
 	faiss "github.com/blevesearch/go-faiss"
+	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 
 func newVectorIndexCache() *vectorIndexCache {
@@ -56,17 +57,17 @@ func (vc *vectorIndexCache) Clear() {
 // present. It also returns the batch executor for the field if it's present in the
 // cache.
 func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte,
-	loadDocVecIDMap bool, except *roaring.Bitmap) (
+	loadDocVecIDMap bool, except *roaring.Bitmap, options segment.InterpretVectorIndexOptions) (
 	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, docVecIDMap map[uint32][]int64,
-	vecIDsToExclude []int64, err error) {
+	vecIDsToExclude []int64, batchExec *batchExecutor, err error) {
 	vc.m.RLock()
 	entry, ok := vc.cache[fieldID]
 	if ok {
-		index, vecDocIDMap, docVecIDMap = entry.load()
+		index, vecDocIDMap, docVecIDMap, batchExec = entry.load()
 		vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
 		if !loadDocVecIDMap || len(entry.docVecIDMap) > 0 {
 			vc.m.RUnlock()
-			return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
+			return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, batchExec, nil
 		}
 
 		vc.m.RUnlock()
@@ -76,14 +77,14 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte,
 		// typically seen for the first filtered query.
 		docVecIDMap = vc.addDocVecIDMapToCacheLOCKED(entry)
 		vc.m.Unlock()
-		return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
+		return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, batchExec, nil
 	}
 
 	vc.m.RUnlock()
 	// acquiring a lock since this is modifying the cache.
 	vc.m.Lock()
 	defer vc.m.Unlock()
-	return vc.createAndCacheLOCKED(fieldID, mem, loadDocVecIDMap, except)
+	return vc.createAndCacheLOCKED(fieldID, mem, loadDocVecIDMap, except, options)
 }
 
 func (vc *vectorIndexCache) addDocVecIDMapToCacheLOCKED(ce *cacheEntry) map[uint32][]int64 {
@@ -104,21 +105,22 @@ func (vc *vectorIndexCache) addDocVecIDMapToCacheLOCKED(ce *cacheEntry) map[uint
 
 // Rebuilding the cache on a miss.
 func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
-	loadDocVecIDMap bool, except *roaring.Bitmap) (
+	loadDocVecIDMap bool, except *roaring.Bitmap, options segment.InterpretVectorIndexOptions) (
 	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
-	docVecIDMap map[uint32][]int64, vecIDsToExclude []int64, err error) {
+	docVecIDMap map[uint32][]int64, vecIDsToExclude []int64,
+	batchExec *batchExecutor, err error) {
 
 	// Handle concurrent accesses (to avoid unnecessary work) by adding a
 	// check within the write lock here.
 	entry := vc.cache[fieldID]
 	if entry != nil {
-		index, vecDocIDMap, docVecIDMap = entry.load()
+		index, vecDocIDMap, docVecIDMap, batchExec = entry.load()
 		vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
 		if !loadDocVecIDMap || len(entry.docVecIDMap) > 0 {
-			return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
+			return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, batchExec, nil
 		}
 		docVecIDMap = vc.addDocVecIDMapToCacheLOCKED(entry)
-		return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
+		return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, batchExec, nil
 	}
 
 	// if the cache doesn't have the entry, construct the vector to doc id map and
@@ -154,16 +156,17 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 
 	index, err = faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faissIOFlags)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 
-	vc.insertLOCKED(fieldID, index, vecDocIDMap, loadDocVecIDMap, docVecIDMap)
-	return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
+	batchExec = newBatchExecutor(options)
+	vc.insertLOCKED(fieldID, index, vecDocIDMap, loadDocVecIDMap, docVecIDMap, batchExec)
+	return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, batchExec, nil
 }
 
 func (vc *vectorIndexCache) insertLOCKED(fieldIDPlus1 uint16,
 	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, loadDocVecIDMap bool,
-	docVecIDMap map[uint32][]int64) {
+	docVecIDMap map[uint32][]int64, batchExec *batchExecutor) {
 	// the first time we've hit the cache, try to spawn a monitoring routine
 	// which will reconcile the moving averages for all the fields being hit
 	if len(vc.cache) == 0 {
@@ -178,7 +181,7 @@ func (vc *vectorIndexCache) insertLOCKED(fieldIDPlus1 uint16,
 		// longer time and thereby the index to be resident in the cache
 		// for longer time.
 		vc.cache[fieldIDPlus1] = createCacheEntry(index, vecDocIDMap,
-			loadDocVecIDMap, docVecIDMap, 0.4)
+			loadDocVecIDMap, docVecIDMap, 0.4, batchExec)
 	}
 }
 
@@ -272,7 +275,8 @@ func (e *ewma) add(val uint64) {
 // -----------------------------------------------------------------------------
 
 func createCacheEntry(index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
-	loadDocVecIDMap bool, docVecIDMap map[uint32][]int64, alpha float64) *cacheEntry {
+	loadDocVecIDMap bool, docVecIDMap map[uint32][]int64, alpha float64,
+	batchExec *batchExecutor) *cacheEntry {
 	ce := &cacheEntry{
 		index:       index,
 		vecDocIDMap: vecDocIDMap,
@@ -280,7 +284,8 @@ func createCacheEntry(index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
 			alpha:  alpha,
 			sample: 1,
 		},
-		refs: 1,
+		refs:      1,
+		batchExec: batchExec,
 	}
 	if loadDocVecIDMap {
 		ce.docVecIDMap = docVecIDMap
@@ -299,6 +304,8 @@ type cacheEntry struct {
 	index       *faiss.IndexImpl
 	vecDocIDMap map[int64]uint32
 	docVecIDMap map[uint32][]int64
+
+	batchExec *batchExecutor
 }
 
 func (ce *cacheEntry) incHit() {
@@ -313,10 +320,14 @@ func (ce *cacheEntry) decRef() {
 	atomic.AddInt64(&ce.refs, -1)
 }
 
-func (ce *cacheEntry) load() (*faiss.IndexImpl, map[int64]uint32, map[uint32][]int64) {
+func (ce *cacheEntry) load() (
+	*faiss.IndexImpl,
+	map[int64]uint32,
+	map[uint32][]int64,
+	*batchExecutor) {
 	ce.incHit()
 	ce.addRef()
-	return ce.index, ce.vecDocIDMap, ce.docVecIDMap
+	return ce.index, ce.vecDocIDMap, ce.docVecIDMap, ce.batchExec
 }
 
 func (ce *cacheEntry) close() {
@@ -325,6 +336,7 @@ func (ce *cacheEntry) close() {
 		ce.index = nil
 		ce.vecDocIDMap = nil
 		ce.docVecIDMap = nil
+		ce.batchExec.close()
 	}()
 }
 

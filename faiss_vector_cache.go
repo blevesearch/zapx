@@ -19,7 +19,6 @@ package zap
 
 import (
 	"encoding/binary"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -57,18 +56,18 @@ func (vc *vectorIndexCache) Clear() {
 // It is true when a filtered kNN query accesses the cache since it requires the
 // map. It's false otherwise.
 func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte,
-	loadDocVecIDMap bool, except *roaring.Bitmap) (
+	loadDocVecIDMap bool, loadBinaryIndex bool, except *roaring.Bitmap) (
 	indexes []*faiss.IndexImpl, vecDocIDMap map[int64]uint32, docVecIDMap map[uint32][]int64,
 	vecIDsToExclude []int64, err error) {
 	indexes, vecDocIDMap, docVecIDMap, vecIDsToExclude, err = vc.loadFromCache(
-		fieldID, loadDocVecIDMap, mem, except)
+		fieldID, loadDocVecIDMap, loadBinaryIndex, mem, except)
 	return indexes, vecDocIDMap, docVecIDMap, vecIDsToExclude, err
 }
 
 // function to load the vectorDocIDMap and if required, docVecIDMap from cache
 // If not, it will create these and add them to the cache.
-func (vc *vectorIndexCache) loadFromCache(fieldID uint16, loadDocVecIDMap bool,
-	mem []byte, except *roaring.Bitmap) (indexes []*faiss.IndexImpl,
+func (vc *vectorIndexCache) loadFromCache(fieldID uint16, loadDocVecIDMap,
+	loadBinaryIndex bool, mem []byte, except *roaring.Bitmap) (indexes []*faiss.IndexImpl,
 	vecDocIDMap map[int64]uint32, docVecIDMap map[uint32][]int64,
 	vecIDsToExclude []int64, err error) {
 
@@ -97,7 +96,8 @@ func (vc *vectorIndexCache) loadFromCache(fieldID uint16, loadDocVecIDMap bool,
 	// acquiring a lock since this is modifying the cache.
 	vc.m.Lock()
 	defer vc.m.Unlock()
-	return vc.createAndCacheLOCKED(fieldID, mem, loadDocVecIDMap, except)
+	return vc.createAndCacheLOCKED(fieldID, mem, loadDocVecIDMap, loadBinaryIndex,
+		except)
 }
 
 func (vc *vectorIndexCache) addDocVecIDMapToCacheLOCKED(ce *cacheEntry) map[uint32][]int64 {
@@ -118,7 +118,7 @@ func (vc *vectorIndexCache) addDocVecIDMapToCacheLOCKED(ce *cacheEntry) map[uint
 
 // Rebuilding the cache on a miss.
 func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
-	loadDocVecIDMap bool, except *roaring.Bitmap) (
+	loadDocVecIDMap, loadBinaryIndex bool, except *roaring.Bitmap) (
 	indexes []*faiss.IndexImpl, vecDocIDMap map[int64]uint32,
 	docVecIDMap map[uint32][]int64, vecIDsToExclude []int64, err error) {
 
@@ -163,18 +163,25 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		}
 	}
 
-	indexes = make([]*faiss.IndexImpl, 0)
-	binaryIndexSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
-	pos += n
-
-	// Read binary index with proper flags
-	binaryIndex, err := faiss.ReadBinaryIndexFromBuffer(mem[pos:pos+int(binaryIndexSize)], faissIOFlags)
-	if err != nil {
-		log.Printf("Error reading binary index: %v", err)
-		return nil, nil, nil, nil, err
+	cacheEntryStub := cacheEntryReqs{
+		vecDocIDMap: vecDocIDMap,
 	}
-	indexes = append(indexes, binaryIndex)
-	pos += int(binaryIndexSize)
+
+	indexes = make([]*faiss.IndexImpl, 0)
+
+	if loadBinaryIndex {
+		binaryIndexSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+		pos += n
+
+		// Read binary index with proper flags
+		binaryIndex, err := faiss.ReadBinaryIndexFromBuffer(mem[pos:pos+int(binaryIndexSize)], faissIOFlags)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		cacheEntryStub.binaryIndex = binaryIndex
+		indexes = append(indexes, binaryIndex)
+		pos += int(binaryIndexSize)
+	}
 
 	indexSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
@@ -185,11 +192,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	}
 	indexes = append(indexes, index)
 
-	cacheEntryStub := cacheEntryReqs{
-		index:       indexes[1],
-		binaryIndex: indexes[0],
-		vecDocIDMap: vecDocIDMap,
-	}
+	cacheEntryStub.index = index
 
 	vc.insertLOCKED(fieldID, cacheEntryStub)
 	return indexes, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
@@ -363,15 +366,20 @@ func (ce *cacheEntry) load() ([]*faiss.IndexImpl,
 	map[int64]uint32, map[uint32][]int64) {
 	ce.incHit()
 	ce.addRef()
-	return []*faiss.IndexImpl{ce.binaryIndex, ce.index}, ce.vecDocIDMap, ce.docVecIDMap
+	if ce.binaryIndex != nil {
+		return []*faiss.IndexImpl{ce.binaryIndex, ce.index}, ce.vecDocIDMap, ce.docVecIDMap
+	}
+	return []*faiss.IndexImpl{ce.index}, ce.vecDocIDMap, ce.docVecIDMap
 }
 
 func (ce *cacheEntry) close() {
 	go func() {
 		ce.index.Close()
 		ce.index = nil
-		ce.binaryIndex.Close()
-		ce.binaryIndex = nil
+		if ce.binaryIndex != nil {
+			ce.binaryIndex.Close()
+			ce.binaryIndex = nil
+		}
 		ce.vecDocIDMap = nil
 		ce.docVecIDMap = nil
 	}()

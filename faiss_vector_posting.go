@@ -381,41 +381,49 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					return rv, nil
 				}
 
-				binaryQueryVector := convertToBinary(qVector)
-				_, binIDs, err := binaryIndex.SearchBinaryWithoutIDs(binaryQueryVector, k*4,
-					vectorIDsToExclude, params)
-				if err != nil {
-					return nil, err
-				}
-
-				distances := make([]float32, k*4)
-				err = vecIndex.DistCompute(qVector, binIDs, int(k*4), distances)
-				if err != nil {
-					return nil, err
-				}
-
-				// Need to map distances to the original IDs to get the top K.
-				// Use a heap to keep track of the top K.
-				h := &maxHeap{}
-				heap.Init(h)
-				for i := 0; i < len(binIDs); i++ {
-					heap.Push(h, &distanceID{distance: distances[i], id: binIDs[i]})
-					if h.Len() > int(k) {
-						heap.Pop(h)
+				if binaryIndex != nil {
+					binaryQueryVector := convertToBinary(qVector)
+					_, binIDs, err := binaryIndex.SearchBinaryWithoutIDs(binaryQueryVector, k*4,
+						vectorIDsToExclude, params)
+					if err != nil {
+						return nil, err
 					}
+
+					distances := make([]float32, k*4)
+					err = vecIndex.DistCompute(qVector, binIDs, int(k*4), distances)
+					if err != nil {
+						return nil, err
+					}
+
+					// Need to map distances to the original IDs to get the top K.
+					// Use a heap to keep track of the top K.
+					h := &maxHeap{}
+					heap.Init(h)
+					for i := 0; i < len(binIDs); i++ {
+						heap.Push(h, &distanceID{distance: distances[i], id: binIDs[i]})
+						if h.Len() > int(k) {
+							heap.Pop(h)
+						}
+					}
+
+					// Pop the top K in reverse order to get them in ascending order
+					ids := make([]int64, k)
+					scores := make([]float32, k)
+					for i := int(k) - 1; i >= 0; i-- {
+						distanceID := heap.Pop(h).(*distanceID)
+						scores[i] = distanceID.distance
+						ids[i] = distanceID.id
+					}
+
+					addIDsToPostingsList(rv, ids, scores)
+				} else {
+					scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k,
+						vectorIDsToExclude, params)
+					if err != nil {
+						return nil, err
+					}
+					addIDsToPostingsList(rv, ids, scores)
 				}
-
-				// Pop the top K in reverse order to get them in ascending order
-				ids := make([]int64, k)
-				scores := make([]float32, k)
-				for i := int(k) - 1; i >= 0; i-- {
-					distanceID := heap.Pop(h).(*distanceID)
-					scores[i] = distanceID.distance
-					ids[i] = distanceID.id
-				}
-
-				addIDsToPostingsList(rv, ids, scores)
-
 				return rv, nil
 			},
 			searchWithFilter: func(qVector []float32, k int64,
@@ -596,17 +604,27 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 	// 1. doc values(first 2 iterations) - adhering to the sections format. never
 	// valid values for vector section
 	// 2. index optimization type.
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 2; i++ {
 		_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
 	}
 
-	vecIndexes := make([]*faiss.IndexImpl, 2)
-	vecIndexes, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
+	// Determining if a binary index is needed.
+	indexOptimisationType, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
+	loadBinaryIndex := isBinaryIndex(indexOptimisationType)
+
+	vecIndexes, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err :=
 		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], requiresFiltering,
-			except)
-	vecIndex = vecIndexes[1]
-	binaryIndex = vecIndexes[0]
+			loadBinaryIndex, except)
+
+	if loadBinaryIndex {
+		vecIndex = vecIndexes[1]
+		binaryIndex = vecIndexes[0]
+	} else {
+		vecIndex = vecIndexes[0]
+	}
 
 	if vecIndex != nil {
 		vecIndexSize = vecIndex.Size()

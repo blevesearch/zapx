@@ -76,7 +76,7 @@ func (vc *vectorIndexCache) loadFromCache(fieldID uint16, loadDocVecIDMap bool,
 	if ok {
 		index, vecDocIDMap, docVecIDMap = entry.load()
 		vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
-		if !loadDocVecIDMap || (loadDocVecIDMap && len(entry.docVecIDMap) > 0) {
+		if !loadDocVecIDMap || len(entry.docVecIDMap) > 0 {
 			vc.m.RUnlock()
 			return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
 		}
@@ -126,7 +126,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	if entry != nil {
 		index, vecDocIDMap, docVecIDMap = entry.load()
 		vecIDsToExclude = getVecIDsToExclude(vecDocIDMap, except)
-		if !loadDocVecIDMap || (loadDocVecIDMap && len(entry.docVecIDMap) > 0) {
+		if !loadDocVecIDMap || len(entry.docVecIDMap) > 0 {
 			return index, vecDocIDMap, docVecIDMap, vecIDsToExclude, nil
 		}
 		docVecIDMap = vc.addDocVecIDMapToCacheLOCKED(entry)

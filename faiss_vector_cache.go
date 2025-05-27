@@ -57,7 +57,8 @@ func (vc *vectorIndexCache) Clear() {
 // present. It also returns the batch executor for the field if it's present in the
 // cache.
 func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte,
-	loadDocVecIDMap bool, except *roaring.Bitmap, options segment.InterpretVectorIndexOptions) (
+	loadDocVecIDMap bool, except *roaring.Bitmap,
+	options *segment.InterpretVectorIndexOptions) (
 	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, docVecIDMap map[uint32][]int64,
 	vecIDsToExclude []int64, batchExec *batchExecutor, err error) {
 	vc.m.RLock()
@@ -105,7 +106,8 @@ func (vc *vectorIndexCache) addDocVecIDMapToCacheLOCKED(ce *cacheEntry) map[uint
 
 // Rebuilding the cache on a miss.
 func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
-	loadDocVecIDMap bool, except *roaring.Bitmap, options segment.InterpretVectorIndexOptions) (
+	loadDocVecIDMap bool, except *roaring.Bitmap,
+	options *segment.InterpretVectorIndexOptions) (
 	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
 	docVecIDMap map[uint32][]int64, vecIDsToExclude []int64,
 	batchExec *batchExecutor, err error) {

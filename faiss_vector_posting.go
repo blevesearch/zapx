@@ -308,7 +308,7 @@ func (i *vectorIndexWrapper) Size() uint64 {
 // (3) close attached vector index
 // (4) get the size of the attached vector index
 func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool,
-	except *roaring.Bitmap, options segment.InterpretVectorIndexOptions) (
+	except *roaring.Bitmap, options *segment.InterpretVectorIndexOptions) (
 	segment.VectorIndex, error) {
 	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
@@ -320,8 +320,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 	var batchExec *batchExecutor
 
 	// Utility function to add the corresponding docID and scores for each vector
-	// returned after the kNN query to the newly
-	// created vecPostingsList
+	// returned after the kNN query to a VecPostingsList
 	addIDsToPostingsList := func(pl *VecPostingsList, ids []int64, scores []float32) {
 		for i := 0; i < len(ids); i++ {
 			vecID := ids[i]
@@ -345,17 +344,13 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				// 4. VecPostings would just have the docNum and the score. Every call of Next()
 				//    and Advance just returns the next VecPostings. The caller would do a vp.Number()
 				//    and the Score() to get the corresponding values
-				rv := &VecPostingsList{
-					except:   nil, // todo: handle the except bitmap within postings iterator.
-					postings: roaring64.New(),
-				}
 
 				if vecIndex == nil || vecIndex.D() != len(qVector) {
 					// vector index not found or dimensionality mismatched
-					return rv, nil
+					return &VecPostingsList{postings: roaring64.New()}, nil
 				}
 
-				if options.Batch && batchExec != nil {
+				if options != nil && options.Batch && batchExec != nil {
 					// Queue request for batch processing
 					resultCh := batchExec.queueRequest(qVector, k, params, vecIndex,
 						vecDocIDMap, vectorIDsToExclude)
@@ -372,8 +367,11 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					return nil, err
 				}
 
+				rv := &VecPostingsList{
+					except:   nil, // todo: handle the except bitmap within postings iterator.
+					postings: roaring64.New(),
+				}
 				addIDsToPostingsList(rv, ids, scores)
-
 				return rv, nil
 			},
 			searchWithFilter: func(qVector []float32, k int64,
@@ -397,6 +395,9 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				if len(eligibleDocIDs) == 0 {
 					return rv, nil
 				}
+
+				// TODO: Support batching for searchWithFilter
+
 				// If every element in the index is eligible (full selectivity),
 				// then this can basically be considered unfiltered kNN.
 				if len(eligibleDocIDs) == int(sb.numDocs) {

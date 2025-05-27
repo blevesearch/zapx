@@ -55,10 +55,10 @@ type batchExecutor struct {
 	groups map[batchKey]*batchGroup
 }
 
-func newBatchExecutor(options segment.InterpretVectorIndexOptions) *batchExecutor {
-	batchDelay := options.BatchExecutionDelay
-	if batchDelay <= 0 {
-		batchDelay = segment.DefaultBatchExecutionDelay
+func newBatchExecutor(options *segment.InterpretVectorIndexOptions) *batchExecutor {
+	batchDelay := segment.DefaultBatchExecutionDelay
+	if options != nil && options.BatchExecutionDelay > 0 {
+		batchDelay = options.BatchExecutionDelay
 	}
 
 	return &batchExecutor{
@@ -121,7 +121,7 @@ func (be *batchExecutor) queueRequest(qVector []float32, k int64, params json.Ra
 
 	// If this is the first request in the group, start a timer to process the batch
 	if len(group.requests) == 1 {
-		go be.processBatchAfterDelay(key, be.batchDelay)
+		be.processBatchAfterDelay(key, be.batchDelay)
 	}
 
 	return resultCh
@@ -129,21 +129,21 @@ func (be *batchExecutor) queueRequest(qVector []float32, k int64, params json.Ra
 
 // processBatchAfterDelay waits for the specified delay and then processes the batch
 func (be *batchExecutor) processBatchAfterDelay(key batchKey, delay time.Duration) {
-	time.Sleep(delay)
+	time.AfterFunc(delay, func() {
+		be.m.Lock()
+		group, exists := be.groups[key]
+		if !exists {
+			be.m.Unlock()
+			return
+		}
 
-	be.m.Lock()
-	group, exists := be.groups[key]
-	if !exists {
+		// Remove the group from the map before processing
+		delete(be.groups, key)
 		be.m.Unlock()
-		return
-	}
 
-	// Remove the group from the map before processing
-	delete(be.groups, key)
-	be.m.Unlock()
-
-	// Process the batch
-	be.processBatch(key, group)
+		// Process the batch
+		be.processBatch(key, group)
+	})
 }
 
 // processBatch executes a batch of vector search requests
@@ -153,9 +153,10 @@ func (be *batchExecutor) processBatch(key batchKey, group *batchGroup) {
 	}
 
 	// Prepare vectors for batch search
-	vecs := make([]float32, 0, len(group.requests)*group.vecIndex.D())
-	for _, req := range group.requests {
-		vecs = append(vecs, req.qVector...)
+	dim := group.vecIndex.D()
+	vecs := make([]float32, len(group.requests)*dim)
+	for i, req := range group.requests {
+		copy(vecs[i*dim:(i+1)*dim], req.qVector)
 	}
 
 	// Execute batch search

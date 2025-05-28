@@ -19,6 +19,7 @@ package zap
 
 import (
 	"encoding/json"
+	"slices"
 	"sync"
 	"time"
 
@@ -41,7 +42,7 @@ type batchRequest struct {
 
 // batchGroup represents a group of requests with the same k and params
 type batchGroup struct {
-	requests           []batchRequest
+	requests           []*batchRequest
 	vecIndex           *faiss.IndexImpl
 	vecDocIDMap        map[int64]uint32
 	vectorIDsToExclude []int64
@@ -105,7 +106,7 @@ func (be *batchExecutor) queueRequest(qVector []float32, k int64, params json.Ra
 	group, exists := be.groups[key]
 	if !exists {
 		group = &batchGroup{
-			requests:           make([]batchRequest, 0),
+			requests:           make([]*batchRequest, 0),
 			vecIndex:           vecIndex,
 			vecDocIDMap:        vecDocIDMap,
 			vectorIDsToExclude: vectorIDsToExclude,
@@ -114,7 +115,7 @@ func (be *batchExecutor) queueRequest(qVector []float32, k int64, params json.Ra
 	}
 
 	// Add request to group
-	group.requests = append(group.requests, batchRequest{
+	group.requests = append(group.requests, &batchRequest{
 		qVector: qVector,
 		result:  resultCh,
 	})
@@ -137,34 +138,39 @@ func (be *batchExecutor) processBatchAfterDelay(key batchKey, delay time.Duratio
 			return
 		}
 
-		// Remove the group from the map before processing
-		delete(be.groups, key)
+		requests := slices.Clone(group.requests)
+		group.requests = group.requests[:0] // re-use
+		vecIndex := group.vecIndex
+		vecDocIDMap := group.vecDocIDMap
+		vectorIDsToExclude := group.vectorIDsToExclude
 		be.m.Unlock()
 
 		// Process the batch
-		be.processBatch(key, group)
+		be.processBatch(key, requests, vecIndex, vecDocIDMap, vectorIDsToExclude)
 	})
 }
 
 // processBatch executes a batch of vector search requests
-func (be *batchExecutor) processBatch(key batchKey, group *batchGroup) {
-	if len(group.requests) == 0 {
+func (be *batchExecutor) processBatch(key batchKey, requests []*batchRequest,
+	vecIndex *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
+	vectorIDsToExclude []int64) {
+	if len(requests) == 0 {
 		return
 	}
 
 	// Prepare vectors for batch search
-	dim := group.vecIndex.D()
-	vecs := make([]float32, len(group.requests)*dim)
-	for i, req := range group.requests {
+	dim := vecIndex.D()
+	vecs := make([]float32, len(requests)*dim)
+	for i, req := range requests {
 		copy(vecs[i*dim:(i+1)*dim], req.qVector)
 	}
 
 	// Execute batch search
-	scores, ids, err := group.vecIndex.SearchWithoutIDs(vecs, key.k, group.vectorIDsToExclude,
+	scores, ids, err := vecIndex.SearchWithoutIDs(vecs, key.k, vectorIDsToExclude,
 		json.RawMessage(key.params))
 	if err != nil {
 		// Send error to all channels
-		for _, req := range group.requests {
+		for _, req := range requests {
 			req.result <- batchResult{
 				err: err,
 			}
@@ -178,7 +184,7 @@ func (be *batchExecutor) processBatch(key batchKey, group *batchGroup) {
 	totalResults := len(scores)
 
 	// Process results and send to respective channels
-	for i := range group.requests {
+	for i := range requests {
 		pl := &VecPostingsList{
 			postings: roaring64.New(),
 		}
@@ -197,16 +203,16 @@ func (be *batchExecutor) processBatch(key batchKey, group *batchGroup) {
 		// Add results to postings list
 		for j := 0; j < len(currIDs); j++ {
 			vecID := currIDs[j]
-			if docID, ok := group.vecDocIDMap[vecID]; ok {
+			if docID, ok := vecDocIDMap[vecID]; ok {
 				code := getVectorCode(docID, currScores[j])
 				pl.postings.Add(code)
 			}
 		}
 
 		// Send result to channel
-		group.requests[i].result <- batchResult{
+		requests[i].result <- batchResult{
 			pl: pl,
 		}
-		close(group.requests[i].result)
+		close(requests[i].result)
 	}
 }

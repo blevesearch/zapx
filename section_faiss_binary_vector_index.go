@@ -417,18 +417,6 @@ func (v *binaryVectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		bvecs := convertToBinary(indexData)
 
 		if indexClass == IndexTypeIVF {
-			err = faissIndex.SetDirectMap(2)
-			if err != nil {
-				return err
-			}
-
-			faissIndex.SetNProbe(nprobe)
-
-			err = faissIndex.Train(indexData)
-			if err != nil {
-				return err
-			}
-
 			err = binaryFaissIndex.SetDirectMap(2)
 			if err != nil {
 				return err
@@ -656,18 +644,6 @@ func (vo *binaryVectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offse
 			bvecs := convertToBinary(vecs)
 
 			if indexClass == IndexTypeIVF {
-				err = faissIndex.SetDirectMap(2)
-				if err != nil {
-					return 0, err
-				}
-
-				faissIndex.SetNProbe(nprobe)
-
-				err = faissIndex.Train(vecs)
-				if err != nil {
-					return 0, err
-				}
-
 				err = binaryFaissIndex.SetDirectMap(2)
 				if err != nil {
 					return 0, err

@@ -306,9 +306,6 @@ type vectorIndexWrapper struct {
 		params json.RawMessage) (segment.VecPostingsList, error)
 	close func()
 	size  func() uint64
-
-	// TODO MODIFY THIS TO ADD MORE APIS IF NEEDED!
-	// CAN USE THESE TO DETERMINE WHICH SECTION TO USE?
 }
 
 func (i *vectorIndexWrapper) Search(qVector []float32, k int64,
@@ -624,7 +621,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 		if err != nil {
 			return wrapVecIndex, err
 		}
-		
+
 		if vecIndexes != nil {
 			vecIndexSize = 0
 			for _, vecIndex := range vecIndexes {

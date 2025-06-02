@@ -19,7 +19,6 @@ package zap
 
 import (
 	"encoding/binary"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -176,7 +175,6 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		// Read binary index with proper flags
 		binaryIndex, err := faiss.ReadBinaryIndexFromBuffer(mem[pos:pos+int(binaryIndexSize)], faissIOFlags)
 		if err != nil {
-			log.Printf("Error reading binary index: %v", err)
 			return nil, nil, nil, nil, err
 		}
 		cacheEntryStub.binaryIndex = binaryIndex

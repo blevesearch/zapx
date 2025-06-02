@@ -52,15 +52,15 @@ func (v *faissVectorIndexSection) Process(opaque map[int]resetable, docNum uint3
 	}
 
 	vf, ok := field.(index.VectorField)
-	
-	if ok { 
+
+	if ok {
 		optimisation := vf.IndexOptimizedFor()
 		if !(optimisation == index.IndexOptimizedForRecallBinary ||
-		optimisation == index.IndexOptimizedForLatencyBinary) {
-		vo := v.getvectorIndexOpaque(opaque)
-		vo.process(vf, fieldID, docNum)
+			optimisation == index.IndexOptimizedForLatencyBinary) {
+			vo := v.getvectorIndexOpaque(opaque)
+			vo.process(vf, fieldID, docNum)
+		}
 	}
-}
 }
 
 func (v *faissVectorIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
@@ -74,6 +74,8 @@ func (v *faissVectorIndexSection) AddrForField(opaque map[int]resetable, fieldID
 	return vo.fieldAddrs[uint16(fieldID)]
 }
 
+// information specific to a vector index - (including metadata and
+// the index pointer itself)
 type vecIndexInfo struct {
 	startOffset       int
 	indexSize         uint64
@@ -417,7 +419,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	return v.flushVectorIndex(mergedIndexBytes, w)
 }
 
-
 // todo: can be parallelized.
 func freeReconstructedIndexes(indexes []*vecIndexInfo) {
 	for _, entry := range indexes {
@@ -626,12 +627,6 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 	dim := field.Dims()
 	metric := field.Similarity()
 	indexOptimizedFor := field.IndexOptimizedFor()
-	vectorTypes := make([]string, 0)
-	vectorTypes = append(vectorTypes, index.FloatVectorIndex)
-	if indexOptimizedFor == index.IndexOptimizedForLatencyBinary ||
-		indexOptimizedFor == index.IndexOptimizedForRecallBinary {
-		vectorTypes = append(vectorTypes, index.BinaryVectorIndex)
-	}
 
 	// caller is supposed to make sure len(vec) is a multiple of dim.
 	// Not double checking it here to avoid the overhead.
@@ -651,7 +646,6 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 		// to construct the vector index.
 		if _, ok := vo.vecFieldMap[fieldID]; !ok {
 			vo.vecFieldMap[fieldID] = &indexContent{
-				vectorTypes: vectorTypes,
 				vecs: map[int64]*vecInfo{
 					subVecHash: &vecInfo{
 						vec: subVec,
@@ -714,7 +708,6 @@ type indexContent struct {
 	dim               uint16
 	metric            string
 	indexOptimizedFor string
-	vectorTypes       []string // order in which the vector types are processed
 }
 
 type vecInfo struct {
@@ -731,8 +724,6 @@ type vectorIndexOpaque struct {
 	lastNumFields int
 
 	// maps the field to the address of its vector section
-	// the section can contain multiple vector types - no separate field address
-	// for each vector type
 	fieldAddrs map[uint16]int
 
 	// maps the vecID to basic info involved around it such as

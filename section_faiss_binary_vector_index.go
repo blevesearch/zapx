@@ -1,4 +1,4 @@
-//  Copyright (c) 2023 Couchbase, Inc.
+//  Copyright (c) 2025 Couchbase, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -201,36 +201,18 @@ func (v *binaryVectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHash
 		return nil
 	}
 	fieldStart := w.Count()
-	// marking the fact that for vector index, doc values isn't valid by
-	// storing fieldNotUniverted values.
-	n := binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
-	_, err := w.Write(tempBuf[:n])
-	if err != nil {
-		return err
-	}
-	n = binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
-	_, err = w.Write(tempBuf[:n])
-	if err != nil {
-		return err
-	}
 
-	n = binary.PutUvarint(tempBuf, uint64(index.SupportedVectorIndexOptimizations[indexes[0].indexOptimizedFor]))
-	_, err = w.Write(tempBuf[:n])
-	if err != nil {
-		return err
-	}
-
-	// write the number of unique vectors
-	n = binary.PutUvarint(tempBuf, uint64(len(vecToDocID)))
-	_, err = w.Write(tempBuf[:n])
+	err := writeVectorMetadata(w, fieldNotUninverted,
+		uint64(index.SupportedVectorIndexOptimizations[indexes[0].indexOptimizedFor]),
+		len(vecToDocID))
 	if err != nil {
 		return err
 	}
 
 	for vecID, docID := range vecToDocID {
 		// write the vecID
-		n = binary.PutVarint(tempBuf, vecID)
-		_, err = w.Write(tempBuf[:n])
+		n := binary.PutVarint(tempBuf, vecID)
+		_, err := w.Write(tempBuf[:n])
 		if err != nil {
 			return err
 		}
@@ -396,7 +378,6 @@ func (v *binaryVectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		if err != nil {
 			return err
 		}
-
 	}
 
 	err = faissIndex.AddWithIDs(indexData, finalVecIDs)

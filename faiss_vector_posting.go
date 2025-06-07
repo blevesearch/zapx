@@ -653,14 +653,16 @@ func (sb *SegmentBase) UpdateFieldStats(stats segment.FieldStats) {
 			continue
 		}
 
-		// Skip the two offset values
-		_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += n
-		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += n
+		for i := 0; i < 2; i++ {
+			// Skip the two offset values
+			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+			_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+		}
 
 		// Skip the optimization type
-		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
 
 		numVecs, _ := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])

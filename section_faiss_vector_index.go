@@ -536,28 +536,10 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		}
 
 		fieldStart := w.Count()
-		// writing out two offset values to indicate that the current field's
-		// vector section doesn't have valid doc value content within it.
-		n := binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
-		_, err = w.Write(tempBuf[:n])
-		if err != nil {
-			return 0, err
-		}
-		n = binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
-		_, err = w.Write(tempBuf[:n])
-		if err != nil {
-			return 0, err
-		}
 
-		n = binary.PutUvarint(tempBuf, uint64(index.SupportedVectorIndexOptimizations[content.indexOptimizedFor]))
-		_, err = w.Write(tempBuf[:n])
-		if err != nil {
-			return 0, err
-		}
-
-		// write the number of unique vectors
-		n = binary.PutUvarint(tempBuf, uint64(faissIndex.Ntotal()))
-		_, err = w.Write(tempBuf[:n])
+		err = writeVectorMetadata(w, uint64(fieldNotUninverted),
+			uint64(index.SupportedVectorIndexOptimizations[content.indexOptimizedFor]),
+			int(faissIndex.Ntotal()))
 		if err != nil {
 			return 0, err
 		}
@@ -571,7 +553,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		for vecID := range content.vecs {
 			docID := vo.vecIDMap[vecID].docID
 			// write the vecID
-			n = binary.PutVarint(tempBuf, vecID)
+			n := binary.PutVarint(tempBuf, vecID)
 			_, err = w.Write(tempBuf[:n])
 			if err != nil {
 				return 0, err
@@ -593,7 +575,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		// record the fieldStart value for this section.
 		// write the vecID -> docID mapping
 		// write the index bytes and its length
-		n = binary.PutUvarint(tempBuf, uint64(len(buf)))
+		n := binary.PutUvarint(tempBuf, uint64(len(buf)))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return 0, err

@@ -27,7 +27,6 @@ import (
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bits-and-blooms/bitset"
-	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
@@ -338,8 +337,8 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 	except *roaring.Bitmap) (
 	segment.VectorIndex, error) {
 	// Params needed for the closures
-	var vecIndexes []*faiss.IndexImpl
-	var vecIndex, binaryIndex *faiss.IndexImpl
+	var vecIndex *faiss.IndexImpl
+	var binaryIndex *faiss.BinaryIndexImpl
 	var vecDocIDMap map[int64]uint32
 	var docVecIDMap map[uint32][]int64
 	var vectorIDsToExclude []int64
@@ -436,7 +435,6 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					except:   nil, // todo: handle the except bitmap within postings iterator.
 					postings: roaring64.New(),
 				}
-				vecIndex := vecIndexes[index.SupportedVectorIndexTypes[index.FloatVectorIndex]]
 				if vecIndex == nil || vecIndex.D() != len(qVector) {
 					// vector index not found or dimensionality mismatched
 					return rv, nil
@@ -614,33 +612,21 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 	}
 
 	if sectionType == 0 {
-		vecIndexes, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
+		vecIndex, _, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
 			sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], requiresFiltering,
 				false, except)
 
 		if err != nil {
 			return wrapVecIndex, err
 		}
-
-		if vecIndexes != nil {
-			vecIndexSize = 0
-			for _, vecIndex := range vecIndexes {
-				vecIndexSize += vecIndex.Size()
-			}
-		}
-
-		vecIndex = vecIndexes[0]
 	} else if sectionType == 1 {
-		vecIndexes, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
+		vecIndex, binaryIndex, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
 			sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], requiresFiltering,
 				true, except)
+	}
 
-		vecIndex = vecIndexes[1]
-		binaryIndex = vecIndexes[0]
-
-		if vecIndex != nil {
-			vecIndexSize = vecIndex.Size()
-		}
+	if vecIndex != nil {
+		vecIndexSize = vecIndex.Size()
 	}
 
 	return wrapVecIndex, err

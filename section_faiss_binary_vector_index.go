@@ -285,7 +285,10 @@ func (v *binaryVectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 			indexDataCap += indexReconsLen
 			finalVecIDCap += len(vecIndexes[segI].vecIds)
 		}
-		vecIndexes[segI].index = index
+		indexImpl, ok := index.(*faiss.IndexImpl)
+		if ok {
+			vecIndexes[segI].index = indexImpl
+		}
 
 		validMerge = true
 		// set the dims and metric values from the constructed index.
@@ -405,13 +408,13 @@ func (v *binaryVectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 
 			binaryFaissIndex.SetNProbe(nprobe)
 
-			err = binaryFaissIndex.Train(bvecs)
+			err = binaryFaissIndex.TrainBinary(bvecs)
 			if err != nil {
 				return err
 			}
 		}
 
-		err = binaryFaissIndex.AddWithIDs(bvecs, finalVecIDs)
+		err = binaryFaissIndex.AddBinaryWithIDs(bvecs, finalVecIDs)
 		if err != nil {
 			return err
 		}
@@ -632,13 +635,13 @@ func (vo *binaryVectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offse
 
 				binaryFaissIndex.SetNProbe(nprobe)
 
-				err = binaryFaissIndex.Train(bvecs)
+				err = binaryFaissIndex.TrainBinary(bvecs)
 				if err != nil {
 					return 0, err
 				}
 			}
 
-			err = binaryFaissIndex.AddWithIDs(bvecs, ids)
+			err = binaryFaissIndex.AddBinaryWithIDs(bvecs, ids)
 			if err != nil {
 				return 0, err
 			}

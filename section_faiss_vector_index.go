@@ -312,7 +312,10 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 			indexDataCap += indexReconsLen
 			finalVecIDCap += len(vecIndexes[segI].vecIds)
 		}
-		vecIndexes[segI].index = index
+		indexImpl, ok := index.(*faiss.IndexImpl)
+		if ok {
+			vecIndexes[segI].index = indexImpl
+		}
 
 		validMerge = true
 		// set the dims and metric values from the constructed index.

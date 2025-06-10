@@ -151,7 +151,11 @@ func decodeSection(data []byte, start uint64) (int, int, map[int64]uint64, *fais
 		return 0, 0, nil, nil, err
 	}
 
-	return int(numVecs), int(indexSize), vecDocIDMap, vecIndex, nil
+	idxImpl, ok := vecIndex.(*faiss.IndexImpl)
+	if !ok {
+		return 0, 0, nil, nil, fmt.Errorf("failed to convert FloatIndex to *IndexImpl")
+	}
+	return int(numVecs), int(indexSize), vecDocIDMap, idxImpl, nil
 }
 
 func init() {

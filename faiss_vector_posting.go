@@ -18,6 +18,7 @@
 package zap
 
 import (
+	"container/heap"
 	"encoding/binary"
 	"encoding/json"
 	"math"
@@ -60,6 +61,31 @@ func (vp *VecPosting) Size() int {
 	sizeInBytes := reflectStaticSizePosting
 
 	return sizeInBytes
+}
+
+// distanceID represents a distance-ID pair for heap operations
+type distanceID struct {
+	distance float32
+	id       int64
+}
+
+// maxHeap implements heap.Interface for distanceID
+type maxHeap []*distanceID
+
+func (h maxHeap) Len() int           { return len(h) }
+func (h maxHeap) Less(i, j int) bool { return h[i].distance > h[j].distance }
+func (h maxHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+
+func (h *maxHeap) Push(x interface{}) {
+	*h = append(*h, x.(*distanceID))
+}
+
+func (h *maxHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[0 : n-1]
+	return x
 }
 
 // =============================================================================
@@ -312,6 +338,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 	segment.VectorIndex, error) {
 	// Params needed for the closures
 	var vecIndex *faiss.IndexImpl
+	var binaryIndex *faiss.BinaryIndexImpl
 	var vecDocIDMap map[int64]uint32
 	var docVecIDMap map[uint32][]int64
 	var vectorIDsToExclude []int64
@@ -349,18 +376,49 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					postings: roaring64.New(),
 				}
 
-				if vecIndex == nil || vecIndex.D() != len(qVector) {
-					// vector index not found or dimensionality mismatched
-					return rv, nil
-				}
+				if binaryIndex != nil {
+					binaryQueryVector := convertToBinary(qVector)
+					_, binIDs, err := binaryIndex.SearchBinaryWithoutIDs(binaryQueryVector, k*4,
+						vectorIDsToExclude, params)
+					if err != nil {
+						return nil, err
+					}
 
-				scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k,
-					vectorIDsToExclude, params)
-				if err != nil {
-					return nil, err
-				}
+					distances := make([]float32, k*4)
+					err = vecIndex.DistCompute(qVector, binIDs, int(k*4), distances)
+					if err != nil {
+						return nil, err
+					}
 
-				addIDsToPostingsList(rv, ids, scores)
+					// Need to map distances to the original IDs to get the top K.
+					// Use a heap to keep track of the top K.
+					h := &maxHeap{}
+					heap.Init(h)
+					for i := 0; i < len(binIDs); i++ {
+						heap.Push(h, &distanceID{distance: distances[i], id: binIDs[i]})
+						if h.Len() > int(k) {
+							heap.Pop(h)
+						}
+					}
+
+					// Pop the top K in reverse order to get them in ascending order
+					ids := make([]int64, k)
+					scores := make([]float32, k)
+					for i := int(k) - 1; i >= 0; i-- {
+						distanceID := heap.Pop(h).(*distanceID)
+						scores[i] = distanceID.distance
+						ids[i] = distanceID.id
+					}
+
+					addIDsToPostingsList(rv, ids, scores)
+				} else {
+					scores, ids, err := vecIndex.SearchWithoutIDs(qVector, k,
+						vectorIDsToExclude, params)
+					if err != nil {
+						return nil, err
+					}
+					addIDsToPostingsList(rv, ids, scores)
+				}
 
 				return rv, nil
 			},
@@ -531,12 +589,18 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 	}
 
 	vectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionFaissVectorIndex]
-	// check if the field has a vector section in the segment.
-	if vectorSection <= 0 {
+	binaryVectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionFaissBinaryVectorIndex]
+	// check if the field has a vector or binary vector section in the segment.
+	if vectorSection <= 0 && binaryVectorSection <= 0 {
 		return wrapVecIndex, nil
 	}
 
+	sectionType := 0
 	pos := int(vectorSection)
+	if pos == 0 {
+		pos = int(binaryVectorSection)
+		sectionType = 1
+	}
 
 	// the below loop loads the following:
 	// 1. doc values(first 2 iterations) - adhering to the sections format. never
@@ -547,9 +611,19 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 		pos += n
 	}
 
-	vecIndex, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
-		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], requiresFiltering,
-			except)
+	if sectionType == 0 {
+		vecIndex, _, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
+			sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], requiresFiltering,
+				false, except)
+
+		if err != nil {
+			return wrapVecIndex, err
+		}
+	} else if sectionType == 1 {
+		vecIndex, binaryIndex, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
+			sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], requiresFiltering,
+				true, except)
+	}
 
 	if vecIndex != nil {
 		vecIndexSize = vecIndex.Size()
@@ -565,10 +639,18 @@ func (sb *SegmentBase) UpdateFieldStats(stats segment.FieldStats) {
 			continue
 		}
 
-		for i := 0; i < 3; i++ {
+		for i := 0; i < 2; i++ {
+			// Skip the two offset values
 			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
+			_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
 		}
+
+		// Skip the optimization type
+		_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += n
+
 		numVecs, _ := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 
 		stats.Store("num_vectors", fieldName, numVecs)

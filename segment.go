@@ -53,11 +53,12 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 
 	rv := &Segment{
 		SegmentBase: SegmentBase{
-			fieldsMap:      make(map[string]uint16),
-			fieldFSTs:      make(map[uint16]*vellum.FST),
-			vecIndexCache:  newVectorIndexCache(),
-			synIndexCache:  newSynonymIndexCache(),
-			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
+			fieldsMap:        make(map[string]uint16),
+			fieldFSTs:        make(map[uint16]*vellum.FST),
+			vecIndexCache:    newVectorIndexCache(),
+			synIndexCache:    newSynonymIndexCache(),
+			nestedIndexCache: newNestedIndexCache(),
+			fieldDvReaders:   make([]map[uint16]*docValueReader, len(segmentSections)),
 		},
 		f:    f,
 		mm:   mm,
@@ -113,8 +114,9 @@ type SegmentBase struct {
 	fieldFSTs map[uint16]*vellum.FST
 
 	// this cache comes into play when vectors are supported in builds.
-	vecIndexCache *vectorIndexCache
-	synIndexCache *synonymIndexCache
+	vecIndexCache    *vectorIndexCache
+	synIndexCache    *synonymIndexCache
+	nestedIndexCache *nestedIndexCache
 }
 
 func (sb *SegmentBase) Size() int {
@@ -154,6 +156,7 @@ func (sb *SegmentBase) DecRef() (err error) { return nil }
 func (sb *SegmentBase) Close() (err error) {
 	sb.vecIndexCache.Clear()
 	sb.synIndexCache.Clear()
+	sb.nestedIndexCache.Clear()
 	return nil
 }
 
@@ -478,6 +481,46 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 	return rv, nil
 }
 
+func (sb *SegmentBase) NestedDictionary(path string, arrayPosition int, field string) (segment.TermDictionary, error) {
+	dict, err := sb.nestedDictionary(path, arrayPosition, field)
+	if err == nil && dict == nil {
+		return emptyDictionary, nil
+	}
+	return dict, err
+}
+
+func (sb *SegmentBase) nestedDictionary(path string, arrayPosition int, field string) (rv *Dictionary, err error) {
+	fieldIDPlus1 := sb.fieldsMap[path]
+	if fieldIDPlus1 == 0 {
+		return nil, nil
+	}
+	pos := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionNestedIndex]
+	if pos > 0 {
+		rv = &Dictionary{
+			sb:      sb,
+			field:   path,
+			fieldID: fieldIDPlus1 - 1,
+		}
+		// skip the doc value offsets
+		for i := 0; i < 2; i++ {
+			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += uint64(n)
+		}
+		nestLoc, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += uint64(n)
+		fst, _, _, err := sb.nestedIndexCache.loadOrCreate(rv.fieldID, arrayPosition, field, sb.mem, nestLoc)
+		if err != nil {
+			return nil, fmt.Errorf("nested dictionary path %s err: %v", path, err)
+		}
+		rv.fst = fst
+		rv.fstReader, err = rv.fst.Reader()
+		if err != nil {
+			return nil, fmt.Errorf("nested dictionary path %s vellum reader err: %v", path, err)
+		}
+	}
+	return rv, nil
+}
+
 // Thesaurus returns the thesaurus with the specified name, or an empty thesaurus if not found.
 func (s *SegmentBase) Thesaurus(name string) (segment.Thesaurus, error) {
 	thesaurus, err := s.thesaurus(name)
@@ -699,6 +742,7 @@ func (s *Segment) closeActual() (err error) {
 	// clear contents from the vector and synonym index cache before un-mmapping
 	s.vecIndexCache.Clear()
 	s.synIndexCache.Clear()
+	s.nestedIndexCache.Clear()
 
 	if s.mm != nil {
 		err = s.mm.Unmap()

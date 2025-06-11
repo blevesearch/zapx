@@ -172,6 +172,7 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		fieldFSTs:           make(map[uint16]*vellum.FST),
 		vecIndexCache:       newVectorIndexCache(),
 		synIndexCache:       newSynonymIndexCache(),
+		nestedIndexCache:    newNestedIndexCache(),
 		// following fields gets populated by loadFieldsNew
 		fieldsMap: make(map[string]uint16),
 		dictLocs:  make([]uint64, 0),

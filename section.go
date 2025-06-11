@@ -59,6 +59,7 @@ const (
 	SectionInvertedTextIndex = iota
 	SectionFaissVectorIndex
 	SectionSynonymIndex
+	SectionNestedIndex
 )
 
 // -----------------------------------------------------------------------------

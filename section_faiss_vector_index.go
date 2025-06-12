@@ -467,10 +467,8 @@ func determineIndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, in
 	}
 
 	switch {
-	case nvecs >= 10000:
-		return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF
 	case nvecs >= 1000:
-		return fmt.Sprintf("IVF%d,Flat", nlist), IndexTypeIVF
+		return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF
 	default:
 		return "IDMap2,Flat", IndexTypeFlat
 	}

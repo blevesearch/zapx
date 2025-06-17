@@ -80,8 +80,8 @@ type vecIndexInfo struct {
 
 // keep in mind with respect to update and delete operations with respect to vectors
 func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
-	drops []*roaring.Bitmap, fieldsInv []string,
-	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
+	drops []*roaring.Bitmap, fieldsInv []string, newDocNumsIn [][]uint64, w *CountHashWriter,
+	closeCh chan struct{}, config map[string]interface{}) error {
 	vo := v.getvectorIndexOpaque(opaque)
 
 	// the segments with valid vector sections in them
@@ -170,7 +170,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		if err != nil {
 			return err
 		}
-		err = vo.mergeAndWriteVectorIndexes(vecSegs, indexes, w, closeCh)
+		err = vo.mergeAndWriteVectorIndexes(vecSegs, indexes, w, closeCh, config)
 		if err != nil {
 			return err
 		}
@@ -269,7 +269,7 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 // todo: naive implementation. need to keep in mind the perf implications and improve on this.
 // perhaps, parallelized merging can help speed things up over here.
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
-	vecIndexes []*vecIndexInfo, w *CountHashWriter, closeCh chan struct{}) error {
+	vecIndexes []*vecIndexInfo, w *CountHashWriter, closeCh chan struct{}, config map[string]interface{}) error {
 
 	// safe to assume that all the indexes are of the same config values, given
 	// that they are extracted from the field mapping info.

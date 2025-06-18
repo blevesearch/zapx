@@ -349,6 +349,13 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 				freeReconstructedIndexes(vecIndexes)
 				return err
 			}
+
+			// collect training data for future reuse
+			if v, ok := config["collectTrainDataCallback"]; ok {
+				collectTrainDataCallback := v.(func([]float32))
+				collectTrainDataCallback(recons)
+			}
+
 			indexData = append(indexData, recons...)
 			// Adding vector IDs in the same order as the vectors
 			finalVecIDs = append(finalVecIDs, vecIndexes[i].vecIds...)

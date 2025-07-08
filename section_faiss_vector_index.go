@@ -260,6 +260,117 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 	return nprobe
 }
 
+func (v *vectorIndexOpaque) fastMergeIndexes(vecIndexes []*vecIndexInfo, trainData []float32, w *CountHashWriter, closeCh chan struct{}) error {
+	defer freeReconstructedIndexes(vecIndexes)
+	// var vecIDs []int64
+	var mergeCandidates []int
+	var indexOptimizedFor string
+	var dims, metric, nvecs, reconsCap int
+	var trained bool
+	for i := 0; i < len(vecIndexes); i++ {
+		if isClosed(closeCh) {
+			return seg.ErrClosed
+		}
+		if len(vecIndexes[i].vecIds) == 0 {
+			continue
+		} else if vecIndexes[i].index.Nlist() >= int(4*math.Sqrt(float64(1000000))) {
+			fmt.Println("large index", vecIndexes[i].index.Nlist())
+			mergeCandidates = append(mergeCandidates, i)
+			// trained = true
+		}
+
+		if len(vecIndexes[i].vecIds) > 0 {
+			indexReconsLen := len(vecIndexes[i].vecIds) * vecIndexes[i].index.D()
+			if indexReconsLen > reconsCap {
+				reconsCap = indexReconsLen
+			}
+		}
+		nvecs += len(vecIndexes[i].vecIds)
+		indexOptimizedFor = vecIndexes[i].indexOptimizedFor
+		dims = vecIndexes[i].index.D()
+		metric = int(vecIndexes[i].index.MetricType())
+
+	}
+
+	// index type to be created after merge based on the number of vectors
+	// in indexData added into the index.
+	nlist := determineCentroids(nvecs)
+	if len(trainData) > 0 {
+		fmt.Println("training data", len(trainData)/dims)
+		nlist = len(trainData) / (39 * dims)
+	}
+	indexDescription, indexClass := determineIndexToUse(nvecs, nlist, indexOptimizedFor)
+
+	faissIndex, err := faiss.IndexFactory(dims, indexDescription, metric)
+	if err != nil {
+		return err
+	}
+	defer faissIndex.Close()
+
+	reconsVecs := make([]float32, 0, reconsCap)
+	if indexClass == IndexTypeIVF {
+		err = faissIndex.SetDirectMap(2)
+		if err != nil {
+			return err
+		}
+
+		nprobe := calculateNprobe(nlist, indexOptimizedFor)
+		faissIndex.SetNProbe(nprobe)
+		if !trained {
+			fmt.Println("training index")
+			if len(mergeCandidates) > 0 {
+				coarseQuantizer, err := vecIndexes[mergeCandidates[0]].index.GetCoarseQuantizer()
+				if err != nil {
+					return err
+				}
+				err = faissIndex.SetCoarseQuantizer(coarseQuantizer)
+				if err != nil {
+					return err
+				}
+			} else {
+				err = faissIndex.Train(trainData)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		var j int
+		for i := 0; i < len(vecIndexes); i++ {
+			if isClosed(closeCh) {
+				return seg.ErrClosed
+			}
+			if j < len(mergeCandidates) && i == mergeCandidates[j] {
+				fmt.Println("merging index", i)
+				err = faissIndex.MergeFrom(vecIndexes[i].index, 0)
+				if err != nil {
+					return err
+				}
+				j++
+			} else {
+				neededReconsLen := len(vecIndexes[i].vecIds) * vecIndexes[i].index.D()
+				reconsVecs = reconsVecs[:neededReconsLen]
+				fmt.Println("recons cap", reconsCap, len(vecIndexes[i].vecIds), len(reconsVecs))
+				reconsVecs, err := vecIndexes[i].index.ReconstructBatch(vecIndexes[i].vecIds, reconsVecs)
+				if err != nil {
+					return err
+				}
+				err = faissIndex.AddWithIDs(reconsVecs, vecIndexes[i].vecIds)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+	}
+
+	mergedIndexBytes, err := faiss.WriteIndexIntoBuffer(faissIndex)
+	if err != nil {
+		return err
+	}
+
+	return v.flushVectorIndex(mergedIndexBytes, w)
+}
+
 // todo: naive implementation. need to keep in mind the perf implications and improve on this.
 // perhaps, parallelized merging can help speed things up over here.
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
@@ -321,7 +432,14 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	// total number of vectors in the vector index after merge
 	// used to determine the index type to be created.
 	nvecs := 0
-	for _, currVecIndex := range vecIndexes {
+
+	if trainData, ok := config["trainData"]; ok {
+		trainData := trainData.([]float32)
+		return v.fastMergeIndexes(vecIndexes, trainData, w, closeCh)
+	}
+
+	var err error
+	for i, currVecIndex := range vecIndexes {
 		if isClosed(closeCh) {
 			freeReconstructedIndexes(vecIndexes)
 			return seg.ErrClosed

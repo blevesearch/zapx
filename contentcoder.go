@@ -140,6 +140,14 @@ func (c *chunkedContentCoder) flushContents() error {
 	c.final = append(c.final, c.chunkMetaBuf.Bytes()...)
 	// write the compressed data to the final data
 	c.compressed = snappy.Encode(c.compressed[:cap(c.compressed)], c.chunkBuf.Bytes())
+	if fw, ok := c.w.(*fileWriter); ok && fw != nil {
+		// process the compressed data using the callback
+		var err error
+		c.compressed, err = fw.process(c.compressed)
+		if err != nil {
+			return err
+		}
+	}
 	c.incrementBytesWritten(uint64(len(c.compressed)))
 	c.final = append(c.final, c.compressed...)
 

@@ -57,7 +57,7 @@ func (v *faissVectorIndexSection) Process(opaque map[int]resetable, docNum uint3
 	}
 }
 
-func (v *faissVectorIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
+func (v *faissVectorIndexSection) Persist(opaque map[int]resetable, w *fileWriter) (n int64, err error) {
 	vo := v.getvectorIndexOpaque(opaque)
 	vo.writeVectorIndexes(w)
 	return 0, nil
@@ -81,7 +81,7 @@ type vecIndexInfo struct {
 // keep in mind with respect to update and delete operations with respect to vectors
 func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
 	drops []*roaring.Bitmap, fieldsInv []string,
-	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
+	newDocNumsIn [][]uint64, w *fileWriter, closeCh chan struct{}) error {
 	vo := v.getvectorIndexOpaque(opaque)
 
 	// the segments with valid vector sections in them
@@ -139,13 +139,23 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 				indexOptimizedFor: index.VectorIndexOptimizationsReverseLookup[int(indexOptimizationTypeInt)],
 			})
 
+			idMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+			pos += int(idMapLen)
+
+			buf, err := sb.fileReader.process(sb.mem[pos : pos+int(idMapLen)])
+			if err != nil {
+				return err
+			}
+			bufPos := 0
+
 			curIdx := len(indexes) - 1
 			for i := 0; i < int(numVecs); i++ {
-				vecID, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
-				pos += n
+				vecID, n := binary.Varint(buf[bufPos : bufPos+binary.MaxVarintLen64])
+				bufPos += n
 
-				docID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-				pos += n
+				docID, n := binary.Uvarint(buf[bufPos : bufPos+binary.MaxVarintLen64])
+				bufPos += n
 
 				// remap the docID from the old segment to the new document nos.
 				// provided. furthermore, also drop the now-invalid doc nums
@@ -183,7 +193,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 	return nil
 }
 
-func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter,
+func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *fileWriter,
 	vecToDocID map[int64]uint64, indexes []*vecIndexInfo) error {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 
@@ -219,31 +229,44 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter
 		return err
 	}
 
+	idBuf := make([]byte, 0, binary.MaxVarintLen64*2*len(vecToDocID))
+	pos := 0
+
 	for vecID, docID := range vecToDocID {
 		// write the vecID
-		n = binary.PutVarint(tempBuf, vecID)
-		_, err = w.Write(tempBuf[:n])
-		if err != nil {
-			return err
-		}
+		pos += binary.PutVarint(idBuf, vecID)
+		pos += binary.PutUvarint(idBuf, docID)
+	}
+	idBuf, err = w.process(idBuf[:pos])
+	if err != nil {
+		return err
+	}
 
-		// write the docID
-		n = binary.PutUvarint(tempBuf, docID)
-		_, err = w.Write(tempBuf[:n])
-		if err != nil {
-			return err
-		}
+	n = binary.PutUvarint(tempBuf, uint64(len(idBuf)))
+	_, err = w.Write(tempBuf[:n])
+	if err != nil {
+		return err
+	}
+
+	_, err = w.Write(idBuf)
+	if err != nil {
+		return err
 	}
 
 	v.fieldAddrs[uint16(fieldID)] = fieldStart
 	return nil
 }
 
-func (v *vectorIndexOpaque) flushVectorIndex(indexBytes []byte, w *CountHashWriter) error {
+func (v *vectorIndexOpaque) flushVectorIndex(indexBytes []byte, w *fileWriter) error {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 
+	indexBytes, err := w.process(indexBytes)
+	if err != nil {
+		return err
+	}
+
 	n := binary.PutUvarint(tempBuf, uint64(len(indexBytes)))
-	_, err := w.Write(tempBuf[:n])
+	_, err = w.Write(tempBuf[:n])
 	if err != nil {
 		return err
 	}
@@ -273,7 +296,7 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 // todo: naive implementation. need to keep in mind the perf implications and improve on this.
 // perhaps, parallelized merging can help speed things up over here.
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
-	vecIndexes []*vecIndexInfo, w *CountHashWriter, closeCh chan struct{}) error {
+	vecIndexes []*vecIndexInfo, w *fileWriter, closeCh chan struct{}) error {
 
 	// safe to assume that all the indexes are of the same config values, given
 	// that they are extracted from the field mapping info.
@@ -296,7 +319,10 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		}
 
 		// read the index bytes. todo: parallelize this
-		indexBytes := segBase.mem[vecIndexes[segI].startOffset : vecIndexes[segI].startOffset+int(vecIndexes[segI].indexSize)]
+		indexBytes, err := w.process(segBase.mem[vecIndexes[segI].startOffset : vecIndexes[segI].startOffset+int(vecIndexes[segI].indexSize)])
+		if err != nil {
+			return err
+		}
 		index, err := faiss.ReadIndexFromBuffer(indexBytes, faissIOFlags)
 		if err != nil {
 			freeReconstructedIndexes(vecIndexes)
@@ -480,7 +506,7 @@ func determineIndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, in
 	}
 }
 
-func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint64, err error) {
+func (vo *vectorIndexOpaque) writeVectorIndexes(w *fileWriter) (offset uint64, err error) {
 	// for every fieldID, contents to store over here are:
 	//    1. the serialized representation of the dense vector index.
 	//    2. its constituent vectorID -> {docID} mapping.
@@ -566,24 +592,37 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		// section would be help avoiding in paging in this data as part of a page
 		// (which is to load a non-cacheable info like index). this could help the
 		// paging costs
+		idBuf := make([]byte, 0, binary.MaxVarintLen64*2*len(content.vecs))
+		pos := 0
 		for vecID := range content.vecs {
 			docID := vo.vecIDMap[vecID].docID
 			// write the vecID
-			n = binary.PutVarint(tempBuf, vecID)
-			_, err = w.Write(tempBuf[:n])
-			if err != nil {
-				return 0, err
-			}
+			pos += binary.PutVarint(idBuf[pos:], vecID)
+			pos += binary.PutUvarint(idBuf[pos:], uint64(docID))
+		}
+		idBuf, err = w.process(idBuf[:pos])
+		if err != nil {
+			return 0, err
+		}
 
-			n = binary.PutUvarint(tempBuf, uint64(docID))
-			_, err = w.Write(tempBuf[:n])
-			if err != nil {
-				return 0, err
-			}
+		n = binary.PutUvarint(tempBuf, uint64(len(idBuf)))
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return 0, err
+		}
+
+		_, err = w.Write(idBuf)
+		if err != nil {
+			return 0, err
 		}
 
 		// serialize the built index into a byte slice
 		buf, err := faiss.WriteIndexIntoBuffer(faissIndex)
+		if err != nil {
+			return 0, err
+		}
+
+		buf, err = w.process(buf)
 		if err != nil {
 			return 0, err
 		}

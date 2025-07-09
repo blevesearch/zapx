@@ -144,6 +144,26 @@ func (c *chunkedIntCoder) Write(w io.Writer) (int, error) {
 	// convert the chunk lengths into chunk offsets
 	chunkOffsets := modifyLengthsToEndOffsets(c.chunkLens)
 
+	// process each chunk if needed and update the chunk offsets
+	if fw, ok := w.(*fileWriter); ok && fw != nil {
+		var prevOffset int
+		processedBuf := make([]byte, 0, 64)
+		for i := 0; i < len(chunkOffsets); i++ {
+			if chunkOffsets[i] == uint64(prevOffset) {
+				continue
+			}
+			buf, err := fw.process(c.final[prevOffset:chunkOffsets[i]])
+			if err != nil {
+				return 0, err
+			}
+			processedBuf = append(processedBuf, buf...)
+			c.chunkLens[i] = uint64(len(buf))
+			prevOffset = int(chunkOffsets[i])
+		}
+		c.final = processedBuf
+		chunkOffsets = modifyLengthsToEndOffsets(c.chunkLens)
+	}
+
 	// write out the number of chunks & each chunk offsets
 	n := binary.PutUvarint(buf, uint64(len(chunkOffsets)))
 	for _, chunkOffset := range chunkOffsets {
@@ -172,8 +192,8 @@ func (c *chunkedIntCoder) writeAt(w io.Writer) (uint64, int, error) {
 		return startOffset, 0, nil
 	}
 
-	if chw := w.(*CountHashWriter); chw != nil {
-		startOffset = uint64(chw.Count())
+	if fw, ok := w.(*fileWriter); ok && fw != nil {
+		startOffset = uint64(fw.Count())
 	}
 
 	tw, err := c.Write(w)

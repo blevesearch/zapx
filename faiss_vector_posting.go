@@ -549,7 +549,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 
 	vecIndex, vecDocIDMap, docVecIDMap, vectorIDsToExclude, err =
 		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], requiresFiltering,
-			except)
+			except, sb.fileReader)
 
 	if vecIndex != nil {
 		vecIndexSize = vecIndex.Size()

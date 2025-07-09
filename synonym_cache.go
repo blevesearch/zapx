@@ -46,7 +46,7 @@ func (sc *synonymIndexCache) Clear() {
 // - A Vellum FST (Finite State Transducer) representing the thesaurus.
 // - A map associating synonym IDs to their corresponding terms.
 // This function returns the loaded or newly created tuple (FST and map).
-func (sc *synonymIndexCache) loadOrCreate(fieldID uint16, mem []byte) (*vellum.FST, map[uint32][]byte, error) {
+func (sc *synonymIndexCache) loadOrCreate(fieldID uint16, mem []byte, r *fileReader) (*vellum.FST, map[uint32][]byte, error) {
 	sc.m.RLock()
 	entry, ok := sc.cache[fieldID]
 	if ok {
@@ -64,18 +64,21 @@ func (sc *synonymIndexCache) loadOrCreate(fieldID uint16, mem []byte) (*vellum.F
 		return entry.load()
 	}
 
-	return sc.createAndCacheLOCKED(fieldID, mem)
+	return sc.createAndCacheLOCKED(fieldID, mem, r)
 }
 
 // createAndCacheLOCKED creates the synonym index cache for the specified fieldID and caches it.
-func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte) (*vellum.FST, map[uint32][]byte, error) {
+func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte, r *fileReader) (*vellum.FST, map[uint32][]byte, error) {
 	var pos uint64
 	vellumLen, read := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	if vellumLen == 0 || read <= 0 {
 		return nil, nil, fmt.Errorf("vellum length is 0")
 	}
 	pos += uint64(read)
-	fstBytes := mem[pos : pos+vellumLen]
+	fstBytes, err := r.process(mem[pos : pos+vellumLen])
+	if err != nil {
+		return nil, nil, err
+	}
 	fst, err := vellum.Load(fstBytes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("vellum err: %v", err)
@@ -86,17 +89,29 @@ func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte) (*
 	if numSyns == 0 {
 		return nil, nil, fmt.Errorf("no synonyms found")
 	}
+	mapLen, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+	if mapLen == 0 {
+		return nil, nil, fmt.Errorf("synonym term map length is 0")
+	}
+	buf, err := r.process(mem[pos : pos+mapLen])
+	if err != nil {
+		return nil, nil, err
+	}
+	pos += mapLen
+	bufLen := uint64(len(buf))
+	var bufPos uint64
 	synTermMap := make(map[uint32][]byte, numSyns)
 	for i := 0; i < int(numSyns); i++ {
-		synID, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
-		pos += uint64(n)
-		termLen, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
-		pos += uint64(n)
+		synID, n := binary.Uvarint(buf[bufPos:min(bufPos+binary.MaxVarintLen64, bufLen)])
+		bufPos += uint64(n)
+		termLen, n := binary.Uvarint(buf[bufPos:min(bufPos+binary.MaxVarintLen64, bufLen)])
+		bufPos += uint64(n)
 		if termLen == 0 {
 			return nil, nil, fmt.Errorf("term length is 0")
 		}
-		term := mem[pos : pos+uint64(termLen)]
-		pos += uint64(termLen)
+		term := buf[bufPos : bufPos+uint64(termLen)]
+		bufPos += uint64(termLen)
 		synTermMap[uint32(synID)] = term
 	}
 	sc.insertLOCKED(fieldID, fst, synTermMap)

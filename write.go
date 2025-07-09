@@ -32,6 +32,13 @@ func writeRoaringWithLen(r *roaring.Bitmap, w io.Writer,
 
 	var tw int
 
+	if fw, ok := w.(*fileWriter); ok && fw != nil {
+		buf, err = fw.process(buf)
+		if err != nil {
+			return tw, err
+		}
+	}
+
 	// write out the length
 	n := binary.PutUvarint(reuseBufVarint, uint64(len(buf)))
 	nw, err := w.Write(reuseBufVarint[:n])
@@ -50,16 +57,20 @@ func writeRoaringWithLen(r *roaring.Bitmap, w io.Writer,
 	return tw, nil
 }
 
-func persistFieldsSection(fieldsInv []string, w *CountHashWriter, opaque map[int]resetable) (uint64, error) {
+func persistFieldsSection(fieldsInv []string, w *fileWriter, opaque map[int]resetable) (uint64, error) {
 	var rv uint64
 	fieldsOffsets := make([]uint64, 0, len(fieldsInv))
 
 	for fieldID, fieldName := range fieldsInv {
 		// record start of this field
 		fieldsOffsets = append(fieldsOffsets, uint64(w.Count()))
+		fieldName, err := w.process([]byte(fieldName))
+		if err != nil {
+			return 0, err
+		}
 
 		// write field name length
-		_, err := writeUvarints(w, uint64(len(fieldName)))
+		_, err = writeUvarints(w, uint64(len(fieldName)))
 		if err != nil {
 			return 0, err
 		}
@@ -109,7 +120,7 @@ const FooterSize = 4 + 4 + 4 + 8 + 8 + 8 + 8 + 8
 
 // in the index sections format, the fieldsIndexOffset points to the sectionsIndexOffset
 func persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, sectionsIndexOffset, docValueOffset uint64,
-	chunkMode uint32, crcBeforeFooter uint32, writerIn io.Writer) error {
+	chunkMode uint32, crcBeforeFooter uint32, writerIn io.Writer, writerId string) error {
 	w := NewCountHashWriter(writerIn)
 	w.crc = crcBeforeFooter
 
@@ -150,6 +161,17 @@ func persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, sectionsIndexO
 	if err != nil {
 		return err
 	}
+
+	// write out the length of the writer id and the writer id
+	_, err = w.Write([]byte(writerId))
+	if err != nil {
+		return err
+	}
+	err = binary.Write(w, binary.BigEndian, uint32(len(writerId)))
+	if err != nil {
+		return err
+	}
+
 	// write out CRC-32 of everything upto but not including this CRC
 	err = binary.Write(w, binary.BigEndian, w.crc)
 	if err != nil {

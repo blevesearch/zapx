@@ -406,12 +406,16 @@ func (v *binaryVectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 				return err
 			}
 
-			binaryFaissIndex.SetNProbe(nprobe)
-
-			err = binaryFaissIndex.TrainBinary(bvecs)
+			centroids, err := faissIndex.GetCentroids()
 			if err != nil {
 				return err
 			}
+
+			binQuantizer := binaryFaissIndex.BinaryQuantizer()
+			binQuantizer.AddBinary(convertToBinary(centroids))
+			binaryFaissIndex.SetIsTrained(true)
+
+			binaryFaissIndex.SetNProbe(nprobe)
 		}
 
 		err = binaryFaissIndex.AddBinaryWithIDs(bvecs, finalVecIDs)
@@ -633,12 +637,16 @@ func (vo *binaryVectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offse
 					return 0, err
 				}
 
-				binaryFaissIndex.SetNProbe(nprobe)
-
-				err = binaryFaissIndex.TrainBinary(bvecs)
+				centroids, err := faissIndex.GetCentroids()
 				if err != nil {
 					return 0, err
 				}
+
+				binQuantizer := binaryFaissIndex.BinaryQuantizer()
+				binQuantizer.AddBinary(convertToBinary(centroids))
+				binaryFaissIndex.SetIsTrained(true)
+
+				binaryFaissIndex.SetNProbe(nprobe)
 			}
 
 			err = binaryFaissIndex.AddBinaryWithIDs(bvecs, ids)

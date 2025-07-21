@@ -15,28 +15,41 @@
 package zap
 
 type fileWriter struct {
-	writerCB func(data []byte) ([]byte, error)
+	writerCB func(data []byte, counter []byte) ([]byte, error)
+	counter  []byte
 	id       string
 	c        *CountHashWriter
 }
 
-var WriterCallbackGetter = func() (string, func(data []byte) ([]byte, error)) {
-	return "", func(data []byte) ([]byte, error) {
+var WriterCallbackGetter = func() (string, func(data []byte, _ []byte) ([]byte, error), error) {
+	return "", func(data []byte, _ []byte) ([]byte, error) {
 		return data, nil
-	}
+	}, nil
 }
 
-var ReaderCallbackGetter = func(string) func(data []byte) ([]byte, error) {
+var ReaderCallbackGetter = func(string) (func(data []byte) ([]byte, error), error) {
 	return func(data []byte) ([]byte, error) {
 		return data, nil
-	}
+	}, nil
 }
 
-func NewFileWriter(c *CountHashWriter) *fileWriter {
-	rv := &fileWriter{c: c}
-	rv.id, rv.writerCB = WriterCallbackGetter()
+var CounterGetter = func() ([]byte, error) {
+	return nil, nil
+}
 
-	return rv
+func NewFileWriter(c *CountHashWriter) (*fileWriter, error) {
+	var err error
+	rv := &fileWriter{c: c}
+	rv.id, rv.writerCB, err = WriterCallbackGetter()
+	if err != nil {
+		return nil, err
+	}
+	rv.counter, err = CounterGetter()
+	if err != nil {
+		return nil, err
+	}
+
+	return rv, nil
 }
 
 func (w *fileWriter) Write(data []byte) (int, error) {
@@ -45,9 +58,22 @@ func (w *fileWriter) Write(data []byte) (int, error) {
 
 func (w *fileWriter) process(data []byte) ([]byte, error) {
 	if w.writerCB != nil {
-		return w.writerCB(data)
+		w.incrementCounter()
+		return w.writerCB(data, w.counter)
 	}
 	return data, nil
+}
+
+func (w *fileWriter) incrementCounter() {
+	if w.counter != nil {
+		for i := len(w.counter) - 1; i >= 0; i-- {
+			if w.counter[i] < 255 {
+				w.counter[i]++
+				return
+			}
+			w.counter[i] = 0
+		}
+	}
 }
 
 func (w *fileWriter) Count() int {
@@ -63,11 +89,15 @@ type fileReader struct {
 	id       string
 }
 
-func NewFileReader(id string) *fileReader {
+func NewFileReader(id string) (*fileReader, error) {
+	var err error
 	rv := &fileReader{id: id}
-	rv.callback = ReaderCallbackGetter(id)
+	rv.callback, err = ReaderCallbackGetter(id)
+	if err != nil {
+		return nil, err
+	}
 
-	return rv
+	return rv, nil
 }
 
 func (r *fileReader) process(data []byte) ([]byte, error) {

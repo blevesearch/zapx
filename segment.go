@@ -73,7 +73,11 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 		return nil, err
 	}
 
-	rv.fileReader = NewFileReader(rv.writerId)
+	rv.fileReader, err = NewFileReader(rv.writerId)
+	if err != nil {
+		_ = rv.Close()
+		return nil, err
+	}
 
 	err = rv.loadFieldsNew()
 	if err != nil {
@@ -988,4 +992,8 @@ func (s *SegmentBase) GetUpdatedFields() map[string]*index.UpdateFieldInfo {
 // Setter method to store updateFieldInfo within segment base
 func (s *SegmentBase) SetUpdatedFields(updatedFields map[string]*index.UpdateFieldInfo) {
 	s.updatedFields = updatedFields
+}
+
+func (sb *SegmentBase) CallbackId() string {
+	return sb.writerId
 }

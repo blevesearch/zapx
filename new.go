@@ -62,9 +62,13 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 		br.Grow(estimateAvgBytesPerDoc * estimateNumResults)
 	}
 
+	var err error
 	s.results = results
 	s.chunkMode = chunkMode
-	s.w = NewFileWriter(NewCountHashWriter(&br))
+	s.w, err = NewFileWriter(NewCountHashWriter(&br))
+	if err != nil {
+		return nil, uint64(0), err
+	}
 
 	storedIndexOffset, sectionsIndexOffset, err := s.convert()
 	if err != nil {

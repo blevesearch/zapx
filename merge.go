@@ -73,7 +73,11 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 
 	// wrap it for counting (tracking offsets)
 	cr := NewCountHashWriterWithStatsReporter(br, s)
-	w := NewFileWriter(cr)
+	w, err := NewFileWriter(cr)
+	if err != nil {
+		cleanup()
+		return nil, 0, err
+	}
 
 	newDocNums, numDocs, storedIndexOffset, _, _, sectionsIndexOffset, err :=
 		mergeToWriter(segmentBases, drops, chunkMode, w, closeCh)

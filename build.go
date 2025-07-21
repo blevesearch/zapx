@@ -175,17 +175,22 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		vecIndexCache:       newVectorIndexCache(),
 		synIndexCache:       newSynonymIndexCache(),
 		// following fields gets populated by loadFieldsNew
-		fieldsMap:  make(map[string]uint16),
-		dictLocs:   make([]uint64, 0),
-		fieldsInv:  make([]string, 0),
-		writerId:   writerId,
-		fileReader: NewFileReader(writerId),
+		fieldsMap: make(map[string]uint16),
+		dictLocs:  make([]uint64, 0),
+		fieldsInv: make([]string, 0),
+		writerId:  writerId,
 	}
 	sb.updateSize()
 
+	fileReader, err := NewFileReader(sb.writerId)
+	if err != nil {
+		return nil, err
+	}
+	sb.fileReader = fileReader
+
 	// load the data/section starting offsets for each field
 	// by via the sectionsIndexOffset as starting point.
-	err := sb.loadFieldsNew()
+	err = sb.loadFieldsNew()
 	if err != nil {
 		return nil, err
 	}

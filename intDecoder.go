@@ -88,8 +88,6 @@ func (d *chunkedIntDecoder) loadChunk(chunk int) error {
 	s, e := readChunkBoundary(chunk, d.chunkOffsets)
 	start += s
 	end += e
-	d.curChunkBytes = d.data[start:end]
-	d.bytesRead += uint64(len(d.curChunkBytes))
 
 	var err error
 	d.curChunkBytes, err = d.fr.process(d.data[start:end])

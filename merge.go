@@ -536,14 +536,12 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 				return 0, nil, err
 			}
 
-			// CHECK
-			// Making a copy because TestMergeWithEmptySegmentsFirst fails
-			// during an append to idFieldVal
+			// idFieldVal is a pointer to a mem mapped byte slice, so we copy
+			// before merging it with the compressed data
 			buf := make([]byte, 0, len(idFieldVal)+len(compressed))
 			buf = append(buf, idFieldVal...)
 			buf = append(buf, compressed...)
 
-			// bufCompressed, err := w.process(append(idFieldVal, compressed...))
 			bufCompressed, err := w.process(buf)
 			if err != nil {
 				return 0, nil, err

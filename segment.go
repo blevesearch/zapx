@@ -25,6 +25,7 @@ import (
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring/v2"
+	index "github.com/blevesearch/bleve_index_api"
 	mmap "github.com/blevesearch/mmap-go"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 	"github.com/blevesearch/vellum"
@@ -53,11 +54,12 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 
 	rv := &Segment{
 		SegmentBase: SegmentBase{
-			fieldsMap:      make(map[string]uint16),
-			fieldFSTs:      make(map[uint16]*vellum.FST),
-			vecIndexCache:  newVectorIndexCache(),
-			synIndexCache:  newSynonymIndexCache(),
-			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
+			fieldsMap:        make(map[string]uint16),
+			fieldFSTs:        make(map[uint16]*vellum.FST),
+			vecIndexCache:    newVectorIndexCache(),
+			synIndexCache:    newSynonymIndexCache(),
+			nestedIndexCache: newNestedIndexCache(),
+			fieldDvReaders:   make([]map[uint16]*docValueReader, len(segmentSections)),
 		},
 		f:    f,
 		mm:   mm,
@@ -67,6 +69,40 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 	rv.SegmentBase.updateSize()
 
 	err = rv.loadConfig()
+	if err != nil {
+		_ = rv.Close()
+		return nil, err
+	}
+
+	err = rv.loadFieldsNew()
+	if err != nil {
+		_ = rv.Close()
+		return nil, err
+	}
+
+	err = rv.loadDvReaders()
+	if err != nil {
+		_ = rv.Close()
+		return nil, err
+	}
+	return rv, nil
+}
+
+// Create a new segment from an mmap'ed byte slice.
+func OpenFromBuffer(mm []byte) (*Segment, error) {
+	rv := &Segment{
+		SegmentBase: SegmentBase{
+			fieldsMap:        make(map[string]uint16),
+			fieldFSTs:        make(map[uint16]*vellum.FST),
+			vecIndexCache:    newVectorIndexCache(),
+			synIndexCache:    newSynonymIndexCache(),
+			nestedIndexCache: newNestedIndexCache(),
+			fieldDvReaders:   make([]map[uint16]*docValueReader, len(segmentSections)),
+		},
+	}
+	rv.SegmentBase.updateSize()
+
+	err := rv.loadConfig()
 	if err != nil {
 		_ = rv.Close()
 		return nil, err
@@ -113,8 +149,9 @@ type SegmentBase struct {
 	fieldFSTs map[uint16]*vellum.FST
 
 	// this cache comes into play when vectors are supported in builds.
-	vecIndexCache *vectorIndexCache
-	synIndexCache *synonymIndexCache
+	vecIndexCache    *vectorIndexCache
+	synIndexCache    *synonymIndexCache
+	nestedIndexCache *nestedIndexCache
 }
 
 func (sb *SegmentBase) Size() int {
@@ -154,6 +191,7 @@ func (sb *SegmentBase) DecRef() (err error) { return nil }
 func (sb *SegmentBase) Close() (err error) {
 	sb.vecIndexCache.Clear()
 	sb.synIndexCache.Clear()
+	sb.nestedIndexCache.Clear()
 	return nil
 }
 
@@ -478,6 +516,51 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 	return rv, nil
 }
 
+func (sb *SegmentBase) NestedDictionary(nestedState index.NestedState, field string) (segment.TermDictionary, error) {
+	dict, err := sb.nestedDictionary(nestedState, field)
+	if err == nil && dict == nil {
+		return emptyDictionary, nil
+	}
+	return dict, err
+}
+
+func (sb *SegmentBase) nestedDictionary(nestedState index.NestedState, field string) (segment.TermDictionary, error) {
+	// first get the root path to check for existence of the nested dictionary
+	rootPath := nestedState.Root()
+	if rootPath == "" {
+		// if the root path is empty, then we can just return nil
+		// as there is no nested dictionary to be returned.
+		return nil, nil
+	}
+	fieldIDPlus1 := sb.fieldsMap[rootPath]
+	if fieldIDPlus1 == 0 {
+		// if the root path is not found in the fields map, then we can
+		// just return nil as there is no nested dictionary to be returned.
+		return nil, nil
+	}
+	pos := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionNestedIndex]
+	if pos > 0 {
+		// skip the doc value offsets
+		for i := 0; i < 2; i++ {
+			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += uint64(n)
+		}
+		nestLoc, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += uint64(n)
+		seg, err := sb.nestedIndexCache.loadNestedSegment(sb, rootPath, nestLoc, nestedState.Iterator())
+		if err != nil {
+			return nil, fmt.Errorf("nested dictionary path %s err: %v", rootPath, err)
+		}
+		if seg == nil {
+			// if the seg is nil, then we can just return nil as there is no
+			// nested dictionary to be returned.
+			return nil, nil
+		}
+		return seg.Dictionary(field)
+	}
+	return nil, nil
+}
+
 // Thesaurus returns the thesaurus with the specified name, or an empty thesaurus if not found.
 func (s *SegmentBase) Thesaurus(name string) (segment.Thesaurus, error) {
 	thesaurus, err := s.thesaurus(name)
@@ -699,6 +782,7 @@ func (s *Segment) closeActual() (err error) {
 	// clear contents from the vector and synonym index cache before un-mmapping
 	s.vecIndexCache.Clear()
 	s.synIndexCache.Clear()
+	s.nestedIndexCache.Clear()
 
 	if s.mm != nil {
 		err = s.mm.Unmap()

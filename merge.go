@@ -614,3 +614,71 @@ func isClosed(closeCh chan struct{}) bool {
 		return false
 	}
 }
+
+func mergeNestedSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap,
+	chunkMode uint32, closeCh chan struct{}, cr *CountHashWriter, newDocNums [][]uint64) (uint64, error) {
+	numDocs, storedIndexOffset, sectionsIndexOffset, err :=
+		mergeNestedToWriter(segmentBases, drops, chunkMode, cr, closeCh, newDocNums)
+	if err != nil {
+		return 0, err
+	}
+	err = persistFooter(numDocs, storedIndexOffset, sectionsIndexOffset, sectionsIndexOffset,
+		0, chunkMode, cr.Sum32(), cr)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(cr.Count()), nil
+}
+
+func mergeNestedToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
+	chunkMode uint32, cr *CountHashWriter, closeCh chan struct{}, newDocNums [][]uint64) (
+	numDocs, storedIndexOffset uint64, sectionsIndexOffset uint64, err error) {
+
+	var fieldsSame bool
+	fieldsSame, fieldsInv := mergeFields(segments)
+	fieldsMap := mapFields(fieldsInv)
+
+	numDocs = computeNewDocCount(segments, drops)
+
+	if isClosed(closeCh) {
+		return 0, 0, 0, seg.ErrClosed
+	}
+
+	// the merge opaque is especially important when it comes to tracking the file
+	// offset a field of a particular section is at. This will be used to write the
+	// offsets in the fields section index of the file (the final merged file).
+	mergeOpaque := map[int]resetable{}
+	args := map[string]interface{}{
+		"chunkMode":  chunkMode,
+		"fieldsSame": fieldsSame,
+		"fieldsMap":  fieldsMap,
+		"numDocs":    numDocs,
+	}
+
+	if numDocs > 0 {
+		storedIndexOffset, _, err = mergeStoredAndRemap(segments, drops,
+			fieldsMap, fieldsInv, fieldsSame, numDocs, cr, closeCh)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+
+		// at this point, ask each section implementation to merge itself
+		for i, x := range segmentSections {
+			mergeOpaque[int(i)] = x.InitOpaque(args)
+
+			err = x.Merge(mergeOpaque, segments, drops, fieldsInv, newDocNums, cr, closeCh)
+			if err != nil {
+				return 0, 0, 0, err
+			}
+		}
+	}
+
+	// we can persist the fields section index now, this will point
+	// to the various indexes (each in different section) available for a field.
+	sectionsIndexOffset, err = persistFieldsSection(fieldsInv, cr, mergeOpaque)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	return numDocs, storedIndexOffset, sectionsIndexOffset, nil
+}

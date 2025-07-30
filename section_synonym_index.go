@@ -39,7 +39,7 @@ func init() {
 // -----------------------------------------------------------------------------
 
 type synonymIndexOpaque struct {
-	results []index.Document
+	results DocumentContainer
 
 	// indicates whether the following structs are initialized
 	init bool
@@ -105,7 +105,7 @@ type synonymIndexOpaque struct {
 func (so *synonymIndexOpaque) Set(key string, value interface{}) {
 	switch key {
 	case "results":
-		so.results = value.([]index.Document)
+		so.results = value.(DocumentContainer)
 	case "fieldsMap":
 		so.FieldsMap = value.(map[string]uint16)
 	}
@@ -180,16 +180,17 @@ func (so *synonymIndexOpaque) realloc() {
 	so.FieldIDtoThesaurusID = map[uint16]int{}
 
 	// count the number of unique thesauri from the batch of documents
-	for _, result := range so.results {
+	so.results.IterateDocuments(func(docNum int, result index.Document) error {
 		if synDoc, ok := result.(index.SynonymDocument); ok {
 			synDoc.VisitSynonymFields(func(synField index.SynonymField) {
 				fieldIDPlus1 := so.FieldsMap[synField.Name()]
 				so.getOrDefineThesaurus(fieldIDPlus1-1, synField.Name())
 			})
 		}
-	}
+		return nil
+	})
 
-	for _, result := range so.results {
+	so.results.IterateDocuments(func(docNum int, result index.Document) error {
 		if synDoc, ok := result.(index.SynonymDocument); ok {
 			synDoc.VisitSynonymFields(func(synField index.SynonymField) {
 				fieldIDPlus1 := so.FieldsMap[synField.Name()]
@@ -224,7 +225,8 @@ func (so *synonymIndexOpaque) realloc() {
 				so.ThesaurusKeys[thesaurusID] = thesaurusKeys
 			})
 		}
-	}
+		return nil
+	})
 
 	numSynonymsLists := pidNext
 
@@ -288,7 +290,7 @@ func (so *synonymIndexOpaque) grabBuf(size int) []byte {
 
 func (so *synonymIndexOpaque) writeThesauri(w *CountHashWriter) (thesOffsets []uint64, err error) {
 
-	if so.results == nil || len(so.results) == 0 {
+	if so.results == nil || so.results.Len() == 0 {
 		return nil, nil
 	}
 

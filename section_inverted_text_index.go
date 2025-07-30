@@ -431,7 +431,7 @@ func (i *invertedIndexOpaque) BytesRead() uint64 {
 func (i *invertedIndexOpaque) ResetBytesRead(uint64) {}
 
 func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uint64, err error) {
-	if io.results == nil || len(io.results) == 0 {
+	if io.results == nil || io.results.Len() == 0 {
 		return nil, nil
 	}
 
@@ -445,8 +445,9 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 	// these int coders are initialized with chunk size 1024
 	// however this will be reset to the correct chunk size
 	// while processing each individual field-term section
-	tfEncoder := newChunkedIntCoder(1024, uint64(len(io.results)-1))
-	locEncoder := newChunkedIntCoder(1024, uint64(len(io.results)-1))
+
+	tfEncoder := newChunkedIntCoder(1024, uint64(io.results.Max()))
+	locEncoder := newChunkedIntCoder(1024, uint64(io.results.Max()))
 
 	var docTermMap [][]byte
 
@@ -458,10 +459,10 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 	}
 
 	for fieldID, terms := range io.DictKeys {
-		if cap(docTermMap) < len(io.results) {
-			docTermMap = make([][]byte, len(io.results))
+		if cap(docTermMap) < io.results.Len() {
+			docTermMap = make([][]byte, io.results.Len())
 		} else {
-			docTermMap = docTermMap[:len(io.results)]
+			docTermMap = docTermMap[:io.results.Len()]
 			for docNum := range docTermMap { // reset the docTermMap
 				docTermMap[docNum] = docTermMap[docNum][:0]
 			}
@@ -484,12 +485,12 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 			if postingsBS != nil {
 				cardinality = postingsBS.GetCardinality()
 			}
-			chunkSize, err := getChunkSize(io.chunkMode, cardinality, uint64(len(io.results)))
+			chunkSize, err := getChunkSize(io.chunkMode, cardinality, uint64(io.results.Len()))
 			if err != nil {
 				return nil, err
 			}
-			tfEncoder.SetChunkSize(chunkSize, uint64(len(io.results)-1))
-			locEncoder.SetChunkSize(chunkSize, uint64(len(io.results)-1))
+			tfEncoder.SetChunkSize(chunkSize, uint64(io.results.Max()))
+			locEncoder.SetChunkSize(chunkSize, uint64(io.results.Max()))
 
 			postingsItr := postingsBS.Iterator()
 			for postingsItr.HasNext() {
@@ -608,7 +609,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 			return nil, err
 		}
 
-		fdvEncoder := newChunkedContentCoder(chunkSize, uint64(len(io.results)-1), w, false)
+		fdvEncoder := newChunkedContentCoder(chunkSize, uint64(io.results.Max()), w, false)
 		if io.IncludeDocValues[fieldID] {
 			for docNum, docTerms := range docTermMap {
 				if fieldTermMap, ok := io.extraDocValues[docNum]; ok {
@@ -745,14 +746,16 @@ func (i *invertedIndexOpaque) realloc() {
 
 	i.getOrDefineField("_id") // _id field is fieldID 0
 
-	for _, result := range i.results {
-		result.VisitComposite(func(field index.CompositeField) {
+	i.results.IterateDocuments(func(docNum int, doc index.Document) error {
+		// walk each composite field
+		doc.VisitComposite(func(field index.CompositeField) {
 			i.getOrDefineField(field.Name())
 		})
-		result.VisitFields(func(field index.Field) {
+		doc.VisitFields(func(field index.Field) {
 			i.getOrDefineField(field.Name())
 		})
-	}
+		return nil
+	})
 
 	sort.Strings(i.FieldsInv[1:]) // keep _id as first field
 
@@ -813,17 +816,18 @@ func (i *invertedIndexOpaque) realloc() {
 		i.extraDocValues = map[int]map[uint16][]byte{}
 	}
 
-	for docNum, result := range i.results {
+	i.results.IterateDocuments(func(docNum int, doc index.Document) error {
 		// walk each composite field
-		result.VisitComposite(func(field index.CompositeField) {
+		doc.VisitComposite(func(field index.CompositeField) {
 			visitField(field, docNum)
 		})
 
 		// walk each field
-		result.VisitFields(func(field index.Field) {
+		doc.VisitFields(func(field index.Field) {
 			visitField(field, docNum)
 		})
-	}
+		return nil
+	})
 
 	numPostingsLists := pidNext
 
@@ -935,7 +939,7 @@ func (i *invertedTextIndexSection) InitOpaque(args map[string]interface{}) reset
 type invertedIndexOpaque struct {
 	bytesWritten uint64 // atomic access to this variable, moved to top to correct alignment issues on ARM, 386 and 32-bit MIPS.
 
-	results []index.Document
+	results DocumentContainer
 
 	chunkMode uint32
 
@@ -1050,7 +1054,7 @@ func (io *invertedIndexOpaque) Reset() (err error) {
 func (i *invertedIndexOpaque) Set(key string, val interface{}) {
 	switch key {
 	case "results":
-		i.results = val.([]index.Document)
+		i.results = val.(DocumentContainer)
 	case "chunkMode":
 		i.chunkMode = val.(uint32)
 	case "fieldsSame":

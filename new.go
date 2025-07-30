@@ -47,44 +47,9 @@ func (z *ZapPlugin) New(results []index.Document) (
 
 func (*ZapPlugin) newWithChunkMode(results []index.Document,
 	chunkMode uint32) (segment.Segment, uint64, error) {
-	s := interimPool.Get().(*interim)
-
-	var br bytes.Buffer
-	if s.lastNumDocs > 0 {
-		// use previous results to initialize the buf with an estimate
-		// size, but note that the interim instance comes from a
-		// global interimPool, so multiple scorch instances indexing
-		// different docs can lead to low quality estimates
-		estimateAvgBytesPerDoc := int(float64(s.lastOutSize/s.lastNumDocs) *
-			NewSegmentBufferNumResultsFactor)
-		estimateNumResults := int(float64(len(results)+NewSegmentBufferNumResultsBump) *
-			NewSegmentBufferAvgBytesPerDocFactor)
-		br.Grow(estimateAvgBytesPerDoc * estimateNumResults)
-	}
-
-	s.results = results
-	s.chunkMode = chunkMode
-	s.w = NewCountHashWriter(&br)
-
-	storedIndexOffset, sectionsIndexOffset, err := s.convert()
-	if err != nil {
-		return nil, uint64(0), err
-	}
-
-	sb, err := InitSegmentBase(br.Bytes(), s.w.Sum32(), chunkMode,
-		uint64(len(results)), storedIndexOffset, sectionsIndexOffset)
-
-	// get the bytes written before the interim's reset() call
-	// write it to the newly formed segment base.
-	totalBytesWritten := s.getBytesWritten()
-	if err == nil && s.reset() == nil {
-		s.lastNumDocs = len(results)
-		s.lastOutSize = len(br.Bytes())
-		sb.setBytesWritten(totalBytesWritten)
-		interimPool.Put(s)
-	}
-
-	return sb, uint64(len(br.Bytes())), err
+	docContainer := NewDocumentArray(results)
+	_, segment, written, err := newSegment(docContainer, chunkMode, false)
+	return segment, written, err
 }
 
 var interimPool = sync.Pool{New: func() interface{} { return &interim{} }}
@@ -92,7 +57,7 @@ var interimPool = sync.Pool{New: func() interface{} { return &interim{} }}
 // interim holds temporary working data used while converting from
 // analysis results to a zap-encoded segment
 type interim struct {
-	results []index.Document
+	results DocumentContainer
 
 	chunkMode uint32
 
@@ -176,14 +141,15 @@ func (s *interim) convert() (uint64, uint64, error) {
 
 	s.getOrDefineField("_id") // _id field is fieldID 0
 
-	for _, result := range s.results {
-		result.VisitComposite(func(field index.CompositeField) {
+	s.results.IterateDocuments(func(docNum int, doc index.Document) error {
+		doc.VisitComposite(func(field index.CompositeField) {
 			s.getOrDefineField(field.Name())
 		})
-		result.VisitFields(func(field index.Field) {
+		doc.VisitFields(func(field index.Field) {
 			s.getOrDefineField(field.Name())
 		})
-	}
+		return nil
+	})
 
 	sort.Strings(s.FieldsInv[1:]) // keep _id as first field
 
@@ -256,9 +222,10 @@ func (s *interim) getOrDefineField(fieldName string) int {
 }
 
 func (s *interim) processDocuments() {
-	for docNum, result := range s.results {
+	s.results.IterateDocuments(func(docNum int, result index.Document) error {
 		s.processDocument(uint32(docNum), result)
-	}
+		return nil
+	})
 }
 
 func (s *interim) processDocument(docNum uint32,
@@ -314,12 +281,12 @@ func (s *interim) writeStoredFields() (
 	defer func() { s.tmp0, s.tmp1 = data, compressed }()
 
 	// keyed by docNum
-	docStoredOffsets := make([]uint64, len(s.results))
+	docStoredOffsets := make([]uint64, s.results.Len())
 
 	// keyed by fieldID, for the current doc in the loop
 	docStoredFields := map[uint16]interimStoredField{}
 
-	for docNum, result := range s.results {
+	err = s.results.IterateDocuments(func(docNum int, result index.Document) error {
 		for fieldID := range docStoredFields { // reset for next doc
 			delete(docStoredFields, fieldID)
 		}
@@ -342,7 +309,7 @@ func (s *interim) writeStoredFields() (
 			}
 		})
 		if validationErr != nil {
-			return 0, validationErr
+			return validationErr
 		}
 
 		var curr int
@@ -354,7 +321,7 @@ func (s *interim) writeStoredFields() (
 		idFieldVal := docStoredFields[uint16(0)].vals[0]
 		_, err = metaEncode(uint64(len(idFieldVal)))
 		if err != nil {
-			return 0, err
+			return err
 		}
 
 		// handle non-"_id" fields
@@ -365,7 +332,7 @@ func (s *interim) writeStoredFields() (
 					fieldID, isf.vals, isf.typs, isf.arrayposs,
 					curr, metaEncode, data)
 				if err != nil {
-					return 0, err
+					return err
 				}
 			}
 		}
@@ -380,23 +347,27 @@ func (s *interim) writeStoredFields() (
 			uint64(len(metaBytes)),
 			uint64(len(idFieldVal)+len(compressed)))
 		if err != nil {
-			return 0, err
+			return err
 		}
 
 		_, err = s.w.Write(metaBytes)
 		if err != nil {
-			return 0, err
+			return err
 		}
 
 		_, err = s.w.Write(idFieldVal)
 		if err != nil {
-			return 0, err
+			return err
 		}
 
 		_, err = s.w.Write(compressed)
 		if err != nil {
-			return 0, err
+			return err
 		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
 
 	storedIndexOffset = uint64(s.w.Count())
@@ -436,4 +407,113 @@ func numUvarintBytes(x uint64) (n int) {
 		n++
 	}
 	return n + 1
+}
+
+func newSegment(results DocumentContainer, chunkMode uint32, onlyBuffer bool) (*bytes.Buffer, segment.Segment, uint64, error) {
+
+	s := interimPool.Get().(*interim)
+
+	var br bytes.Buffer
+	if s.lastNumDocs > 0 {
+		estimateAvgBytesPerDoc := int(float64(s.lastOutSize/s.lastNumDocs) *
+			NewSegmentBufferNumResultsFactor)
+		estimateNumResults := int(float64(results.Len()+NewSegmentBufferNumResultsBump) *
+			NewSegmentBufferAvgBytesPerDocFactor)
+		br.Grow(estimateAvgBytesPerDoc * estimateNumResults)
+	}
+
+	s.results = results
+	s.chunkMode = chunkMode
+	s.w = NewCountHashWriter(&br)
+
+	storedIndexOffset, sectionsIndexOffset, err := s.convert()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	// If caller just wants the buffer, return it now
+	var sb *SegmentBase
+	if !onlyBuffer {
+		sb, err = InitSegmentBase(br.Bytes(), s.w.Sum32(), chunkMode,
+			uint64(results.Len()), storedIndexOffset, sectionsIndexOffset)
+	}
+
+	totalBytesWritten := s.getBytesWritten()
+	if err == nil && s.reset() == nil {
+		s.lastNumDocs = results.Len()
+		s.lastOutSize = len(br.Bytes())
+		sb.setBytesWritten(totalBytesWritten)
+		interimPool.Put(s)
+	}
+
+	return &br, sb, uint64(len(br.Bytes())), err
+}
+
+type DocumentContainer interface {
+	IterateDocuments(func(docNum int, doc index.Document) error) error
+	Max() int
+	Len() int
+}
+
+type DocumentArray struct {
+	arr []index.Document
+}
+
+func NewDocumentArray(arr []index.Document) *DocumentArray {
+	return &DocumentArray{arr: arr}
+}
+
+func (c *DocumentArray) Len() int {
+	return len(c.arr)
+}
+
+func (c *DocumentArray) Max() int {
+	return len(c.arr) - 1
+}
+
+func (c *DocumentArray) IterateDocuments(fn func(docNum int, doc index.Document) error) error {
+	for i, doc := range c.arr {
+		if err := fn(i, doc); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type DocumentMap struct {
+	m    map[int]index.Document
+	keys []int
+}
+
+func NewDocumentMap(m map[int]index.Document) *DocumentMap {
+	keys := make([]int, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys) // to ensure increasing order
+	return &DocumentMap{m: m, keys: keys}
+}
+
+func (c *DocumentMap) Len() int {
+	return len(c.m)
+}
+
+func (c *DocumentMap) Max() int {
+	if len(c.keys) == 0 {
+		return -1
+	}
+	return c.keys[len(c.keys)-1]
+}
+
+func (c *DocumentMap) IterateDocuments(fn func(docNum int, doc index.Document) error) error {
+	for _, docNum := range c.keys {
+		doc, exists := c.m[docNum]
+		if !exists {
+			continue
+		}
+		if err := fn(docNum, doc); err != nil {
+			return err
+		}
+	}
+	return nil
 }

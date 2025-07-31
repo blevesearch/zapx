@@ -488,6 +488,16 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 					addIDsToPostingsList(rv, ids, scores)
 					return rv, nil
 				}
+
+				if binaryIndex != nil {
+					binaryIndexQueryVector := convertToBinary(qVector)
+
+					scores, ids, err := binaryIndex.SearchBinaryWithoutIDs(binaryIndexQueryVector, k,
+						vectorIDsToInclude, params)
+
+					return rv, nil
+				}
+
 				// Determining which clusters, identified by centroid ID,
 				// have at least one eligible vector and hence, ought to be
 				// probed.

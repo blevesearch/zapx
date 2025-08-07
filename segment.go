@@ -99,6 +99,7 @@ func OpenFromBuffer(mm []byte) (*Segment, error) {
 			nestedIndexCache: newNestedIndexCache(),
 			fieldDvReaders:   make([]map[uint16]*docValueReader, len(segmentSections)),
 		},
+		mm: mm,
 	}
 	rv.SegmentBase.updateSize()
 

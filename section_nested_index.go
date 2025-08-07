@@ -130,13 +130,11 @@ func (in *indexNode) writeTo(w *CountHashWriter) (uint64, error) {
 	if len(in.results) != 0 {
 		segStart = uint64(w.Count())
 		docContainer := NewDocumentMap(in.results)
-		buf, _, _, err := newSegment(docContainer, DefaultChunkMode, true)
+		seg, _, err := newSegment(docContainer, DefaultChunkMode)
 		if err != nil {
 			return 0, err
 		}
-		bufBytes := buf.Bytes()
-		// Write the segment data
-		_, err = w.Write(bufBytes)
+		_, err = persistSegmentBaseToWriter(seg, w)
 		if err != nil {
 			return 0, err
 		}
@@ -191,17 +189,13 @@ func nestedFieldToTree(rootDocNum int, nf index.NestedField) fieldTree {
 			results:     make(map[int]index.Document),
 			childForest: make(map[string]fieldTree),
 		}
-		flatFields := make([]index.Field, 0)
-		doc.VisitFields(func(field index.Field) {
-			if childField, ok := field.(index.NestedField); ok {
-				childTree := nestedFieldToTree(rootDocNum, childField)
-				curNode.childForest[childField.Name()] = childTree
-			} else {
-				flatFields = append(flatFields, field)
-			}
-		})
-		nestedDocument := newNestedDocument(flatFields)
-		curNode.results[rootDocNum] = nestedDocument
+		if nDoc, ok := doc.(index.NestedDocument); ok {
+			nDoc.VisitNestedFields(func(nestedField index.NestedField) {
+				childTree := nestedFieldToTree(rootDocNum, nestedField)
+				curNode.childForest[nestedField.Name()] = childTree
+			})
+		}
+		curNode.results[rootDocNum] = doc
 		tree[ap] = curNode
 	})
 	return tree
@@ -358,6 +352,7 @@ func (mn *mergeNode) writeTo(w *CountHashWriter, closeCh chan struct{}) (uint64,
 // -----------------------------------------------------------------------------
 
 type nestedIndexOpaque struct {
+	init   bool
 	forest map[int]fieldTree
 
 	treeAddrs map[int]int
@@ -367,9 +362,26 @@ func (no *nestedIndexOpaque) Set(key string, value interface{}) {
 }
 
 func (no *nestedIndexOpaque) Reset() (err error) {
+	no.init = false
 	no.forest = nil
 	no.treeAddrs = nil
 	return err
+}
+
+func (no *nestedIndexOpaque) realloc() {
+	no.forest = make(map[int]fieldTree)
+	no.treeAddrs = make(map[int]int)
+}
+
+func (no *nestedIndexOpaque) process(nf index.NestedField, fieldID uint16, docNum uint32) {
+	if !no.init {
+		no.realloc()
+		no.init = true
+	}
+	curTree := no.forest[int(fieldID)]
+	newTree := nestedFieldToTree(int(docNum), nf)
+	mergedTree := curTree.mergeWith(newTree)
+	no.forest[int(fieldID)] = mergedTree
 }
 
 // -----------------------------------------------------------------------------
@@ -421,10 +433,7 @@ func (n *nestedIndexSection) Process(opaque map[int]resetable, docNum uint32, fi
 	}
 	if nf, ok := field.(index.NestedField); ok {
 		no := n.getNestedIndexOpaque(opaque)
-		curTree := no.forest[int(fieldID)]
-		newTree := nestedFieldToTree(int(docNum), nf)
-		mergedTree := curTree.mergeWith(newTree)
-		no.forest[int(fieldID)] = mergedTree
+		no.process(nf, fieldID, docNum)
 	}
 }
 
@@ -560,43 +569,4 @@ func (n *nestedIndexSection) Merge(opaque map[int]resetable, segments []*Segment
 	}
 
 	return nil
-}
-
-// -----------------------------------------------------------------------------
-type nestedDocument struct {
-	fields []index.Field
-}
-
-func newNestedDocument(fields []index.Field) *nestedDocument {
-	return &nestedDocument{
-		fields: fields,
-	}
-}
-
-func (nd *nestedDocument) ID() string {
-	return ""
-}
-func (nd *nestedDocument) Size() int {
-	return 0
-}
-func (nd *nestedDocument) VisitFields(visitor index.FieldVisitor) {
-	for _, field := range nd.fields {
-		visitor(field)
-	}
-}
-func (nd *nestedDocument) VisitComposite(visitor index.CompositeFieldVisitor) {
-}
-func (nd *nestedDocument) HasComposite() bool {
-	return false
-}
-func (nd *nestedDocument) NumPlainTextBytes() uint64 {
-	return 0
-}
-func (nd *nestedDocument) AddIDField() {
-}
-func (nd *nestedDocument) StoredFieldsBytes() uint64 {
-	return 0
-}
-func (nd *nestedDocument) Indexed() bool {
-	return false
 }

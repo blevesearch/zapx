@@ -26,7 +26,7 @@ import (
 type tree []*treeNode
 
 func newTree(numChild int) tree {
-	return make(tree, 0, numChild)
+	return make(tree, numChild)
 }
 
 type treeNode struct {
@@ -55,7 +55,7 @@ func (nc *nestedIndexCache) Clear() {
 }
 
 func processIterator(t tree, nestItr index.NestedIterator) segment.Segment {
-	path, arrayPos, ok := nestItr.Next()
+	_, arrayPos, ok := nestItr.Next()
 	if !ok {
 		return nil
 	}
@@ -64,7 +64,7 @@ func processIterator(t tree, nestItr index.NestedIterator) segment.Segment {
 	}
 	currentNode := t[arrayPos]
 	for nestItr.HasNext() && currentNode != nil {
-		path, arrayPos, ok = nestItr.Next()
+		path, arrayPos, ok := nestItr.Next()
 		if !ok {
 			return nil
 		}

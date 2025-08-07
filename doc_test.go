@@ -337,3 +337,138 @@ func newStubSynonymDocument(id string, synonymField index.SynonymField) index.Sy
 	}
 	return rv
 }
+
+// -----------------------------------------------------------------------------
+
+type stubNestedField struct {
+	name              string
+	options           index.FieldIndexingOptions
+	numPlainTextBytes uint64
+
+	nestedDocuments []index.NestedDocument
+
+	docAnalyzer index.DocumentAnalyzer
+}
+
+func newStubNestedField(name string, nestedDocuments []index.NestedDocument, analyzer index.DocumentAnalyzer) *stubNestedField {
+	return &stubNestedField{
+		name:            name,
+		nestedDocuments: nestedDocuments,
+		docAnalyzer:     analyzer,
+	}
+}
+
+func (s *stubNestedField) Size() int {
+	return 0
+}
+
+func (s *stubNestedField) Name() string {
+	return s.name
+}
+
+func (s *stubNestedField) ArrayPositions() []uint64 {
+	return nil
+}
+
+func (s *stubNestedField) Options() index.FieldIndexingOptions {
+	return s.options
+}
+
+func (s *stubNestedField) NumPlainTextBytes() uint64 {
+	return s.numPlainTextBytes
+}
+
+func (s *stubNestedField) AnalyzedLength() int {
+	return 0
+}
+
+func (s *stubNestedField) EncodedFieldType() byte {
+	return 'e'
+}
+
+func (s *stubNestedField) AnalyzedTokenFrequencies() index.TokenFrequencies {
+	return nil
+}
+
+func (s *stubNestedField) Analyze() {
+	for _, doc := range s.nestedDocuments {
+		s.docAnalyzer.Analyze(doc)
+	}
+}
+
+func (s *stubNestedField) Value() []byte {
+	return nil
+}
+
+func (s *stubNestedField) NumChildren() int {
+	return len(s.nestedDocuments)
+}
+
+func (s *stubNestedField) VisitChildren(visitor func(arrayPosition int, document index.Document)) {
+	for i, doc := range s.nestedDocuments {
+		visitor(i, doc)
+	}
+}
+
+// -----------------------------------------------------------------------------
+
+type stubNestedDocument struct {
+	id     string
+	fields []index.Field
+}
+
+func newStubNestedDocument(id string, fields []index.Field) index.NestedDocument {
+	rv := &stubNestedDocument{
+		id:     id,
+		fields: fields,
+	}
+	rv.AddIDField()
+	return rv
+}
+
+func (s *stubNestedDocument) StoredFieldsBytes() uint64 {
+	return 0
+}
+
+func (s *stubNestedDocument) ID() string {
+	return s.id
+}
+
+func (s *stubNestedDocument) Size() int {
+	return 0
+}
+
+func (s *stubNestedDocument) VisitFields(visitor index.FieldVisitor) {
+	for _, f := range s.fields {
+		visitor(f)
+	}
+}
+
+func (d *stubNestedDocument) VisitNestedFields(visitor index.NestedFieldVisitor) {
+	for _, f := range d.fields {
+		if nf, ok := f.(index.NestedField); ok {
+			visitor(nf)
+		}
+	}
+}
+
+func (s *stubNestedDocument) HasComposite() bool {
+	return false
+}
+
+func (s *stubNestedDocument) VisitComposite(visitor index.CompositeFieldVisitor) {
+}
+
+func (s *stubNestedDocument) NumPlainTextBytes() uint64 {
+	return 0
+}
+
+func (s *stubNestedDocument) AddIDField() {
+	s.fields = append(s.fields, newStubFieldSplitString("_id", nil, s.id, true, false, false))
+}
+
+func (s *stubNestedDocument) Indexed() bool {
+	return true
+}
+
+// -----------------------------------------------------------------------------

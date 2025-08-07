@@ -459,10 +459,10 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 	}
 
 	for fieldID, terms := range io.DictKeys {
-		if cap(docTermMap) < io.results.Len() {
-			docTermMap = make([][]byte, io.results.Len())
+		if cap(docTermMap) < io.results.Max()+1 {
+			docTermMap = make([][]byte, io.results.Max()+1)
 		} else {
-			docTermMap = docTermMap[:io.results.Len()]
+			docTermMap = docTermMap[:io.results.Max()+1]
 			for docNum := range docTermMap { // reset the docTermMap
 				docTermMap[docNum] = docTermMap[docNum][:0]
 			}

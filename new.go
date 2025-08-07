@@ -48,7 +48,7 @@ func (z *ZapPlugin) New(results []index.Document) (
 func (*ZapPlugin) newWithChunkMode(results []index.Document,
 	chunkMode uint32) (segment.Segment, uint64, error) {
 	docContainer := NewDocumentArray(results)
-	_, segment, written, err := newSegment(docContainer, chunkMode, false)
+	segment, written, err := newSegment(docContainer, chunkMode)
 	return segment, written, err
 }
 
@@ -281,7 +281,7 @@ func (s *interim) writeStoredFields() (
 	defer func() { s.tmp0, s.tmp1 = data, compressed }()
 
 	// keyed by docNum
-	docStoredOffsets := make([]uint64, s.results.Len())
+	docStoredOffsets := make([]uint64, s.results.Max()+1)
 
 	// keyed by fieldID, for the current doc in the loop
 	docStoredFields := map[uint16]interimStoredField{}
@@ -409,7 +409,7 @@ func numUvarintBytes(x uint64) (n int) {
 	return n + 1
 }
 
-func newSegment(results DocumentContainer, chunkMode uint32, onlyBuffer bool) (*bytes.Buffer, segment.Segment, uint64, error) {
+func newSegment(results DocumentContainer, chunkMode uint32) (*SegmentBase, uint64, error) {
 
 	s := interimPool.Get().(*interim)
 
@@ -428,15 +428,13 @@ func newSegment(results DocumentContainer, chunkMode uint32, onlyBuffer bool) (*
 
 	storedIndexOffset, sectionsIndexOffset, err := s.convert()
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, 0, err
 	}
 
 	// If caller just wants the buffer, return it now
 	var sb *SegmentBase
-	if !onlyBuffer {
-		sb, err = InitSegmentBase(br.Bytes(), s.w.Sum32(), chunkMode,
-			uint64(results.Len()), storedIndexOffset, sectionsIndexOffset)
-	}
+	sb, err = InitSegmentBase(br.Bytes(), s.w.Sum32(), chunkMode,
+		uint64(results.Len()), storedIndexOffset, sectionsIndexOffset)
 
 	totalBytesWritten := s.getBytesWritten()
 	if err == nil && s.reset() == nil {
@@ -446,7 +444,7 @@ func newSegment(results DocumentContainer, chunkMode uint32, onlyBuffer bool) (*
 		interimPool.Put(s)
 	}
 
-	return &br, sb, uint64(len(br.Bytes())), err
+	return sb, uint64(len(br.Bytes())), err
 }
 
 type DocumentContainer interface {

@@ -279,6 +279,8 @@ type vectorIndexWrapper struct {
 		params json.RawMessage) (segment.VecPostingsList, error)
 	close func()
 	size  func() uint64
+
+	obtainTopKCentroidCardinalitiesFromIVFIndex func(limit int) ([]segment.CentroidCardinality, error)
 }
 
 func (i *vectorIndexWrapper) Search(qVector []float32, k int64,
@@ -299,6 +301,10 @@ func (i *vectorIndexWrapper) Close() {
 
 func (i *vectorIndexWrapper) Size() uint64 {
 	return i.size()
+}
+
+func (i *vectorIndexWrapper) ObtainTopKCentroidCardinalitiesFromIVFIndex(limit int) ([]segment.CentroidCardinality, error) {
+	return i.obtainTopKCentroidCardinalitiesFromIVFIndex(limit)
 }
 
 // InterpretVectorIndex returns a construct of closures (vectorIndexWrapper)
@@ -519,6 +525,24 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 			},
 			size: func() uint64 {
 				return vecIndexSize
+			},
+			obtainTopKCentroidCardinalitiesFromIVFIndex: func(limit int) ([]segment.CentroidCardinality, error) {
+				if vecIndex == nil || !vecIndex.IsIVFIndex() {
+					return nil, nil
+				}
+
+				cardinalities, centroids, err := vecIndex.ObtainTopKCentroidCardinalitiesFromIVFIndex(limit)
+				if err != nil {
+					return nil, err
+				}
+				centroidCardinalities := make([]segment.CentroidCardinality, len(cardinalities))
+				for i, cardinality := range cardinalities {
+					centroidCardinalities[i] = segment.CentroidCardinality{
+						Centroid:    centroids[i],
+						Cardinality: cardinality,
+					}
+				}
+				return centroidCardinalities, nil
 			},
 		}
 

@@ -452,6 +452,18 @@ func (d *stubNestedDocument) VisitNestedFields(visitor index.NestedFieldVisitor)
 	}
 }
 
+func (s *stubNestedDocument) WithoutNestedFields() index.Document {
+	flatFields := make([]index.Field, 0, len(s.fields))
+	for _, f := range s.fields {
+		if _, ok := f.(index.NestedField); !ok {
+			flatFields = append(flatFields, f)
+		}
+	}
+	return &stubNestedDocument{
+		fields: flatFields,
+	}
+}
+
 func (s *stubNestedDocument) HasComposite() bool {
 	return false
 }

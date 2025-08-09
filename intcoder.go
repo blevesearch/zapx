@@ -17,6 +17,7 @@ package zap
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 )
 
@@ -94,6 +95,7 @@ func (c *chunkedIntCoder) Add(docNum uint64, vals ...uint64) error {
 		c.chunkBuf.Reset()
 		c.currChunk = chunk
 	}
+	fmt.Printf("Adding docNum: %v, current chunk: %d error: %v\n", docNum, c.currChunk, c.currChunk > uint64(len(c.chunkLens)))
 
 	if len(c.buf) < binary.MaxVarintLen64 {
 		c.buf = make([]byte, binary.MaxVarintLen64)
@@ -119,6 +121,8 @@ func (c *chunkedIntCoder) AddBytes(docNum uint64, buf []byte) error {
 		c.currChunk = chunk
 	}
 
+	fmt.Printf("Adding bytes: %v, current chunk: %d error: %v\n", buf, c.currChunk, c.currChunk >= uint64(len(c.chunkLens)))
+
 	_, err := c.chunkBuf.Write(buf)
 	return err
 }
@@ -128,6 +132,7 @@ func (c *chunkedIntCoder) AddBytes(docNum uint64, buf []byte) error {
 func (c *chunkedIntCoder) Close() {
 	encodingBytes := c.chunkBuf.Bytes()
 	c.incrementBytesWritten(uint64(len(encodingBytes)))
+	fmt.Printf("%d, len(c.chunkLens): %d %v\n", c.currChunk, len(c.chunkLens), len(c.chunkLens) <= int(c.currChunk))
 	c.chunkLens[c.currChunk] = uint64(len(encodingBytes))
 	c.final = append(c.final, encodingBytes...)
 	c.currChunk = uint64(cap(c.chunkLens)) // sentinel to detect double close

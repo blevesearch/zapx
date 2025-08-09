@@ -189,13 +189,15 @@ func nestedFieldToTree(rootDocNum int, nf index.NestedField) fieldTree {
 			results:     make(map[int]index.Document),
 			childForest: make(map[string]fieldTree),
 		}
+		segDoc := doc
 		if nDoc, ok := doc.(index.NestedDocument); ok {
 			nDoc.VisitNestedFields(func(nestedField index.NestedField) {
 				childTree := nestedFieldToTree(rootDocNum, nestedField)
 				curNode.childForest[nestedField.Name()] = childTree
 			})
+			segDoc = nDoc.WithoutNestedFields()
 		}
-		curNode.results[rootDocNum] = doc
+		curNode.results[rootDocNum] = segDoc
 		tree[ap] = curNode
 	})
 	return tree
@@ -209,7 +211,7 @@ func newMergeTree(numChild int) mergeTree {
 	return make([]*mergeNode, numChild)
 }
 
-func (mt mergeTree) mergeWith(other mergeTree, drops *roaring.Bitmap, newDocNumsIn []uint64) mergeTree {
+func (mt mergeTree) mergeWith(other mergeTree) mergeTree {
 	if len(mt) == 0 {
 		return other
 	}
@@ -230,11 +232,10 @@ func (mt mergeTree) mergeWith(other mergeTree, drops *roaring.Bitmap, newDocNums
 		}
 		if mt[i] == nil {
 			mt[i] = &mergeNode{
-				sbs:         make([]*SegmentBase, 0),
 				childForest: make(map[string]mergeTree),
 			}
 		}
-		mt[i].mergeWith(otherNode, drops, newDocNumsIn)
+		mt[i].mergeWith(otherNode)
 	}
 
 	return mt
@@ -276,7 +277,7 @@ type mergeNode struct {
 	childForest map[string]mergeTree
 }
 
-func (mn *mergeNode) mergeWith(other *mergeNode, drops *roaring.Bitmap, newDocNumsIn []uint64) {
+func (mn *mergeNode) mergeWith(other *mergeNode) {
 	if other == nil {
 		return
 	}
@@ -295,7 +296,7 @@ func (mn *mergeNode) mergeWith(other *mergeNode, drops *roaring.Bitmap, newDocNu
 	}
 	for name, otherTree := range other.childForest {
 		currentTree := mn.childForest[name]
-		mn.childForest[name] = currentTree.mergeWith(otherTree, drops, newDocNumsIn)
+		mn.childForest[name] = currentTree.mergeWith(otherTree)
 	}
 }
 
@@ -448,7 +449,7 @@ func (n *nestedIndexSection) AddrForField(opaque map[int]resetable, fieldID int)
 	return nestedIndexOpaque.treeAddrs[fieldID]
 }
 
-func treeFromOffset(offset uint64, mem []byte) (mergeTree, error) {
+func treeFromOffset(offset uint64, mem []byte, drops *roaring.Bitmap, newDocNumsIn []uint64) (mergeTree, error) {
 	numChild, n := binary.Uvarint(mem[offset:])
 	if n <= 0 {
 		return nil, fmt.Errorf("invalid number of nodes at offset %d", offset)
@@ -462,7 +463,7 @@ func treeFromOffset(offset uint64, mem []byte) (mergeTree, error) {
 			return nil, fmt.Errorf("invalid node offset at offset %d", offset)
 		}
 		offset += uint64(n)
-		node, err := readNodeFromOffset(nodeOffset, mem)
+		node, err := readNodeFromOffset(nodeOffset, mem, drops, newDocNumsIn)
 		if err != nil {
 			return nil, err
 		}
@@ -471,7 +472,7 @@ func treeFromOffset(offset uint64, mem []byte) (mergeTree, error) {
 	return tree, nil
 }
 
-func readNodeFromOffset(offset uint64, mem []byte) (*mergeNode, error) {
+func readNodeFromOffset(offset uint64, mem []byte, drops *roaring.Bitmap, newDocNumsIn []uint64) (*mergeNode, error) {
 	rv := &mergeNode{
 		sbs:         make([]*SegmentBase, 0),
 		childForest: make(map[string]mergeTree),
@@ -492,6 +493,8 @@ func readNodeFromOffset(offset uint64, mem []byte) (*mergeNode, error) {
 			return nil, err
 		}
 		rv.sbs = append(rv.sbs, &s.SegmentBase)
+		rv.drops = append(rv.drops, drops)
+		rv.newDocNumsIn = append(rv.newDocNumsIn, newDocNumsIn)
 	}
 	numTrees, n := binary.Uvarint(mem[offset:])
 	if n <= 0 {
@@ -511,7 +514,7 @@ func readNodeFromOffset(offset uint64, mem []byte) (*mergeNode, error) {
 			return nil, fmt.Errorf("invalid tree offset at offset %d", offset)
 		}
 		offset += uint64(n)
-		tree, err := treeFromOffset(treeOffset, mem)
+		tree, err := treeFromOffset(treeOffset, mem, drops, newDocNumsIn)
 		if err != nil {
 			return nil, err
 		}
@@ -545,11 +548,11 @@ func (n *nestedIndexSection) Merge(opaque map[int]resetable, segments []*Segment
 			pos += n
 			treeOffset, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
-			tree, err := treeFromOffset(treeOffset, sb.mem)
+			tree, err := treeFromOffset(treeOffset, sb.mem, drops[segIdx], newDocNumsIn[segIdx])
 			if err != nil {
 				return err
 			}
-			forest[fieldID] = forest[fieldID].mergeWith(tree, drops[segIdx], newDocNumsIn[segIdx])
+			forest[fieldID] = forest[fieldID].mergeWith(tree)
 		}
 	}
 

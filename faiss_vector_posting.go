@@ -26,6 +26,7 @@ import (
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bits-and-blooms/bitset"
+	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
@@ -280,7 +281,8 @@ type vectorIndexWrapper struct {
 	close func()
 	size  func() uint64
 
-	obtainTopKCentroidCardinalitiesFromIVFIndex func(limit int) ([]segment.CentroidCardinality, error)
+	obtainTopKCentroidCardinalitiesFromIVFIndex func(limit int) (
+		[]index.CentroidCardinality, error)
 }
 
 func (i *vectorIndexWrapper) Search(qVector []float32, k int64,
@@ -303,7 +305,8 @@ func (i *vectorIndexWrapper) Size() uint64 {
 	return i.size()
 }
 
-func (i *vectorIndexWrapper) ObtainTopKCentroidCardinalitiesFromIVFIndex(limit int) ([]segment.CentroidCardinality, error) {
+func (i *vectorIndexWrapper) ObtainTopKCentroidCardinalitiesFromIVFIndex(limit int) (
+	[]index.CentroidCardinality, error) {
 	return i.obtainTopKCentroidCardinalitiesFromIVFIndex(limit)
 }
 
@@ -526,7 +529,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 			size: func() uint64 {
 				return vecIndexSize
 			},
-			obtainTopKCentroidCardinalitiesFromIVFIndex: func(limit int) ([]segment.CentroidCardinality, error) {
+			obtainTopKCentroidCardinalitiesFromIVFIndex: func(limit int) ([]index.CentroidCardinality, error) {
 				if vecIndex == nil || !vecIndex.IsIVFIndex() {
 					return nil, nil
 				}
@@ -535,9 +538,9 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 				if err != nil {
 					return nil, err
 				}
-				centroidCardinalities := make([]segment.CentroidCardinality, len(cardinalities))
+				centroidCardinalities := make([]index.CentroidCardinality, len(cardinalities))
 				for i, cardinality := range cardinalities {
-					centroidCardinalities[i] = segment.CentroidCardinality{
+					centroidCardinalities[i] = index.CentroidCardinality{
 						Centroid:    centroids[i],
 						Cardinality: cardinality,
 					}

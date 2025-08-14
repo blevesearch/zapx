@@ -962,6 +962,6 @@ func (s *SegmentBase) GetUpdatedFields() map[string]*index.UpdateFieldInfo {
 }
 
 // Setter method to store updateFieldInfo within segment base
-func (s *SegmentBase) PutUpdatedFields(updatedFields map[string]*index.UpdateFieldInfo) {
+func (s *SegmentBase) SetUpdatedFields(updatedFields map[string]*index.UpdateFieldInfo) {
 	s.updatedFields = updatedFields
 }

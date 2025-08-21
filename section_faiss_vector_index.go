@@ -244,7 +244,6 @@ func (v *vectorIndexOpaque) flushVectorIndex(indexBytes []byte, w *CountHashWrit
 		return err
 	}
 
-	// write the vector index data
 	_, err = w.Write(indexBytes)
 	return err
 }
@@ -280,9 +279,10 @@ func (v *vectorIndexOpaque) fastMergeIndexes(vecIndexes []*vecIndexInfo, trainDa
 		if len(vecIndexes[i].vecIds) == 0 {
 			continue
 		} else if vecIndexes[i].index.Nlist() >= int(4*math.Sqrt(float64(1000000))) {
-			fmt.Println("large index", vecIndexes[i].index.Nlist())
-			mergeCandidates = append(mergeCandidates, i)
-			// trained = true
+			// merging only IVFSQ8 indexes
+			if len(vecIndexes[i].vecIds) >= 10000 {
+				mergeCandidates = append(mergeCandidates, i)
+			}
 		}
 
 		if len(vecIndexes[i].vecIds) > 0 {
@@ -302,8 +302,7 @@ func (v *vectorIndexOpaque) fastMergeIndexes(vecIndexes []*vecIndexInfo, trainDa
 	// in indexData added into the index.
 	nlist := determineCentroids(nvecs)
 	if len(trainData) > 0 {
-		fmt.Println("training data", len(trainData)/dims)
-		nlist = len(trainData) / (39 * dims)
+		nlist = len(trainData) / (50 * dims)
 	}
 	indexDescription, indexClass := determineIndexToUse(nvecs, nlist, indexOptimizedFor)
 
@@ -323,13 +322,8 @@ func (v *vectorIndexOpaque) fastMergeIndexes(vecIndexes []*vecIndexInfo, trainDa
 		nprobe := calculateNprobe(nlist, indexOptimizedFor)
 		faissIndex.SetNProbe(nprobe)
 		if !trained {
-			fmt.Println("training index")
 			if len(mergeCandidates) > 0 {
-				coarseQuantizer, err := vecIndexes[mergeCandidates[0]].index.GetCoarseQuantizer()
-				if err != nil {
-					return err
-				}
-				err = faissIndex.SetCoarseQuantizer(coarseQuantizer)
+				err = faissIndex.SetQuantizers(vecIndexes[mergeCandidates[0]].index)
 				if err != nil {
 					return err
 				}
@@ -346,7 +340,6 @@ func (v *vectorIndexOpaque) fastMergeIndexes(vecIndexes []*vecIndexInfo, trainDa
 				return seg.ErrClosed
 			}
 			if j < len(mergeCandidates) && i == mergeCandidates[j] {
-				fmt.Println("merging index", i)
 				err = faissIndex.MergeFrom(vecIndexes[i].index, 0)
 				if err != nil {
 					return err
@@ -355,7 +348,6 @@ func (v *vectorIndexOpaque) fastMergeIndexes(vecIndexes []*vecIndexInfo, trainDa
 			} else {
 				neededReconsLen := len(vecIndexes[i].vecIds) * vecIndexes[i].index.D()
 				reconsVecs = reconsVecs[:neededReconsLen]
-				fmt.Println("recons cap", reconsCap, len(vecIndexes[i].vecIds), len(reconsVecs))
 				reconsVecs, err := vecIndexes[i].index.ReconstructBatch(vecIndexes[i].vecIds, reconsVecs)
 				if err != nil {
 					return err

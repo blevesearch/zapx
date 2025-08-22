@@ -281,7 +281,7 @@ type vectorIndexWrapper struct {
 	close func()
 	size  func() uint64
 
-	obtainTopKCentroidCardinalitiesFromIVFIndex func(limit int) (
+	obtainKCentroidCardinalitiesFromIVFIndex func(limit int, descending bool) (
 		[]index.CentroidCardinality, error)
 }
 
@@ -305,9 +305,9 @@ func (i *vectorIndexWrapper) Size() uint64 {
 	return i.size()
 }
 
-func (i *vectorIndexWrapper) ObtainTopKCentroidCardinalitiesFromIVFIndex(limit int) (
+func (i *vectorIndexWrapper) ObtainKCentroidCardinalitiesFromIVFIndex(limit int, descending bool) (
 	[]index.CentroidCardinality, error) {
-	return i.obtainTopKCentroidCardinalitiesFromIVFIndex(limit)
+	return i.obtainKCentroidCardinalitiesFromIVFIndex(limit, descending)
 }
 
 // InterpretVectorIndex returns a construct of closures (vectorIndexWrapper)
@@ -529,12 +529,12 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 			size: func() uint64 {
 				return vecIndexSize
 			},
-			obtainTopKCentroidCardinalitiesFromIVFIndex: func(limit int) ([]index.CentroidCardinality, error) {
+			obtainKCentroidCardinalitiesFromIVFIndex: func(limit int, descending bool) ([]index.CentroidCardinality, error) {
 				if vecIndex == nil || !vecIndex.IsIVFIndex() {
 					return nil, nil
 				}
 
-				cardinalities, centroids, err := vecIndex.ObtainTopKCentroidCardinalitiesFromIVFIndex(limit)
+				cardinalities, centroids, err := vecIndex.ObtainKCentroidCardinalitiesFromIVFIndex(limit, descending)
 				if err != nil {
 					return nil, err
 				}

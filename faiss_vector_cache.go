@@ -129,12 +129,12 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 
 	mapLen, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
-	pos += int(mapLen)
 
 	buf, err := r.process(mem[pos : pos+int(mapLen)])
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	pos += int(mapLen)
 	bufPos := 0
 	bufLen := len(buf)
 

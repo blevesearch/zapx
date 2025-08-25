@@ -157,8 +157,8 @@ func (c *chunkedIntCoder) Write(w io.Writer) (int, error) {
 				return 0, err
 			}
 			processedBuf = append(processedBuf, buf...)
-			c.chunkLens[i] = uint64(len(buf))
 			prevOffset = int(chunkOffsets[i])
+			c.chunkLens[i] = uint64(len(buf))
 		}
 		c.final = processedBuf
 		chunkOffsets = modifyLengthsToEndOffsets(c.chunkLens)

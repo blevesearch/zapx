@@ -141,20 +141,22 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 
 			idMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
-			pos += int(idMapLen)
 
 			buf, err := sb.fileReader.process(sb.mem[pos : pos+int(idMapLen)])
 			if err != nil {
 				return err
 			}
+			pos += int(idMapLen)
+
 			bufPos := 0
+			bufLen := len(buf)
 
 			curIdx := len(indexes) - 1
 			for i := 0; i < int(numVecs); i++ {
-				vecID, n := binary.Varint(buf[bufPos : bufPos+binary.MaxVarintLen64])
+				vecID, n := binary.Varint(buf[bufPos:min(bufPos+binary.MaxVarintLen64, bufLen)])
 				bufPos += n
 
-				docID, n := binary.Uvarint(buf[bufPos : bufPos+binary.MaxVarintLen64])
+				docID, n := binary.Uvarint(buf[bufPos:min(bufPos+binary.MaxVarintLen64, bufLen)])
 				bufPos += n
 
 				// remap the docID from the old segment to the new document nos.
@@ -229,7 +231,7 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *fileWriter,
 		return err
 	}
 
-	idBuf := make([]byte, 0, binary.MaxVarintLen64*2*len(vecToDocID))
+	idBuf := make([]byte, binary.MaxVarintLen64*2*len(vecToDocID))
 	pos := 0
 
 	for vecID, docID := range vecToDocID {
@@ -592,7 +594,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *fileWriter) (offset uint64, e
 		// section would be help avoiding in paging in this data as part of a page
 		// (which is to load a non-cacheable info like index). this could help the
 		// paging costs
-		idBuf := make([]byte, 0, binary.MaxVarintLen64*2*len(content.vecs))
+		idBuf := make([]byte, binary.MaxVarintLen64*2*len(content.vecs))
 		pos := 0
 		for vecID := range content.vecs {
 			docID := vo.vecIDMap[vecID].docID

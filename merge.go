@@ -624,7 +624,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 				if newEdgeList == nil {
 					newEdgeList = make(map[uint64]uint64)
 				}
-				newEdgeList[newChild] = newSegDocNums[oldParent]
+				newEdgeList[newChild] = newParent
 			}
 		}
 	}

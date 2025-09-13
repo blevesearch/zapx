@@ -1077,6 +1077,7 @@ func (io *invertedIndexOpaque) Reset() (err error) {
 	atomic.StoreUint64(&io.bytesWritten, 0)
 	io.fieldsSame = false
 	io.numDocs = 0
+	io.fieldAddrs = map[int]int{}
 
 	clear(io.fieldAddrs)
 	clear(io.updatedFields)

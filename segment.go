@@ -592,9 +592,9 @@ func (sb *SegmentBase) DocID(num uint64) ([]byte, error) {
 	return idFieldVal, nil
 }
 
-// Count returns the number of documents in this segment.
-// This is only the number of root documents, not including
-// nested documents.
+// Count returns the number of root documents in this segment.
+// It calculates this by subtracting the number of nested/child documents
+// from the total document count: root documents = total documents - nested/child documents.
 func (sb *SegmentBase) Count() uint64 {
 	// total docs - sub docs = root docs
 	return sb.numDocs - sb.SubDocCount()
@@ -832,7 +832,7 @@ func (sb *SegmentBase) AddSubDocs(drops *roaring.Bitmap) *roaring.Bitmap {
 	if drops == nil || drops.GetCardinality() == 0 || sb.SubDocCount() == 0 {
 		return drops
 	}
-	// Collect all descendent doc numbers of the drops
+	// Collect all descendant doc numbers of the drops
 	var descendantDocNums []uint32
 	drops.Iterate(func(docNum uint32) bool {
 		for _, childDoc := range sb.Descendants(uint64(docNum)) {
@@ -840,7 +840,7 @@ func (sb *SegmentBase) AddSubDocs(drops *roaring.Bitmap) *roaring.Bitmap {
 		}
 		return true
 	})
-	// If we found any descendent doc numbers, add them to the drops
+	// If we found any descendant doc numbers, add them to the drops
 	if len(descendantDocNums) > 0 {
 		dropsClone := drops.Clone()
 		dropsClone.AddMany(descendantDocNums)

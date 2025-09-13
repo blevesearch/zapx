@@ -115,7 +115,7 @@ func (nc *nestedIndexCache) getAncestry(edgeListOffset uint64, mem []byte, docNu
 
 func (nc *nestedIndexCache) getDescendants(edgeListOffset uint64, mem []byte, docNum uint64) []uint64 {
 	cache := nc.loadOrCreate(edgeListOffset, mem)
-	if cache == nil || cache.ancestry == nil {
+	if cache == nil || cache.descendants == nil {
 		return nil
 	}
 	return cache.descendants[docNum]

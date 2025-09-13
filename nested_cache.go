@@ -123,7 +123,7 @@ func (nc *nestedIndexCache) getDescendants(edgeListOffset uint64, mem []byte, do
 
 func (nc *nestedIndexCache) getEdgeList(edgeListOffset uint64, mem []byte) map[uint64]uint64 {
 	cache := nc.loadOrCreate(edgeListOffset, mem)
-	if cache == nil || cache.ancestry == nil {
+	if cache == nil || cache.edgeList == nil {
 		return nil
 	}
 	return cache.edgeList

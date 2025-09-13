@@ -808,6 +808,9 @@ func (sb *SegmentBase) SubDocCount() uint64 {
 	return sb.nstIndexCache.getNumSubDocs(sb.getEdgeListOffset(), sb.mem)
 }
 
+// EdgeList returns a map representing the parent-child relationships between documents in the segment.
+// The map keys are child document numbers (uint64), and the values are their corresponding parent document numbers (uint64).
+// If a document has no parent, it may not appear in the map. This is useful for navigating document hierarchies.
 func (sb *SegmentBase) EdgeList() map[uint64]uint64 {
 	return sb.nstIndexCache.getEdgeList(sb.getEdgeListOffset(), sb.mem)
 }

@@ -68,6 +68,8 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 		_ = os.Remove(path)
 	}
 
+	drops = addSubDocuments(segmentBases, drops)
+
 	// buffer the output
 	br := bufio.NewWriterSize(f, DefaultFileMergerBufferSize)
 
@@ -599,6 +601,54 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 		}
 	}
 
+	// calculate new edge list if applicable
+	var newEdgeList map[uint64]uint64
+
+	for segI, segment := range segments {
+		// check for the closure in meantime
+		if isClosed(closeCh) {
+			return 0, nil, seg.ErrClosed
+		}
+		// get the edgeList for this segment
+		edgeList := segment.EdgeList()
+		// if no edgeList, nothing to do
+		if len(edgeList) == 0 {
+			continue
+		}
+		newSegDocNums := rv[segI]
+		for oldChild, oldParent := range edgeList {
+			newParent := newSegDocNums[oldParent]
+			newChild := newSegDocNums[oldChild]
+			if newParent != docDropped &&
+				newChild != docDropped {
+				if newEdgeList == nil {
+					newEdgeList = make(map[uint64]uint64)
+				}
+				newEdgeList[newChild] = newSegDocNums[oldParent]
+			}
+		}
+	}
+
+	// write out the new edge list
+	// first write out the number of entries
+	// which is also the number of valid subDocs
+	// in the merged segment
+	err := binary.Write(w, binary.BigEndian, uint64(len(newEdgeList)))
+	if err != nil {
+		return 0, nil, err
+	}
+	// now the new edge list
+	for child, parent := range newEdgeList {
+		err := binary.Write(w, binary.BigEndian, child)
+		if err != nil {
+			return 0, nil, err
+		}
+		err = binary.Write(w, binary.BigEndian, parent)
+		if err != nil {
+			return 0, nil, err
+		}
+	}
+
 	return storedIndexOffset, rv, nil
 }
 
@@ -727,4 +777,12 @@ func isClosed(closeCh chan struct{}) bool {
 	default:
 		return false
 	}
+}
+
+func addSubDocuments(sbs []*SegmentBase, drops []*roaring.Bitmap) []*roaring.Bitmap {
+	rv := make([]*roaring.Bitmap, len(drops))
+	for i, sb := range sbs {
+		rv[i] = sb.AddSubDocs(drops[i])
+	}
+	return rv
 }

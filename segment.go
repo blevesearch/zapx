@@ -58,6 +58,7 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 			invIndexCache:  newInvertedIndexCache(),
 			vecIndexCache:  newVectorIndexCache(),
 			synIndexCache:  newSynonymIndexCache(),
+			nstIndexCache:  newNestedIndexCache(),
 			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
 		},
 		f:    f,
@@ -115,6 +116,7 @@ type SegmentBase struct {
 	invIndexCache *invertedIndexCache
 	vecIndexCache *vectorIndexCache
 	synIndexCache *synonymIndexCache
+	nstIndexCache *nestedIndexCache
 }
 
 func (sb *SegmentBase) Size() int {
@@ -159,6 +161,7 @@ func (sb *SegmentBase) Close() (err error) {
 	sb.invIndexCache.Clear()
 	sb.vecIndexCache.Clear()
 	sb.synIndexCache.Clear()
+	sb.nstIndexCache.Clear()
 	return nil
 }
 
@@ -590,8 +593,11 @@ func (sb *SegmentBase) DocID(num uint64) ([]byte, error) {
 }
 
 // Count returns the number of documents in this segment.
+// This is only the number of root documents, not including
+// nested documents.
 func (sb *SegmentBase) Count() uint64 {
-	return sb.numDocs
+	// total docs - sub docs = root docs
+	return sb.numDocs - sb.SubDocCount()
 }
 
 // DocNumbers returns a bitset corresponding to the doc numbers of all the
@@ -646,6 +652,7 @@ func (s *Segment) closeActual() (err error) {
 	s.invIndexCache.Clear()
 	s.vecIndexCache.Clear()
 	s.synIndexCache.Clear()
+	s.nstIndexCache.Clear()
 
 	if s.mm != nil {
 		err = s.mm.Unmap()
@@ -787,4 +794,42 @@ func (s *SegmentBase) GetUpdatedFields() map[string]*index.UpdateFieldInfo {
 // Setter method to store updateFieldInfo within segment base
 func (s *SegmentBase) SetUpdatedFields(updatedFields map[string]*index.UpdateFieldInfo) {
 	s.updatedFields = updatedFields
+}
+
+func (sb *SegmentBase) Ancestors(docNum uint64) []uint64 {
+	return sb.nstIndexCache.getAncestry(sb.getEdgeListOffset(), sb.mem, docNum)
+}
+
+func (sb *SegmentBase) Descendants(docNum uint64) []uint64 {
+	return sb.nstIndexCache.getDescendants(sb.getEdgeListOffset(), sb.mem, docNum)
+}
+
+func (sb *SegmentBase) SubDocCount() uint64 {
+	return sb.nstIndexCache.getNumSubDocs(sb.getEdgeListOffset(), sb.mem)
+}
+
+func (sb *SegmentBase) EdgeList() map[uint64]uint64 {
+	return sb.nstIndexCache.getEdgeList(sb.getEdgeListOffset(), sb.mem)
+}
+
+func (sb *SegmentBase) AddSubDocs(drops *roaring.Bitmap) *roaring.Bitmap {
+	// If no drops or no subDocs, nothing to do
+	if drops == nil || drops.GetCardinality() == 0 || sb.SubDocCount() == 0 {
+		return drops
+	}
+	// Collect all descendent doc numbers of the drops
+	var descendentDocNums []uint32
+	drops.Iterate(func(docNum uint32) bool {
+		for _, childDoc := range sb.Descendants(uint64(docNum)) {
+			descendentDocNums = append(descendentDocNums, uint32(childDoc))
+		}
+		return true
+	})
+	// If we found any descendent doc numbers, add them to the drops
+	if len(descendentDocNums) > 0 {
+		dropsClone := drops.Clone()
+		dropsClone.AddMany(descendentDocNums)
+		return dropsClone
+	}
+	return drops
 }

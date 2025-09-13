@@ -62,7 +62,7 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 		br.Grow(estimateAvgBytesPerDoc * estimateNumResults)
 	}
 
-	s.results = results
+	s.results, s.edgeList = flattenNestedDocuments(results)
 	s.chunkMode = chunkMode
 	s.w = NewCountHashWriter(&br)
 
@@ -72,7 +72,7 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 	}
 
 	sb, err := InitSegmentBase(br.Bytes(), s.w.Sum32(), chunkMode,
-		uint64(len(results)), storedIndexOffset, sectionsIndexOffset)
+		uint64(len(s.results)), storedIndexOffset, sectionsIndexOffset)
 
 	// get the bytes written before the interim's reset() call
 	// write it to the newly formed segment base.
@@ -93,6 +93,9 @@ var interimPool = sync.Pool{New: func() interface{} { return &interim{} }}
 // analysis results to a zap-encoded segment
 type interim struct {
 	results []index.Document
+
+	// edge list for nested documents: child -> parent
+	edgeList map[int]uint64
 
 	chunkMode uint32
 
@@ -125,6 +128,7 @@ type interim struct {
 
 func (s *interim) reset() (err error) {
 	s.results = nil
+	s.edgeList = nil
 	s.chunkMode = 0
 	s.w = nil
 	for k := range s.FieldsMap {
@@ -423,6 +427,27 @@ func (s *interim) writeStoredFields() (
 		}
 	}
 
+	// write the number of edges in the child -> parent edge list
+	// this will be zero if there are no nested documents
+	// and this number also reflects the number of sub-documents
+	// in the segment
+	err = binary.Write(s.w, binary.BigEndian, uint64(len(s.edgeList)))
+	if err != nil {
+		return 0, err
+	}
+	// write the child -> parent edge list
+	// child and parent are both flattened doc ids
+	for child, parent := range s.edgeList {
+		err = binary.Write(s.w, binary.BigEndian, uint64(child))
+		if err != nil {
+			return 0, err
+		}
+		err = binary.Write(s.w, binary.BigEndian, parent)
+		if err != nil {
+			return 0, err
+		}
+	}
+
 	return storedIndexOffset, nil
 }
 
@@ -451,4 +476,49 @@ func numUvarintBytes(x uint64) (n int) {
 		n++
 	}
 	return n + 1
+}
+
+// flattenNestedDocuments returns a preorder list of the given documents and all their nested documents,
+// along with a map mapping each flattened index to its parent index (excluding root docs entirely).
+func flattenNestedDocuments(docs []index.Document) ([]index.Document, map[int]uint64) {
+	totalCount := 0
+	for _, doc := range docs {
+		totalCount += countNestedDocuments(doc)
+	}
+
+	flattened := make([]index.Document, 0, totalCount)
+	edgeMap := make(map[int]uint64, totalCount)
+
+	var traverse func(doc index.Document, hasParent bool, parentIdx int)
+	traverse = func(d index.Document, hasParent bool, parentIdx int) {
+		curIdx := len(flattened)
+		flattened = append(flattened, d)
+
+		if hasParent {
+			edgeMap[curIdx] = uint64(parentIdx)
+		}
+
+		if nestedDoc, ok := d.(index.NestedDocument); ok {
+			nestedDoc.VisitNestedDocuments(func(child index.Document) {
+				traverse(child, true, curIdx)
+			})
+		}
+	}
+	// Top-level docs have no parent
+	for _, doc := range docs {
+		traverse(doc, false, 0)
+	}
+	return flattened, edgeMap
+}
+
+// countNestedDocuments returns the total number of docs in preorder,
+// including the parent and all descendants.
+func countNestedDocuments(doc index.Document) int {
+	count := 1 // include this doc
+	if nd, ok := doc.(index.NestedDocument); ok {
+		nd.VisitNestedDocuments(func(child index.Document) {
+			count += countNestedDocuments(child)
+		})
+	}
+	return count
 }

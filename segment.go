@@ -833,17 +833,17 @@ func (sb *SegmentBase) AddSubDocs(drops *roaring.Bitmap) *roaring.Bitmap {
 		return drops
 	}
 	// Collect all descendent doc numbers of the drops
-	var descendentDocNums []uint32
+	var descendantDocNums []uint32
 	drops.Iterate(func(docNum uint32) bool {
 		for _, childDoc := range sb.Descendants(uint64(docNum)) {
-			descendentDocNums = append(descendentDocNums, uint32(childDoc))
+			descendantDocNums = append(descendantDocNums, uint32(childDoc))
 		}
 		return true
 	})
 	// If we found any descendent doc numbers, add them to the drops
-	if len(descendentDocNums) > 0 {
+	if len(descendantDocNums) > 0 {
 		dropsClone := drops.Clone()
-		dropsClone.AddMany(descendentDocNums)
+		dropsClone.AddMany(descendantDocNums)
 		return dropsClone
 	}
 	return drops

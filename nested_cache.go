@@ -15,7 +15,7 @@ type nestedIndexCache struct {
 	cache *nestedCacheEntry
 }
 
-// Clear clears the synonym cache which would mean that the termID to term map would no longer be available.
+// Clear clears the nested index cache, removing cached edge lists, ancestry, and descendants.
 func (nc *nestedIndexCache) Clear() {
 	nc.m.Lock()
 	nc.cache = nil

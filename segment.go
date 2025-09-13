@@ -804,6 +804,8 @@ func (sb *SegmentBase) Descendants(docNum uint64) []uint64 {
 	return sb.nstIndexCache.getDescendants(sb.getEdgeListOffset(), sb.mem, docNum)
 }
 
+// SubDocCount returns the number of sub-documents present in the segment.
+// This is determined using the segment's edge list and memory.
 func (sb *SegmentBase) SubDocCount() uint64 {
 	return sb.nstIndexCache.getNumSubDocs(sb.getEdgeListOffset(), sb.mem)
 }

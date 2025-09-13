@@ -41,7 +41,7 @@ func (nc *nestedIndexCache) loadOrCreate(edgeListOffset uint64, mem []byte) *nes
 	return nc.createAndCacheLOCKED(edgeListOffset, mem)
 }
 
-// createAndCacheLOCKED creates the synonym index cache for the specified fieldID and caches it.
+// createAndCacheLOCKED creates and caches a nested cache entry (edge list, ancestry, descendants) for the given edge list offset and memory slice.
 func (sc *nestedIndexCache) createAndCacheLOCKED(edgeListOffset uint64, mem []byte) *nestedCacheEntry {
 	// pos stores the current read position
 	pos := edgeListOffset

@@ -90,11 +90,9 @@ func (sc *nestedIndexCache) createAndCacheLOCKED(edgeListOffset uint64, mem []by
 	descendants := make(map[uint64][]uint64, numEdges)
 
 	// Build descendants using ancestry
-	for node := uint64(0); node < numEdges; node++ {
-		if ancestors, ok := ancestry[node]; ok {
-			for _, ancestor := range ancestors {
-				descendants[ancestor] = append(descendants[ancestor], node)
-			}
+	for node, parents := range ancestry {
+		for _, parent := range parents {
+			descendants[parent] = append(descendants[parent], node)
 		}
 	}
 

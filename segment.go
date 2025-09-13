@@ -803,6 +803,9 @@ func (sb *SegmentBase) Ancestors(docNum uint64) []uint64 {
 	return sb.nstIndexCache.getAncestry(sb.getEdgeListOffset(), sb.mem, docNum)
 }
 
+// Descendants returns a slice of document numbers that are descendants of the
+// specified docNum within the segment. The descendants are determined using
+// the segment's internal index cache and memory representation.
 func (sb *SegmentBase) Descendants(docNum uint64) []uint64 {
 	return sb.nstIndexCache.getDescendants(sb.getEdgeListOffset(), sb.mem, docNum)
 }

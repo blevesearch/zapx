@@ -26,7 +26,6 @@ import (
 	"github.com/RoaringBitmap/roaring/v2"
 	index "github.com/blevesearch/bleve_index_api"
 	seg "github.com/blevesearch/scorch_segment_api/v2"
-	"github.com/golang/snappy"
 )
 
 var DefaultFileMergerBufferSize = 1024 * 1024
@@ -512,7 +511,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 
 			metaBytes := metaBuf.Bytes()
 
-			compressed = snappy.Encode(compressed[:cap(compressed)], data)
+			compressed = data
 
 			// record where we're about to start writing
 			docNumOffsets[newDocNum] = uint64(w.Count())

@@ -104,8 +104,6 @@ func (d *Dictionary) postingsListInit(rv *PostingsList, except *roaring.Bitmap) 
 		rv.postings = postings
 	}
 	rv.sb = d.sb
-	// add subdocs to except if needed
-	rv.except = rv.sb.AddSubDocs(except)
 	return rv
 }
 

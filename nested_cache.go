@@ -3,6 +3,8 @@ package zap
 import (
 	"encoding/binary"
 	"sync"
+
+	"github.com/RoaringBitmap/roaring/v2"
 )
 
 func newNestedIndexCache() *nestedIndexCache {
@@ -135,6 +137,36 @@ func (nc *nestedIndexCache) getNumSubDocs(edgeListOffset uint64, mem []byte) uin
 		return 0
 	}
 	return uint64(len(cache.edgeList))
+}
+
+// countRoot returns the number of root documents in the given bitmap
+func (nc *nestedIndexCache) countRoot(edgeListOffset uint64, mem []byte, bm *roaring.Bitmap) uint64 {
+	var totalDocs uint64
+	if bm == nil {
+		// if bitmap is empty, return 0
+		return totalDocs
+	}
+	totalDocs = bm.GetCardinality()
+	cache := nc.loadOrCreate(edgeListOffset, mem)
+	if cache == nil {
+		// if cache is nil, no nested docs, so all docs are root docs
+		// so just return the cardinality of the bitmap
+		return totalDocs
+	}
+	// count sub docs in the bitmap, a sub doc is one that has a parent in the edge list
+	var subDocCount uint64
+	bm.Iterate(func(docNum uint32) bool {
+		if _, ok := cache.edgeList[uint64(docNum)]; ok {
+			subDocCount++
+		}
+		return true
+	})
+	// root docs = total docs - sub docs
+	if totalDocs < subDocCount {
+		// should not happen, but just in case
+		return 0
+	}
+	return totalDocs - subDocCount
 }
 
 type nestedCacheEntry struct {

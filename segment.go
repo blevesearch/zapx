@@ -592,12 +592,8 @@ func (sb *SegmentBase) DocID(num uint64) ([]byte, error) {
 	return idFieldVal, nil
 }
 
-// Count returns the number of root documents in this segment.
-// It calculates this by subtracting the number of nested/child documents
-// from the total document count: root documents = total documents - nested/child documents.
 func (sb *SegmentBase) Count() uint64 {
-	// total docs - sub docs = root docs
-	return sb.numDocs - sb.SubDocCount()
+	return sb.numDocs
 }
 
 // DocNumbers returns a bitset corresponding to the doc numbers of all the
@@ -803,16 +799,33 @@ func (sb *SegmentBase) Ancestors(docNum uint64) []uint64 {
 	return sb.nstIndexCache.getAncestry(sb.getEdgeListOffset(), sb.mem, docNum)
 }
 
+// CountRoot returns the number of root documents in the segment, excluding any
+// documents that are marked as deleted in the provided bitmap. The deleted bitmap
+// may contain both root and sub-document numbers, and the method ensures that
+// only root documents are counted.
+func (sb *SegmentBase) CountRoot(deleted *roaring.Bitmap) uint64 {
+	// the formula is as follows:
+	// Total Docs (T) = Root Docs (R) + Sub Docs (S)
+	// R = T - S
+	// Now if we have D deleted docs, some of which may be sub-docs, we need to exclude
+	// those from the root doc count. Let D = dR + dS, where dR is the number of deleted
+	// root docs and dS is the number of deleted sub docs.
+	// dR = D - dS
+	// Therefore, the count of root docs excluding deleted ones is:
+	// R - dR = (T - S) - (D - dS)
+	return (sb.Count() - sb.CountNested()) - (sb.nstIndexCache.countRoot(sb.getEdgeListOffset(), sb.mem, deleted))
+}
+
 // Descendants returns a slice of document numbers that are descendants of the
 // specified docNum within the segment. The descendants are determined using
-// the segment's internal index cache and memory representation.
+// the segment's internal index cache.
 func (sb *SegmentBase) Descendants(docNum uint64) []uint64 {
 	return sb.nstIndexCache.getDescendants(sb.getEdgeListOffset(), sb.mem, docNum)
 }
 
 // SubDocCount returns the number of sub-documents present in the segment.
-// This is determined using the segment's edge list and memory.
-func (sb *SegmentBase) SubDocCount() uint64 {
+// This is determined using the segment's edge list.
+func (sb *SegmentBase) CountNested() uint64 {
 	return sb.nstIndexCache.getNumSubDocs(sb.getEdgeListOffset(), sb.mem)
 }
 
@@ -829,7 +842,7 @@ func (sb *SegmentBase) EdgeList() map[uint64]uint64 {
 // bitmap includes both the original drops and all their descendants (if any).
 func (sb *SegmentBase) AddSubDocs(drops *roaring.Bitmap) *roaring.Bitmap {
 	// If no drops or no subDocs, nothing to do
-	if drops == nil || drops.GetCardinality() == 0 || sb.SubDocCount() == 0 {
+	if drops == nil || drops.GetCardinality() == 0 || sb.CountNested() == 0 {
 		return drops
 	}
 	// Collect all descendant doc numbers of the drops

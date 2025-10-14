@@ -836,11 +836,11 @@ func (sb *SegmentBase) EdgeList() map[uint64]uint64 {
 	return sb.nstIndexCache.getEdgeList(sb.getEdgeListOffset(), sb.mem)
 }
 
-// AddSubDocs returns a bitmap containing the original document numbers in drops,
+// AddNestedDocuments returns a bitmap containing the original document numbers in drops,
 // plus any descendant document numbers for each dropped document. The drops
 // parameter represents a set of document numbers to be dropped, and the returned
 // bitmap includes both the original drops and all their descendants (if any).
-func (sb *SegmentBase) AddSubDocs(drops *roaring.Bitmap) *roaring.Bitmap {
+func (sb *SegmentBase) AddNestedDocuments(drops *roaring.Bitmap) *roaring.Bitmap {
 	// If no drops or no subDocs, nothing to do
 	if drops == nil || drops.GetCardinality() == 0 || sb.CountNested() == 0 {
 		return drops
@@ -849,7 +849,10 @@ func (sb *SegmentBase) AddSubDocs(drops *roaring.Bitmap) *roaring.Bitmap {
 	var descendantDocNums []uint32
 	drops.Iterate(func(docNum uint32) bool {
 		for _, childDoc := range sb.Descendants(uint64(docNum)) {
-			descendantDocNums = append(descendantDocNums, uint32(childDoc))
+			// only add if not already in drops
+			if !drops.Contains(uint32(childDoc)) {
+				descendantDocNums = append(descendantDocNums, uint32(childDoc))
+			}
 		}
 		return true
 	})

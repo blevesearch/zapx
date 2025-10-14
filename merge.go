@@ -68,8 +68,6 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 		_ = os.Remove(path)
 	}
 
-	drops = addSubDocuments(segmentBases, drops)
-
 	// buffer the output
 	br := bufio.NewWriterSize(f, DefaultFileMergerBufferSize)
 
@@ -715,12 +713,4 @@ func isClosed(closeCh chan struct{}) bool {
 	default:
 		return false
 	}
-}
-
-func addSubDocuments(sbs []*SegmentBase, drops []*roaring.Bitmap) []*roaring.Bitmap {
-	rv := make([]*roaring.Bitmap, len(drops))
-	for i, sb := range sbs {
-		rv[i] = sb.AddSubDocs(drops[i])
-	}
-	return rv
 }

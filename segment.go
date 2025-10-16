@@ -592,6 +592,7 @@ func (sb *SegmentBase) DocID(num uint64) ([]byte, error) {
 	return idFieldVal, nil
 }
 
+// Count returns the number of documents in this segment.
 func (sb *SegmentBase) Count() uint64 {
 	return sb.numDocs
 }
@@ -836,7 +837,7 @@ func (sb *SegmentBase) EdgeList() map[uint64]uint64 {
 	return sb.nstIndexCache.getEdgeList(sb.getEdgeListOffset(), sb.mem)
 }
 
-// AddNestedDocuments returns a bitmap containing the original document numbers in drops,
+// s returns a bitmap containing the original document numbers in drops,
 // plus any descendant document numbers for each dropped document. The drops
 // parameter represents a set of document numbers to be dropped, and the returned
 // bitmap includes both the original drops and all their descendants (if any).

@@ -104,6 +104,7 @@ func (d *Dictionary) postingsListInit(rv *PostingsList, except *roaring.Bitmap) 
 		rv.postings = postings
 	}
 	rv.sb = d.sb
+	rv.except = except
 	return rv
 }
 

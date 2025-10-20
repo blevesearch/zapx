@@ -64,63 +64,61 @@ func (sc *nestedIndexCache) createAndCacheLOCKED(edgeListOffset uint64, mem []by
 		pos += 8
 		edgeList[child] = parent
 	}
-	// build ancestry using DFS + memoization
-	ancestry := make(map[uint64][]uint64, numEdges)
-	// memoized DFS
-	var getAncestors func(uint64) []uint64
-	getAncestors = func(node uint64) []uint64 {
-		// if already computed, return
-		if val, ok := ancestry[node]; ok {
-			return val
-		}
-		if parent, ok := edgeList[node]; ok {
-			// compute parent's ancestry + parent itself
-			res := append([]uint64{parent}, getAncestors(parent)...)
-			ancestry[node] = res
-			return res
-		}
-		return nil
-	}
-
-	for child := range edgeList {
-		// only store if non-empty ancestry
-		if v := getAncestors(child); len(v) > 0 {
-			ancestry[child] = v
-		}
-	}
-
-	descendants := make(map[uint64][]uint64, numEdges)
-
-	// Build descendants using ancestry
-	for node, parents := range ancestry {
-		for _, parent := range parents {
-			descendants[parent] = append(descendants[parent], node)
-		}
-	}
 
 	sc.cache = &nestedCacheEntry{
-		edgeList:    edgeList,
-		ancestry:    ancestry,
-		descendants: descendants,
+		edgeList: edgeList,
 	}
 
 	return sc.cache
 }
 
+func getDocAncestors(edgeList map[uint64]uint64, docNum uint64) []uint64 {
+	var ancestors []uint64
+	current := docNum
+	for {
+		parent, ok := edgeList[current]
+		if !ok {
+			break
+		}
+		ancestors = append(ancestors, parent)
+		current = parent
+	}
+	return ancestors
+}
+
+func getDocDescendants(edgeList map[uint64]uint64, docNum uint64) []uint64 {
+	var rv []uint64
+	for node := range edgeList {
+		child := node
+		for {
+			parent, ok := edgeList[child]
+			if !ok {
+				break
+			}
+			if parent == docNum {
+				rv = append(rv, node)
+				break
+			}
+			child = parent
+		}
+	}
+	return rv
+}
+
 func (nc *nestedIndexCache) getAncestry(edgeListOffset uint64, mem []byte, docNum uint64) []uint64 {
 	cache := nc.loadOrCreate(edgeListOffset, mem)
-	if cache == nil || cache.ancestry == nil {
+	if cache == nil || cache.edgeList == nil {
 		return nil
 	}
-	return cache.ancestry[docNum]
+	return getDocAncestors(cache.edgeList, docNum)
 }
 
 func (nc *nestedIndexCache) getDescendants(edgeListOffset uint64, mem []byte, docNum uint64) []uint64 {
 	cache := nc.loadOrCreate(edgeListOffset, mem)
-	if cache == nil || cache.descendants == nil {
+	if cache == nil || cache.edgeList == nil {
 		return nil
 	}
-	return cache.descendants[docNum]
+	return getDocDescendants(cache.edgeList, docNum)
 }
 
 func (nc *nestedIndexCache) getEdgeList(edgeListOffset uint64, mem []byte) map[uint64]uint64 {
@@ -172,8 +170,4 @@ func (nc *nestedIndexCache) countRoot(edgeListOffset uint64, mem []byte, bm *roa
 type nestedCacheEntry struct {
 	// edgeList[node] = parent
 	edgeList map[uint64]uint64
-	// ancestry[node] = list of parents
-	ancestry map[uint64][]uint64
-	// descendants[parent] = list of children
-	descendants map[uint64][]uint64
 }

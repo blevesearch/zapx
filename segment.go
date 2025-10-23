@@ -817,13 +817,6 @@ func (sb *SegmentBase) CountRoot(deleted *roaring.Bitmap) uint64 {
 	return (sb.Count() - sb.CountNested()) - (sb.nstIndexCache.countRoot(sb.getEdgeListOffset(), sb.mem, deleted))
 }
 
-// Descendants returns a slice of document numbers that are descendants of the
-// specified docNum within the segment. The descendants are determined using
-// the segment's internal index cache.
-func (sb *SegmentBase) Descendants(docNum uint64) []uint64 {
-	return sb.nstIndexCache.getDescendants(sb.getEdgeListOffset(), sb.mem, docNum)
-}
-
 // SubDocCount returns the number of sub-documents present in the segment.
 // This is determined using the segment's edge list.
 func (sb *SegmentBase) CountNested() uint64 {
@@ -837,7 +830,7 @@ func (sb *SegmentBase) EdgeList() map[uint64]uint64 {
 	return sb.nstIndexCache.getEdgeList(sb.getEdgeListOffset(), sb.mem)
 }
 
-// s returns a bitmap containing the original document numbers in drops,
+// AddNestedDocuments returns a bitmap containing the original document numbers in drops,
 // plus any descendant document numbers for each dropped document. The drops
 // parameter represents a set of document numbers to be dropped, and the returned
 // bitmap includes both the original drops and all their descendants (if any).
@@ -846,22 +839,22 @@ func (sb *SegmentBase) AddNestedDocuments(drops *roaring.Bitmap) *roaring.Bitmap
 	if drops == nil || drops.GetCardinality() == 0 || sb.CountNested() == 0 {
 		return drops
 	}
-	// Collect all descendant doc numbers of the drops
-	var descendantDocNums []uint32
-	drops.Iterate(func(docNum uint32) bool {
-		for _, childDoc := range sb.Descendants(uint64(docNum)) {
-			// only add if not already in drops
-			if !drops.Contains(uint32(childDoc)) {
-				descendantDocNums = append(descendantDocNums, uint32(childDoc))
+	// Get the edge list for this segment
+	el := sb.EdgeList()
+	// Algorithm => iterate through each child->parent mapping in the edge list,
+	// and for each pair, check if the parent is in the drops bitmap.
+	// If it is, and the child is also not already in the drops bitmap,
+	// add the child to the drops. Repeat this process until no
+	// dew additions are made in an iteration.
+	changed := true
+	for changed {
+		changed = false
+		for child, parent := range el {
+			if drops.Contains(uint32(parent)) && !drops.Contains(uint32(child)) {
+				drops.Add(uint32(child))
+				changed = true
 			}
 		}
-		return true
-	})
-	// If we found any descendant doc numbers, add them to the drops
-	if len(descendantDocNums) > 0 {
-		dropsClone := drops.Clone()
-		dropsClone.AddMany(descendantDocNums)
-		return dropsClone
 	}
 	return drops
 }

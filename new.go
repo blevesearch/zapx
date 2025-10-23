@@ -95,7 +95,7 @@ type interim struct {
 	results []index.Document
 
 	// edge list for nested documents: child -> parent
-	edgeList map[int]uint64
+	edgeList map[uint64]uint64
 
 	chunkMode uint32
 
@@ -480,18 +480,18 @@ func numUvarintBytes(x uint64) (n int) {
 
 // flattenNestedDocuments returns a preorder list of the given documents and all their nested documents,
 // along with a map mapping each flattened index to its parent index (excluding root docs entirely).
-func flattenNestedDocuments(docs []index.Document) ([]index.Document, map[int]uint64) {
+func flattenNestedDocuments(docs []index.Document) ([]index.Document, map[uint64]uint64) {
 	totalCount := 0
 	for _, doc := range docs {
 		totalCount += countNestedDocuments(doc)
 	}
 
 	flattened := make([]index.Document, 0, totalCount)
-	edgeMap := make(map[int]uint64, totalCount)
+	edgeMap := make(map[uint64]uint64, totalCount)
 
-	var traverse func(doc index.Document, hasParent bool, parentIdx int)
-	traverse = func(d index.Document, hasParent bool, parentIdx int) {
-		curIdx := len(flattened)
+	var traverse func(doc index.Document, hasParent bool, parentIdx uint64)
+	traverse = func(d index.Document, hasParent bool, parentIdx uint64) {
+		curIdx := uint64(len(flattened))
 		flattened = append(flattened, d)
 
 		if hasParent {

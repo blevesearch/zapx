@@ -86,39 +86,12 @@ func getDocAncestors(edgeList map[uint64]uint64, docNum uint64) []uint64 {
 	return ancestors
 }
 
-func getDocDescendants(edgeList map[uint64]uint64, docNum uint64) []uint64 {
-	var rv []uint64
-	for node := range edgeList {
-		child := node
-		for {
-			parent, ok := edgeList[child]
-			if !ok {
-				break
-			}
-			if parent == docNum {
-				rv = append(rv, node)
-				break
-			}
-			child = parent
-		}
-	}
-	return rv
-}
-
 func (nc *nestedIndexCache) getAncestry(edgeListOffset uint64, mem []byte, docNum uint64) []uint64 {
 	cache := nc.loadOrCreate(edgeListOffset, mem)
 	if cache == nil || cache.edgeList == nil {
 		return nil
 	}
 	return getDocAncestors(cache.edgeList, docNum)
-}
-
-func (nc *nestedIndexCache) getDescendants(edgeListOffset uint64, mem []byte, docNum uint64) []uint64 {
-	cache := nc.loadOrCreate(edgeListOffset, mem)
-	if cache == nil || cache.edgeList == nil {
-		return nil
-	}
-	return getDocDescendants(cache.edgeList, docNum)
 }
 
 func (nc *nestedIndexCache) getEdgeList(edgeListOffset uint64, mem []byte) map[uint64]uint64 {

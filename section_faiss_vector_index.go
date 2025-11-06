@@ -75,6 +75,7 @@ type vecIndexInfo struct {
 	indexSize         uint64
 	vecIds            []int64
 	indexOptimizedFor string
+	indexOptions      index.VectorIndexOptions
 	index             *faiss.IndexImpl
 }
 
@@ -130,6 +131,10 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			indexOptimizationTypeInt, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
+			// the vector index options represented as a uint64
+			vectorIndexOptionsInt, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+
 			numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
@@ -137,6 +142,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			indexes = append(indexes, &vecIndexInfo{
 				vecIds:            make([]int64, 0, numVecs),
 				indexOptimizedFor: index.VectorIndexOptimizationsReverseLookup[int(indexOptimizationTypeInt)],
+				indexOptions:      index.VectorIndexOptions(vectorIndexOptionsInt),
 			})
 
 			curIdx := len(indexes) - 1
@@ -279,6 +285,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	// that they are extracted from the field mapping info.
 	var dims, metric int
 	var indexOptimizedFor string
+	var indexOptions index.VectorIndexOptions
 
 	var validMerge bool
 	var finalVecIDCap, indexDataCap, reconsCap int
@@ -317,6 +324,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		dims = index.D()
 		metric = int(index.MetricType())
 		indexOptimizedFor = vecIndexes[segI].indexOptimizedFor
+		indexOptions = vecIndexes[segI].indexOptions
 	}
 
 	// not a valid merge operation as there are no valid indexes to merge.
@@ -383,14 +391,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	defer faissIndex.Close()
 
 	if indexClass == IndexTypeIVF {
-		// the direct map maintained in the IVF index is essential for the
-		// reconstruction of vectors based on vector IDs in the future merges.
-		// the AddWithIDs API also needs a direct map to be set before using.
-		err = faissIndex.SetDirectMap(2)
-		if err != nil {
-			return err
-		}
-
 		nprobe := calculateNprobe(nlist, indexOptimizedFor)
 		faissIndex.SetNProbe(nprobe)
 
@@ -398,7 +398,19 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		// the data space of indexData such that during the search time, we probe
 		// only a subset of vectors -> non-exhaustive search. could be a time
 		// consuming step when the indexData is large.
-		err = faissIndex.Train(indexData)
+		// Best effort attempt to use GPU for training if configured
+		// May fall back to CPU training if GPU training fails due
+		// to any reason such as insufficient memory, or unavailability
+		// of GPUs, etc.
+		faissIndex, err = TrainIndex(faissIndex, indexData, dims, indexOptions.UseGPU())
+		if err != nil {
+			return err
+		}
+
+		// the direct map maintained in the IVF index is essential for the
+		// reconstruction of vectors based on vector IDs in the future merges.
+		// the AddWithIDs API also needs a direct map to be set before using.
+		err = faissIndex.SetDirectMap(2)
 		if err != nil {
 			return err
 		}
@@ -488,7 +500,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 	for fieldID, content := range vo.vecFieldMap {
 		// calculate the capacity of the vecs and ids slices
 		// to avoid multiple allocations.
-		vecs := make([]float32, 0, len(content.vecs)*int(content.dim))
+		dims := int(content.dim)
+		vecs := make([]float32, 0, len(content.vecs)*dims)
 		ids := make([]int64, 0, len(content.vecs))
 		for hash, vecInfo := range content.vecs {
 			vecs = append(vecs, vecInfo.vec...)
@@ -501,6 +514,10 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			// use the same FAISS metric for inner product and cosine similarity
 			metric = faiss.MetricInnerProduct
 		}
+		// read vector index options:
+		// was this field configured
+		// to use GPU for indexing?
+		useGPU := content.options.UseGPU()
 
 		nvecs := len(ids)
 		nlist := determineCentroids(nvecs)
@@ -514,15 +531,18 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		defer faissIndex.Close()
 
 		if indexClass == IndexTypeIVF {
-			err = faissIndex.SetDirectMap(2)
+			nprobe := calculateNprobe(nlist, content.indexOptimizedFor)
+			faissIndex.SetNProbe(nprobe)
+			// Best effort attempt to use GPU for training if configured
+			// May fall back to CPU training if GPU training fails due
+			// to any reason such as insufficient memory, or unavailability
+			// of GPUs, etc.
+			faissIndex, err = TrainIndex(faissIndex, vecs, dims, useGPU)
 			if err != nil {
 				return 0, err
 			}
 
-			nprobe := calculateNprobe(nlist, content.indexOptimizedFor)
-			faissIndex.SetNProbe(nprobe)
-
-			err = faissIndex.Train(vecs)
+			err = faissIndex.SetDirectMap(2)
 			if err != nil {
 				return 0, err
 			}
@@ -548,6 +568,12 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		}
 
 		n = binary.PutUvarint(tempBuf, uint64(index.SupportedVectorIndexOptimizations[content.indexOptimizedFor]))
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return 0, err
+		}
+
+		n = binary.PutUvarint(tempBuf, uint64(content.options))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return 0, err
@@ -626,6 +652,16 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 	metric := field.Similarity()
 	indexOptimizedFor := field.IndexOptimizedFor()
 
+	// read any vector index options here
+	useGPU := field.GPU()
+
+	// create vector index options to use
+	var options index.VectorIndexOptions
+
+	if useGPU {
+		options |= index.FlagUseGPU
+	}
+
 	// caller is supposed to make sure len(vec) is a multiple of dim.
 	// Not double checking it here to avoid the overhead.
 	numSubVecs := len(vec) / dim
@@ -652,6 +688,7 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 				dim:               uint16(dim),
 				metric:            metric,
 				indexOptimizedFor: indexOptimizedFor,
+				options:           options,
 			}
 		} else {
 			vo.vecFieldMap[fieldID].vecs[subVecHash] = &vecInfo{
@@ -706,6 +743,7 @@ type indexContent struct {
 	dim               uint16
 	metric            string
 	indexOptimizedFor string
+	options           index.VectorIndexOptions
 }
 
 type vecInfo struct {

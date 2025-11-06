@@ -102,6 +102,11 @@ func GetDeviceID() int {
 		}
 	}
 
+	// if all the GPUs are full, return -1
+	if maxGPU.freeMem == 0 {
+		return -1
+	}
+
 	// if only two or fewer GPUs, just pick the one with the most free memory
 	if len(gpus) <= 2 {
 		return maxGPU.id

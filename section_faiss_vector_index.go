@@ -388,7 +388,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	if err != nil {
 		return err
 	}
-	defer faissIndex.Close()
+	defer func() { faissIndex.Close() }()
 
 	if indexClass == IndexTypeIVF {
 		nprobe := calculateNprobe(nlist, indexOptimizedFor)
@@ -528,7 +528,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			return 0, err
 		}
 
-		defer faissIndex.Close()
+		defer func() { faissIndex.Close() }()
 
 		if indexClass == IndexTypeIVF {
 			nprobe := calculateNprobe(nlist, content.indexOptimizedFor)

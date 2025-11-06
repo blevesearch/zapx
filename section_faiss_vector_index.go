@@ -516,7 +516,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		}
 		// read vector index options:
 		// was this field configured
-		// to use GPU for indexing?
+		// to use GPU for training?
 		useGPU := content.options.UseGPU()
 
 		nvecs := len(ids)

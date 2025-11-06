@@ -26,7 +26,7 @@ var (
 	// NumGPUs is the number of available GPU devices
 	NumGPUs int
 	// GPULocks is a slice of mutexes for synchronizing access to GPU resources
-	// Primarily used for synchronizing calls to TransferToGpu and TransferFromGpu
+	// Primarily used for synchronizing calls to TransferToGPU and TransferToCPU
 	GPULocks []*sync.Mutex
 )
 
@@ -67,12 +67,9 @@ type gpuInfo struct {
 	freeMem float64 // in bytes
 }
 
-// returns a device ID between 0 and NumGPUs-1 (inclusive)
-// to be used for distributing work across multiple GPUs
-// returns -1 if no GPUs are available or an error occurs
-// The selection algorithm favors GPUs with more free memory,
-// using a softmax-based probabilistic selection to help
-// spread load across multiple GPUs when more than two GPUs are available
+// GetDeviceID returns a device ID between 0 and NumGPUs-1 (inclusive) to be used for distributing work across multiple GPUs.
+// It returns -1 if no GPUs are available or an error occurs. The selection algorithm favors GPUs with more free memory,
+// using a softmax-based probabilistic selection to help spread load across multiple GPUs when more than two GPUs are available.
 func GetDeviceID() int {
 	// simple cases
 	// no GPUs available, return -1
@@ -137,6 +134,10 @@ func GetDeviceID() int {
 	return maxGPU.id
 }
 
+// TrainIndex trains the given FAISS index using the provided vectors and dimensions.
+// If useGPU is true and a suitable GPU is available, training is performed on the GPU;
+// otherwise, training falls back to the CPU. The function returns the trained index,
+// which may be a new instance if GPU training and transfer back to CPU succeed.
 func TrainIndex(index *faiss.IndexImpl, vecs []float32, dims int, useGPU bool) (*faiss.IndexImpl, error) {
 	// function to train index on CPU used as fallback on GPU failures
 	TrainCPU := func() (*faiss.IndexImpl, error) {

@@ -122,7 +122,7 @@ In case of inverted text index, the dictionary is encoded in [Vellum](https://gi
         |                                                                |
         |    Freq/Norm (chunked)                                         |
         |    [~~~~~~+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~]                      |
-        | +->[ Freq | Norm (float32 under varint) ]                       |
+        | +->[ Freq | Norm (float32 under varint) ]                      |
         | |  [~~~~~~+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~]                      |
         | |                                                              |
         | +------------------------------------------------------------+ |

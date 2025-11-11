@@ -726,91 +726,13 @@ func (s *Segment) ThesaurusAddr(name string) (uint64, error) {
 	return thesLoc, nil
 }
 
-func (s *Segment) getSectionDvOffsets(fieldID int, secID uint16) (uint64, uint64, uint64, error) {
-	// Version is gonna be 16
-	var fieldLocStart uint64 = fieldNotUninverted
-	fieldLocEnd := fieldLocStart
-	sectionMap := s.fieldsSectionsMap[fieldID]
-	fieldAddrStart := sectionMap[secID]
-	n := 0
-
-	if fieldAddrStart > 0 {
-		// fixed encoding as of now, need to uvarint this
-		var read uint64
-		fieldLocStart, n = binary.Uvarint(s.mem[fieldAddrStart+read : fieldAddrStart+read+binary.MaxVarintLen64])
-		if n <= 0 {
-			return 0, 0, 0, fmt.Errorf("loadDvReaders: failed to read the docvalue offset start for field %d", fieldID)
-		}
-		read += uint64(n)
-
-		fieldLocEnd, n = binary.Uvarint(s.mem[fieldAddrStart+read : fieldAddrStart+read+binary.MaxVarintLen64])
-		if n <= 0 {
-			return 0, 0, 0, fmt.Errorf("loadDvReaders: failed to read the docvalue offset end for field %d", fieldID)
-		}
-		read += uint64(n)
-
-		s.incrementBytesRead(read)
-	}
-
-	return fieldLocStart, fieldLocEnd, 0, nil
-}
-
-func (s *Segment) loadDvReader(fieldID int, secID uint16) error {
-	start, end, _, err := s.getSectionDvOffsets(fieldID, secID)
-	if err != nil {
-		return err
-	}
-
-	fieldDvReader, err := s.loadFieldDocValueReader(s.fieldsInv[fieldID], start, end)
-	if err != nil {
-		return err
-	}
-
-	if fieldDvReader != nil {
-		if s.fieldDvReaders[secID] == nil {
-			s.fieldDvReaders[secID] = make(map[uint16]*docValueReader)
-		}
-		// fix the structure of fieldDvReaders
-		// currently it populates the inverted index doc values
-		s.fieldDvReaders[secID][uint16(fieldID)] = fieldDvReader
-		s.fieldDvNames = append(s.fieldDvNames, s.fieldsInv[fieldID])
-	}
-	return nil
-}
-
-// Segment is a file segment, and loading the dv readers from that segment
-// must account for the version while loading since the formats are different
-// in the older and the Version version.
-func (s *Segment) loadDvReaders() error {
-	if s.numDocs == 0 {
-		return nil
-	}
-
-	// for every section of every field, load the doc values and register
-	// the readers.
-	for fieldID := range s.fieldsInv {
-		for secID := range segmentSections {
-			s.loadDvReader(fieldID, secID)
-		}
-	}
-
-	return nil
-}
-
-// since segmentBase is an in-memory segment, it can be called only
-// for v16 file formats as part of InitSegmentBase() while introducing
-// a segment into the system.
 func (sb *SegmentBase) loadDvReaders() error {
-
-	// evaluate -> s.docValueOffset == fieldNotUninverted
 	if sb.numDocs == 0 {
 		return nil
 	}
-
 	for fieldID, sections := range sb.fieldsSectionsMap {
 		for secID, secOffset := range sections {
 			if secOffset > 0 {
-				// fixed encoding as of now, need to uvarint this
 				pos := secOffset
 				var read uint64
 				fieldLocStart, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])

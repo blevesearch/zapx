@@ -20,3 +20,6 @@ require (
 	github.com/spf13/pflag v1.0.5 // indirect
 	golang.org/x/sys v0.13.0 // indirect
 )
+
+// Use bleve_index_api branch with VFS support
+replace github.com/blevesearch/bleve_index_api => github.com/ajroetker/bleve_index_api v0.0.0-20251111010750-7b3692d79f01

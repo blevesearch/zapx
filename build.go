@@ -22,11 +22,10 @@ import (
 	"os"
 
 	index "github.com/blevesearch/bleve_index_api"
-	"github.com/blevesearch/vellum"
 )
 
-const Version uint32 = 16
-const IndexSectionsVersion uint32 = 16
+const Version uint32 = 17
+
 const Type string = "zap"
 
 const fieldNotUninverted = math.MaxUint64
@@ -171,19 +170,18 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		fieldDvReaders:      make([]map[uint16]*docValueReader, len(segmentSections)),
 		docValueOffset:      0, // docValueOffsets identified automatically by the section
 		updatedFields:       make(map[string]*index.UpdateFieldInfo),
-		fieldFSTs:           make(map[uint16]*vellum.FST),
+		invIndexCache:       newInvertedIndexCache(),
 		vecIndexCache:       newVectorIndexCache(),
 		synIndexCache:       newSynonymIndexCache(),
-		// following fields gets populated by loadFieldsNew
+		// following fields gets populated by loadFields
 		fieldsMap: make(map[string]uint16),
-		dictLocs:  make([]uint64, 0),
 		fieldsInv: make([]string, 0),
 	}
 	sb.updateSize()
 
 	// load the data/section starting offsets for each field
 	// by via the sectionsIndexOffset as starting point.
-	err := sb.loadFieldsNew()
+	err := sb.loadFields()
 	if err != nil {
 		return nil, err
 	}

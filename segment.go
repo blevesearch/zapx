@@ -101,16 +101,15 @@ type SegmentBase struct {
 	fieldsSectionsMap   []map[uint16]uint64 // fieldID -> section -> address
 	numDocs             uint64
 	storedIndexOffset   uint64
-	fieldsIndexOffset   uint64
 	sectionsIndexOffset uint64
-	docValueOffset      uint64
 	fieldDvReaders      []map[uint16]*docValueReader // naive chunk cache per field; section->field->reader
 	fieldDvNames        []string                     // field names cached in fieldDvReaders
 	size                uint64
 
+	// index update specific tracking
 	updatedFields map[string]*index.UpdateFieldInfo
 
-	// section-specific cache
+	// section-specific caches
 	invIndexCache *invertedIndexCache
 	vecIndexCache *vectorIndexCache
 	synIndexCache *synonymIndexCache
@@ -203,41 +202,39 @@ func (s *Segment) DecRef() (err error) {
 }
 
 func (s *Segment) loadConfig() error {
+	// read offsets of 32 bit values - crc, ver, chunk
 	crcOffset := len(s.mm) - 4
+	verOffset := crcOffset - 4
+	chunkOffset := verOffset - 4
+
+	// read offsets of 64 bit values - sectionsIndexOffset, storedIndexOffset, numDocsOffset
+	sectionsIndexOffset := chunkOffset - 8
+	storedIndexOffset := sectionsIndexOffset - 8
+	numDocsOffset := storedIndexOffset - 8
+
+	// read 32-bit crc
 	s.crc = binary.BigEndian.Uint32(s.mm[crcOffset : crcOffset+4])
 
-	verOffset := crcOffset - 4
+	// read 32-bit version
 	s.version = binary.BigEndian.Uint32(s.mm[verOffset : verOffset+4])
 	if s.version != Version {
 		return fmt.Errorf("unsupported version %d != %d", s.version, Version)
 	}
 
-	chunkOffset := verOffset - 4
+	// read 32-bit chunk mode
 	s.chunkMode = binary.BigEndian.Uint32(s.mm[chunkOffset : chunkOffset+4])
 
-	docValueOffset := chunkOffset - 8
-	s.docValueOffset = binary.BigEndian.Uint64(s.mm[docValueOffset : docValueOffset+8])
+	// read 64-bit sections index offset
+	s.sectionsIndexOffset = binary.BigEndian.Uint64(s.mm[sectionsIndexOffset : sectionsIndexOffset+8])
 
-	fieldsIndexOffset := docValueOffset - 8
-
-	// determining the right footer size based on version, this becomes important
-	// while loading the fields portion or the sections portion of the index file.
-	s.sectionsIndexOffset = binary.BigEndian.Uint64(s.mm[fieldsIndexOffset : fieldsIndexOffset+8])
-	fieldsIndexOffset = fieldsIndexOffset - 8
-	footerSize := FooterSize
-
-	s.fieldsIndexOffset = binary.BigEndian.Uint64(s.mm[fieldsIndexOffset : fieldsIndexOffset+8])
-
-	storedIndexOffset := fieldsIndexOffset - 8
+	// read 64-bit stored index offset
 	s.storedIndexOffset = binary.BigEndian.Uint64(s.mm[storedIndexOffset : storedIndexOffset+8])
 
-	numDocsOffset := storedIndexOffset - 8
+	// read 64-bit num docs
 	s.numDocs = binary.BigEndian.Uint64(s.mm[numDocsOffset : numDocsOffset+8])
 
-	// 8*4 + 4*3 = 44 bytes being accounted from all the offsets
-	// above being read from the file
-	s.incrementBytesRead(uint64(footerSize))
-	s.SegmentBase.mem = s.mm[:len(s.mm)-footerSize]
+	s.incrementBytesRead(uint64(FooterSize))
+	s.SegmentBase.mem = s.mm[:len(s.mm)-FooterSize]
 	return nil
 }
 
@@ -668,19 +665,14 @@ func (s *Segment) ChunkMode() uint32 {
 	return s.chunkMode
 }
 
-// FieldsIndexOffset returns the fields index offset in the file footer
-func (s *Segment) FieldsIndexOffset() uint64 {
-	return s.fieldsIndexOffset
+// SectionsIndexOffset returns the sections index offset in the file footer
+func (s *Segment) SectionsIndexOffset() uint64 {
+	return s.sectionsIndexOffset
 }
 
 // StoredIndexOffset returns the stored value index offset in the file footer
 func (s *Segment) StoredIndexOffset() uint64 {
 	return s.storedIndexOffset
-}
-
-// DocValueOffset returns the docValue offset in the file footer
-func (s *Segment) DocValueOffset() uint64 {
-	return s.docValueOffset
 }
 
 // NumDocs returns the number of documents in the file footer

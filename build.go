@@ -98,8 +98,7 @@ func persistSegmentBaseToWriter(sb *SegmentBase, w io.Writer) (int, error) {
 		return 0, err
 	}
 
-	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.fieldsIndexOffset, sb.sectionsIndexOffset,
-		sb.docValueOffset, sb.chunkMode, sb.memCRC, br)
+	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.sectionsIndexOffset, sb.chunkMode, sb.memCRC, br)
 	if err != nil {
 		return 0, err
 	}
@@ -165,10 +164,8 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		chunkMode:           chunkMode,
 		numDocs:             numDocs,
 		storedIndexOffset:   storedIndexOffset,
-		fieldsIndexOffset:   sectionsIndexOffset,
 		sectionsIndexOffset: sectionsIndexOffset,
 		fieldDvReaders:      make([]map[uint16]*docValueReader, len(segmentSections)),
-		docValueOffset:      0, // docValueOffsets identified automatically by the section
 		updatedFields:       make(map[string]*index.UpdateFieldInfo),
 		invIndexCache:       newInvertedIndexCache(),
 		vecIndexCache:       newVectorIndexCache(),

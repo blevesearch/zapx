@@ -288,7 +288,9 @@ func (sb *SegmentBase) BytesRead() uint64 {
 func (sb *SegmentBase) ResetBytesRead(val uint64) {}
 
 func (sb *SegmentBase) incrementBytesRead(val uint64) {
+	fmt.Println("oldValue - bytesRead - ", sb.bytesRead)
 	atomic.AddUint64(&sb.bytesRead, val)
+	fmt.Println("newValue - bytesRead - ", sb.bytesRead)
 }
 
 func (sb *SegmentBase) loadFields() error {
@@ -415,7 +417,7 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 		rv.fst = fst
 		rv.fstReader, err = rv.fst.Reader()
 		if err != nil {
-			return nil, fmt.Errorf("dictionary for field %s, vellum reader err: %v", field, err)
+			return nil, fmt.Errorf("dictionary nafor field %s, vellum reader err: %v", field, err)
 		}
 		rv.bytesRead += bytesRead
 	}
@@ -704,7 +706,7 @@ func (s *Segment) NumDocs() uint64 {
 func (s *Segment) DictAddr(field string) (uint64, error) {
 	fieldIDPlus1, ok := s.fieldsMap[field]
 	if !ok {
-		return 0, fmt.Errorf("no such field '%s'", field)
+		return 0, fmt.Errorf("no dictionary for field '%s'", field)
 	}
 	dictStart := s.fieldsSectionsMap[fieldIDPlus1-1][SectionInvertedTextIndex]
 	if dictStart == 0 {

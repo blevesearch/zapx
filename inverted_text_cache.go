@@ -34,7 +34,7 @@ type invertedIndexCache struct {
 	cache map[uint16]*invertedCacheEntry
 }
 
-// Clear clears the synonym cache which would mean that the termID to term map would no longer be available.
+// Clear clears the synonym cache which would mean tha the termID to term map would no longer be available.
 func (sc *invertedIndexCache) Clear() {
 	sc.m.Lock()
 	sc.cache = nil
@@ -85,7 +85,7 @@ func (sc *invertedIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte) (
 	return fst, pos, nil
 }
 
-// insertLOCKED inserts the vellum FST into the cache for the specified fieldID.
+// insertLOCKED inserts the vellum FST and the map of synonymID to term into the cache for the specified fieldID.
 func (sc *invertedIndexCache) insertLOCKED(fieldID uint16, fst *vellum.FST) {
 	_, ok := sc.cache[fieldID]
 	if !ok {

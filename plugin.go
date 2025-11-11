@@ -66,10 +66,21 @@ func (*ZapPlugin) OpenVFS(dir vfs.Directory, name string) (segment.Segment, erro
 	}
 
 	// 4. Memory-map the file
+	// First check file size to ensure it's valid for mmap
+	fileInfo, err := f.Stat()
+	if err != nil {
+		rac.Close()
+		return nil, fmt.Errorf("failed to stat file: %w", err)
+	}
+	if fileInfo.Size() == 0 {
+		rac.Close()
+		return nil, fmt.Errorf("cannot mmap empty file")
+	}
+
 	mm, err := mmap.Map(f, mmap.RDONLY, 0)
 	if err != nil {
 		rac.Close()
-		return nil, fmt.Errorf("mmap failed: %w", err)
+		return nil, fmt.Errorf("mmap failed (file size: %d): %w", fileInfo.Size(), err)
 	}
 
 	// 5. Create segment with mmap

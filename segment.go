@@ -399,7 +399,7 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 		rv.fst = fst
 		rv.fstReader, err = rv.fst.Reader()
 		if err != nil {
-			return nil, fmt.Errorf("dictionary nafor field %s, vellum reader err: %v", field, err)
+			return nil, fmt.Errorf("dictionary for field %s, vellum reader err: %v", field, err)
 		}
 		rv.bytesRead += bytesRead
 	}

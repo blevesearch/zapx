@@ -277,9 +277,7 @@ func (sb *SegmentBase) BytesRead() uint64 {
 func (sb *SegmentBase) ResetBytesRead(val uint64) {}
 
 func (sb *SegmentBase) incrementBytesRead(val uint64) {
-	fmt.Println("oldValue - bytesRead - ", sb.bytesRead)
 	atomic.AddUint64(&sb.bytesRead, val)
-	fmt.Println("newValue - bytesRead - ", sb.bytesRead)
 }
 
 func (sb *SegmentBase) loadFields() error {

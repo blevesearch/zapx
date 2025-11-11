@@ -693,7 +693,7 @@ func (s *Segment) NumDocs() uint64 {
 func (s *Segment) DictAddr(field string) (uint64, error) {
 	fieldIDPlus1, ok := s.fieldsMap[field]
 	if !ok {
-		return 0, fmt.Errorf("no dictionary for field '%s'", field)
+		return 0, fmt.Errorf("no such field '%s'", field)
 	}
 	dictStart := s.fieldsSectionsMap[fieldIDPlus1-1][SectionInvertedTextIndex]
 	if dictStart == 0 {

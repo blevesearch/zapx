@@ -194,7 +194,7 @@ func (s *interim) convert() (uint64, uint64, error) {
 		})
 		result.VisitFields(func(field index.Field) {
 			fName = field.Name()
-			s.getOrDefineField(field.Name())
+			s.getOrDefineField(fName)
 			s.FieldsOptions[fName] = field.Options()
 		})
 	}

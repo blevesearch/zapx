@@ -106,6 +106,8 @@ type interim struct {
 
 	w *CountHashWriter
 
+	config map[string]interface{}
+
 	// FieldsMap adds 1 to field id to avoid zero value issues
 	//  name -> field id + 1
 	FieldsMap map[string]uint16
@@ -219,6 +221,7 @@ func (s *interim) convert() (uint64, uint64, error) {
 		"chunkMode":     s.chunkMode,
 		"fieldsMap":     s.FieldsMap,
 		"fieldsInv":     s.FieldsInv,
+		"config":        s.config,
 		"fieldsOptions": s.FieldsOptions,
 	}
 	if s.opaque == nil {

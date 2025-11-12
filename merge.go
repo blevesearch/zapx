@@ -121,12 +121,33 @@ func filterFields(fieldsInv []string, fieldInfo map[string]*index.UpdateFieldInf
 	return fieldsInv[:idx]
 }
 
-// Remove field options for fields that have been completely deleted
-func filterFieldOptions(fieldOptions map[string]index.FieldIndexingOptions,
-	fieldsMap map[string]uint16) map[string]index.FieldIndexingOptions {
-	for field := range fieldOptions {
-		if _, ok := fieldsMap[field]; !ok {
-			delete(fieldOptions, field)
+// Remove field options for fields using updateFieldInfo to override the
+// options selected during mergeFields, if needed. This is mainly
+// for the case where there is a field option update which has not been
+// propogated yet, because a new segment has not been created yet.
+func finalizeFieldOptions(fieldOptions map[string]index.FieldIndexingOptions,
+	updatedFields map[string]*index.UpdateFieldInfo) map[string]index.FieldIndexingOptions {
+	for field, opts := range fieldOptions {
+		if info, ok := updatedFields[field]; ok {
+			// if field is deleted, remove its options
+			if info.Deleted {
+				delete(fieldOptions, field)
+				continue
+			}
+			// otherwise, update options based on info
+			if info.Index {
+				// ensure indexing is disabled
+				opts &^= index.IndexField
+			}
+			if info.Store {
+				// ensure storing is disabled
+				opts &^= index.StoreField
+			}
+			if info.DocValues {
+				// ensure doc values is disabled
+				opts &^= index.DocValues
+			}
+			fieldOptions[field] = opts
 		}
 	}
 	return fieldOptions
@@ -144,7 +165,7 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	updatedFields := mergeUpdatedFields(segments)
 	fieldsInv = filterFields(fieldsInv, updatedFields)
 	fieldsMap = mapFields(fieldsInv)
-	fieldsOptions = filterFieldOptions(fieldsOptions, fieldsMap)
+	fieldsOptions = finalizeFieldOptions(fieldsOptions, updatedFields)
 	// fieldsSame cannot be true if fields were deleted
 	if len(updatedFields) > 0 {
 		fieldsSame = false
@@ -678,11 +699,16 @@ func mergeUpdatedFields(segments []*SegmentBase) map[string]*index.UpdateFieldIn
 			if _, ok := fieldInfo[field]; !ok {
 				fieldInfo[field] = &index.UpdateFieldInfo{
 					// mark whether field is deleted in any segment
-					Deleted: info.Deleted,
+					Deleted:   info.Deleted,
+					Index:     info.Index,
+					Store:     info.Store,
+					DocValues: info.DocValues,
 				}
 			} else {
-				// in case of conflict (mark field deleted if latest segment marks it deleted)
-				fieldInfo[field].Deleted = info.Deleted
+				fieldInfo[field].Deleted = fieldInfo[field].Deleted || info.Deleted
+				fieldInfo[field].Index = fieldInfo[field].Index || info.Index
+				fieldInfo[field].Store = fieldInfo[field].Store || info.Store
+				fieldInfo[field].DocValues = fieldInfo[field].DocValues || info.DocValues
 			}
 		}
 

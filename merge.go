@@ -121,6 +121,17 @@ func filterFields(fieldsInv []string, fieldInfo map[string]*index.UpdateFieldInf
 	return fieldsInv[:idx]
 }
 
+// Remove field options for fields that have been completely deleted
+func filterFieldOptions(fieldOptions map[string]index.FieldIndexingOptions,
+	fieldsMap map[string]uint16) map[string]index.FieldIndexingOptions {
+	for field := range fieldOptions {
+		if _, ok := fieldsMap[field]; !ok {
+			delete(fieldOptions, field)
+		}
+	}
+	return fieldOptions
+}
+
 func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	chunkMode uint32, cr *CountHashWriter, closeCh chan struct{}) (
 	newDocNums [][]uint64, numDocs, storedIndexOffset uint64,
@@ -128,10 +139,12 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	err error) {
 
 	var fieldsSame bool
-	fieldsSame, fieldsInv = mergeFields(segments)
+	var fieldsOptions map[string]index.FieldIndexingOptions
+	fieldsSame, fieldsInv, fieldsOptions = mergeFields(segments)
 	updatedFields := mergeUpdatedFields(segments)
 	fieldsInv = filterFields(fieldsInv, updatedFields)
 	fieldsMap = mapFields(fieldsInv)
+	fieldsOptions = filterFieldOptions(fieldsOptions, fieldsMap)
 
 	numDocs = computeNewDocCount(segments, drops)
 
@@ -149,6 +162,7 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		"fieldsMap":     fieldsMap,
 		"numDocs":       numDocs,
 		"updatedFields": updatedFields,
+		"fieldsOptions": fieldsOptions,
 	}
 
 	if numDocs > 0 {
@@ -171,7 +185,7 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 
 	// we can persist the fields section index now, this will point
 	// to the various indexes (each in different section) available for a field.
-	sectionsIndexOffset, err = persistFieldsSection(fieldsInv, cr, mergeOpaque)
+	sectionsIndexOffset, err = persistFieldsSection(fieldsInv, fieldsOptions, cr, mergeOpaque)
 	if err != nil {
 		return nil, 0, 0, nil, nil, 0, err
 	}
@@ -597,7 +611,7 @@ func (sb *SegmentBase) copyStoredDocs(newDocNum uint64, newDocNumOffsets []uint6
 // input segments, and computes whether the fields are the same across
 // segments (which depends on fields to be sorted in the same way
 // across segments)
-func mergeFields(segments []*SegmentBase) (bool, []string) {
+func mergeFields(segments []*SegmentBase) (bool, []string, map[string]index.FieldIndexingOptions) {
 	fieldsSame := true
 
 	var segment0Fields []string
@@ -606,10 +620,13 @@ func mergeFields(segments []*SegmentBase) (bool, []string) {
 	}
 
 	fieldsExist := map[string]struct{}{}
+	fieldOptions := map[string]index.FieldIndexingOptions{}
 	for _, segment := range segments {
 		fields := segment.Fields()
 		for fieldi, field := range fields {
 			fieldsExist[field] = struct{}{}
+			// record field options
+			fieldOptions[field] = segment.fieldsOptions[field]
 			if len(segment0Fields) != len(fields) || segment0Fields[fieldi] != field {
 				fieldsSame = false
 			}
@@ -627,7 +644,7 @@ func mergeFields(segments []*SegmentBase) (bool, []string) {
 
 	sort.Strings(rv[1:]) // leave _id as first
 
-	return fieldsSame, rv
+	return fieldsSame, rv, fieldOptions
 }
 
 // Combine updateFieldInfo from all segments

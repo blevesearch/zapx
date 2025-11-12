@@ -102,6 +102,9 @@ type interim struct {
 	//  name -> field id + 1
 	FieldsMap map[string]uint16
 
+	// FieldsOptions holds the indexing options for each field
+	FieldsOptions map[string]index.FieldIndexingOptions
+
 	// FieldsInv is the inverse of FieldsMap
 	//  field id -> name
 	FieldsInv []string
@@ -126,6 +129,9 @@ func (s *interim) reset() (err error) {
 	s.w = nil
 	for k := range s.FieldsMap {
 		delete(s.FieldsMap, k)
+	}
+	for k := range s.FieldsOptions {
+		delete(s.FieldsOptions, k)
 	}
 	s.FieldsInv = s.FieldsInv[:0]
 	s.metaBuf.Reset()
@@ -173,15 +179,23 @@ func (s *interim) convert() (uint64, uint64, error) {
 	if s.FieldsMap == nil {
 		s.FieldsMap = map[string]uint16{}
 	}
+	if s.FieldsOptions == nil {
+		s.FieldsOptions = map[string]index.FieldIndexingOptions{}
+	}
 
 	s.getOrDefineField("_id") // _id field is fieldID 0
 
+	var fName string
 	for _, result := range s.results {
 		result.VisitComposite(func(field index.CompositeField) {
-			s.getOrDefineField(field.Name())
+			fName = field.Name()
+			s.getOrDefineField(fName)
+			s.FieldsOptions[fName] = field.Options()
 		})
 		result.VisitFields(func(field index.Field) {
+			fName = field.Name()
 			s.getOrDefineField(field.Name())
+			s.FieldsOptions[fName] = field.Options()
 		})
 	}
 
@@ -192,10 +206,11 @@ func (s *interim) convert() (uint64, uint64, error) {
 	}
 
 	args := map[string]interface{}{
-		"results":   s.results,
-		"chunkMode": s.chunkMode,
-		"fieldsMap": s.FieldsMap,
-		"fieldsInv": s.FieldsInv,
+		"results":       s.results,
+		"chunkMode":     s.chunkMode,
+		"fieldsMap":     s.FieldsMap,
+		"fieldsInv":     s.FieldsInv,
+		"fieldsOptions": s.FieldsOptions,
 	}
 	if s.opaque == nil {
 		s.opaque = map[int]resetable{}
@@ -236,7 +251,7 @@ func (s *interim) convert() (uint64, uint64, error) {
 
 	// we can persist a new fields section here
 	// this new fields section will point to the various indexes available
-	sectionsIndexOffset, err := persistFieldsSection(s.FieldsInv, s.w, s.opaque)
+	sectionsIndexOffset, err := persistFieldsSection(s.FieldsInv, s.FieldsOptions, s.w, s.opaque)
 	if err != nil {
 		return 0, 0, err
 	}

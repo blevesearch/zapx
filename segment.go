@@ -845,7 +845,7 @@ func (sb *SegmentBase) AddNestedDocuments(drops *roaring.Bitmap) *roaring.Bitmap
 	// and for each pair, check if the parent is in the drops bitmap.
 	// If it is, and the child is also not already in the drops bitmap,
 	// add the child to the drops. Repeat this process until no
-	// dew additions are made in an iteration.
+	// new additions are made in an iteration.
 	changed := true
 	for changed {
 		changed = false

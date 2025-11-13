@@ -171,8 +171,9 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		vecIndexCache:       newVectorIndexCache(),
 		synIndexCache:       newSynonymIndexCache(),
 		// following fields gets populated by loadFields
-		fieldsMap: make(map[string]uint16),
-		fieldsInv: make([]string, 0),
+		fieldsMap:     make(map[string]uint16),
+		fieldsOptions: make(map[string]index.FieldIndexingOptions),
+		fieldsInv:     make([]string, 0),
 	}
 	sb.updateSize()
 

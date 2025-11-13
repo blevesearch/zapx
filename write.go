@@ -19,6 +19,7 @@ import (
 	"io"
 
 	"github.com/RoaringBitmap/roaring/v2"
+	index "github.com/blevesearch/bleve_index_api"
 )
 
 // writes out the length of the roaring bitmap in bytes as varint
@@ -50,7 +51,7 @@ func writeRoaringWithLen(r *roaring.Bitmap, w io.Writer,
 	return tw, nil
 }
 
-func persistFieldsSection(fieldsInv []string, w *CountHashWriter, opaque map[int]resetable) (uint64, error) {
+func persistFieldsSection(fieldsInv []string, fieldsOptions map[string]index.FieldIndexingOptions, w *CountHashWriter, opaque map[int]resetable) (uint64, error) {
 	var rv uint64
 	fieldsOffsets := make([]uint64, 0, len(fieldsInv))
 
@@ -66,6 +67,13 @@ func persistFieldsSection(fieldsInv []string, w *CountHashWriter, opaque map[int
 
 		// write out the field name
 		_, err = w.Write([]byte(fieldName))
+		if err != nil {
+			return 0, err
+		}
+
+		// write out the field options
+		fieldOpts := fieldsOptions[fieldName]
+		_, err = writeUvarints(w, uint64(fieldOpts))
 		if err != nil {
 			return 0, err
 		}

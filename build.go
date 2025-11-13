@@ -100,7 +100,7 @@ func persistSegmentBaseToWriter(sb *SegmentBase, w io.Writer) (int, error) {
 	}
 
 	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.fieldsIndexOffset, sb.sectionsIndexOffset,
-		sb.docValueOffset, sb.chunkMode, sb.memCRC, br)
+		sb.docValueOffset, sb.chunkMode, sb.memCRC, br, sb.writerId, sb.writerContext)
 	if err != nil {
 		return 0, err
 	}
@@ -159,7 +159,7 @@ func persistStoredFieldValues(fieldID int,
 }
 
 func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64,
-	storedIndexOffset uint64, sectionsIndexOffset uint64) (*SegmentBase, error) {
+	storedIndexOffset uint64, sectionsIndexOffset uint64, writerId string, writerContext []byte) (*SegmentBase, error) {
 	sb := &SegmentBase{
 		mem:                 mem,
 		memCRC:              memCRC,
@@ -175,15 +175,23 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		vecIndexCache:       newVectorIndexCache(),
 		synIndexCache:       newSynonymIndexCache(),
 		// following fields gets populated by loadFieldsNew
-		fieldsMap: make(map[string]uint16),
-		dictLocs:  make([]uint64, 0),
-		fieldsInv: make([]string, 0),
+		fieldsMap:     make(map[string]uint16),
+		dictLocs:      make([]uint64, 0),
+		fieldsInv:     make([]string, 0),
+		writerId:      writerId,
+		writerContext: writerContext,
 	}
 	sb.updateSize()
 
+	fileReader, err := NewFileReader(sb.writerId, sb.writerContext)
+	if err != nil {
+		return nil, err
+	}
+	sb.fileReader = fileReader
+
 	// load the data/section starting offsets for each field
 	// by via the sectionsIndexOffset as starting point.
-	err := sb.loadFieldsNew()
+	err = sb.loadFieldsNew()
 	if err != nil {
 		return nil, err
 	}

@@ -197,10 +197,14 @@ func (di *docValueReader) loadDvChunk(chunkNumber uint64, s *SegmentBase) error 
 		offset += uint64(read)
 	}
 
+	var err error
 	compressedDataLoc := chunkMetaLoc + offset
 	dataLength := curChunkEnd - compressedDataLoc
 	di.incrementBytesRead(uint64(dataLength + offset))
-	di.curChunkData = s.mem[compressedDataLoc : compressedDataLoc+dataLength]
+	di.curChunkData, err = s.fileReader.process(s.mem[compressedDataLoc : compressedDataLoc+dataLength])
+	if err != nil {
+		return err
+	}
 	di.curChunkNum = chunkNumber
 	di.uncompressed = di.uncompressed[:0]
 	return nil

@@ -16,13 +16,22 @@ package zap
 
 import "encoding/binary"
 
-func (sb *SegmentBase) getDocStoredMetaAndCompressed(docNum uint64) ([]byte, []byte) {
+func (sb *SegmentBase) getDocStoredMetaAndCompressed(docNum uint64) ([]byte, []byte, error) {
 	_, storedOffset, n, metaLen, dataLen := sb.getDocStoredOffsets(docNum)
 
 	meta := sb.mem[storedOffset+n : storedOffset+n+metaLen]
 	data := sb.mem[storedOffset+n+metaLen : storedOffset+n+metaLen+dataLen]
 
-	return meta, data
+	meta, err := sb.fileReader.process(meta)
+	if err != nil {
+		return nil, nil, err
+	}
+	data, err = sb.fileReader.process(data)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return meta, data, nil
 }
 
 func (sb *SegmentBase) getDocStoredOffsets(docNum uint64) (

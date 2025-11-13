@@ -2,6 +2,8 @@ module github.com/blevesearch/zapx/v16
 
 go 1.23
 
+toolchain go1.23.9
+
 require (
 	github.com/RoaringBitmap/roaring/v2 v2.4.5
 	github.com/bits-and-blooms/bitset v1.22.0

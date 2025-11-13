@@ -56,7 +56,7 @@ func (vc *vectorIndexCache) Clear() {
 // present. It also returns the batch executor for the field if it's present in the
 // cache.
 func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte,
-	loadDocVecIDMap bool, except *roaring.Bitmap) (
+	loadDocVecIDMap bool, except *roaring.Bitmap, r *fileReader) (
 	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32, docVecIDMap map[uint32][]int64,
 	vecIDsToExclude []int64, err error) {
 	vc.m.RLock()
@@ -83,7 +83,7 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte,
 	// acquiring a lock since this is modifying the cache.
 	vc.m.Lock()
 	defer vc.m.Unlock()
-	return vc.createAndCacheLOCKED(fieldID, mem, loadDocVecIDMap, except)
+	return vc.createAndCacheLOCKED(fieldID, mem, loadDocVecIDMap, except, r)
 }
 
 func (vc *vectorIndexCache) addDocVecIDMapToCacheLOCKED(ce *cacheEntry) map[uint32][]int64 {
@@ -104,7 +104,7 @@ func (vc *vectorIndexCache) addDocVecIDMapToCacheLOCKED(ce *cacheEntry) map[uint
 
 // Rebuilding the cache on a miss.
 func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
-	loadDocVecIDMap bool, except *roaring.Bitmap) (
+	loadDocVecIDMap bool, except *roaring.Bitmap, r *fileReader) (
 	index *faiss.IndexImpl, vecDocIDMap map[int64]uint32,
 	docVecIDMap map[uint32][]int64, vecIDsToExclude []int64, err error) {
 
@@ -127,16 +127,27 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	numVecs, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
+	mapLen, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
+	buf, err := r.process(mem[pos : pos+int(mapLen)])
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	pos += int(mapLen)
+	bufPos := 0
+	bufLen := len(buf)
+
 	vecDocIDMap = make(map[int64]uint32, numVecs)
 	if loadDocVecIDMap {
 		docVecIDMap = make(map[uint32][]int64, numVecs)
 	}
 	isExceptNotEmpty := except != nil && !except.IsEmpty()
 	for i := 0; i < int(numVecs); i++ {
-		vecID, n := binary.Varint(mem[pos : pos+binary.MaxVarintLen64])
-		pos += n
-		docID, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
-		pos += n
+		vecID, n := binary.Varint(buf[bufPos:min(bufPos+binary.MaxVarintLen64, bufLen)])
+		bufPos += n
+		docID, n := binary.Uvarint(buf[bufPos:min(bufPos+binary.MaxVarintLen64, bufLen)])
+		bufPos += n
 
 		docIDUint32 := uint32(docID)
 		if isExceptNotEmpty && except.Contains(docIDUint32) {
@@ -152,7 +163,12 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	indexSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
-	index, err = faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faissIOFlags)
+	buf, err = r.process(mem[pos : pos+int(indexSize)])
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	index, err = faiss.ReadIndexFromBuffer(buf, faissIOFlags)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}

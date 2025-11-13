@@ -67,16 +67,18 @@ Footer section describes the configuration of particular ZAP file. The format of
 ## Stored Fields
 
 Stored Fields Index is `D#` consecutive 64-bit unsigned integers - offsets, where relevant Stored Fields Data records are located.
+We also store the EdgeList for nested documents, if present in the segment, to preserve hierarchical relationships.
+If there are NE edges, it means there are NE nested or sub-documents, with each edge representing a child -> parent relationship.
 
-    0                                [SF]                   [SF + D# * 8]
-    | Stored Fields                  | Stored Fields Index              |
-    |================================|==================================|
-    |                                |                                  |
-    |       |--------------------|   ||--------|--------|. . .|--------||
-    |   |-> | Stored Fields Data |   ||      0 |      1 |     | D# - 1 ||
-    |   |   |--------------------|   ||--------|----|---|. . .|--------||
-    |   |                            |              |                   |
-    |===|============================|==============|===================|
+    0                                [SF]                   [SF + D# * 8]                       
+    | Stored Fields                  | Stored Fields Index              | Edge List Information                                                  |
+    |================================|==================================|========================================================================|
+    |                                |                                  |                                                                        | 
+    |       |--------------------|   ||--------|--------|. . .|--------|||--------|--------|--------|--------|--------|. . .|---------|---------||
+    |   |-> | Stored Fields Data |   ||      0 |      1 |     | D# - 1 |||   NE   |   C1   |   P1   |   C2   |   P2   |     |   CNE   |   PNE   ||
+    |   |   |--------------------|   ||--------|----|---|. . .|--------|||--------|--------|--------|--------|--------|. . .|---------|---------||
+    |   |                            |              |                   |                                                                        |
+    |===|============================|==============|===================|========================================================================|
         |                                           |
         |-------------------------------------------|
 

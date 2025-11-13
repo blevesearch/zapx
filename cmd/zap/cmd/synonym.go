@@ -29,7 +29,7 @@ var thesaurusCmd = &cobra.Command{
 	Short: "thesaurus prints the thesaurus with the specified name",
 	Long:  `The thesaurus command lets you print the thesaurus with the specified name.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		pos := segment.FieldsIndexOffset()
+		pos := segment.SectionsIndexOffset()
 		if pos == 0 {
 			// this is the case only for older file formats
 			return fmt.Errorf("file format not supported")

@@ -81,9 +81,7 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 		return nil, 0, err
 	}
 
-	// passing the sectionsIndexOffset as fieldsIndexOffset and the docValueOffset as 0 for the footer
-	err = persistFooter(numDocs, storedIndexOffset, sectionsIndexOffset, sectionsIndexOffset,
-		0, chunkMode, cr.Sum32(), cr)
+	err = persistFooter(numDocs, storedIndexOffset, sectionsIndexOffset, chunkMode, cr.Sum32(), cr)
 	if err != nil {
 		cleanup()
 		return nil, 0, err

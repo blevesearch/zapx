@@ -36,21 +36,21 @@
 
 Footer section describes the configuration of particular ZAP file. The format of footer is version-dependent, so it is necessary to check `V` field before the parsing.
 
-            +==================================================+
-            | Stored Fields                                    |
-            |==================================================|
-    +-----> | Stored Fields Index                              |
-    |       |==================================================|
-    |       | Inverted Text Index Section                      |
-    |       |==================================================|
-    |       | Vector Index Section                             |
-    |       |==================================================|
-    |       | Sections Info                                    |
-    |       |==================================================|
-    |   +-> | Sections Index                                   |
-    |   |   |========+========+====+=====+======+====+====+====|
-    |   |   |     D# |     SF |  F |  S  |  FDV | CF |  V | CC | (Footer)
-    |   |   +========+====+===+====+==+==+======+====+====+====+
+            +===================================================+
+            | Stored Fields                                     |
+            |===================================================|
+    +-----> | Stored Fields Index                               |
+    |       |===================================================|
+    |       | Inverted Text Index Section                       |
+    |       |===================================================|
+    |       | Vector Index Section                              |
+    |       |===================================================|
+    |       | Sections Info                                     |
+    |       |===================================================|
+    |   +-> | Sections Index                                    |
+    |   |   |========+========+=======+========+=======+========|
+    |   |   |   D#   |   SF   |   S   |   CF   |   V   |   CC   | (Footer)
+    |   |   +========+========+=======+========+=======+========+
     |   |                 |           |
     +---------------------+           |
         |-----------------------------+
@@ -58,9 +58,7 @@ Footer section describes the configuration of particular ZAP file. The format of
 
      D#. Number of Docs.
      SF. Stored Fields Index Offset.
-      F. Field Index Offset.
       S. Sections Index Offset
-    FDV. Field DocValue Offset.
      CF. Chunk Factor.
       V. Version.
      CC. CRC32.

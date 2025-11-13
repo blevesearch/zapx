@@ -46,7 +46,7 @@ func (sc *synonymIndexCache) Clear() {
 // - A Vellum FST (Finite State Transducer) representing the thesaurus.
 // - A map associating synonym IDs to their corresponding terms.
 // This function returns the loaded or newly created tuple (FST and map).
-func (sc *synonymIndexCache) loadOrCreate(fieldID uint16, mem []byte) (*vellum.FST, map[uint32][]byte, error) {
+func (sc *synonymIndexCache) loadOrCreate(fieldID uint16, mem []byte) (*vellum.FST, map[uint32][]byte, uint64, error) {
 	sc.m.RLock()
 	entry, ok := sc.cache[fieldID]
 	if ok {
@@ -68,23 +68,23 @@ func (sc *synonymIndexCache) loadOrCreate(fieldID uint16, mem []byte) (*vellum.F
 }
 
 // createAndCacheLOCKED creates the synonym index cache for the specified fieldID and caches it.
-func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte) (*vellum.FST, map[uint32][]byte, error) {
+func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte) (*vellum.FST, map[uint32][]byte, uint64, error) {
 	var pos uint64
 	vellumLen, read := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	if vellumLen == 0 || read <= 0 {
-		return nil, nil, fmt.Errorf("vellum length is 0")
+		return nil, nil, 0, fmt.Errorf("vellum length is 0")
 	}
 	pos += uint64(read)
 	fstBytes := mem[pos : pos+vellumLen]
 	fst, err := vellum.Load(fstBytes)
 	if err != nil {
-		return nil, nil, fmt.Errorf("vellum err: %v", err)
+		return nil, nil, 0, fmt.Errorf("vellum err: %v", err)
 	}
 	pos += vellumLen
 	numSyns, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 	if numSyns == 0 {
-		return nil, nil, fmt.Errorf("no synonyms found")
+		return nil, nil, 0, fmt.Errorf("no synonyms found")
 	}
 	synTermMap := make(map[uint32][]byte, numSyns)
 	for i := 0; i < int(numSyns); i++ {
@@ -93,14 +93,14 @@ func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte) (*
 		termLen, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
 		if termLen == 0 {
-			return nil, nil, fmt.Errorf("term length is 0")
+			return nil, nil, 0, fmt.Errorf("term length is 0")
 		}
 		term := mem[pos : pos+uint64(termLen)]
 		pos += uint64(termLen)
 		synTermMap[uint32(synID)] = term
 	}
 	sc.insertLOCKED(fieldID, fst, synTermMap)
-	return fst, synTermMap, nil
+	return fst, synTermMap, pos, nil
 }
 
 // insertLOCKED inserts the vellum FST and the map of synonymID to term into the cache for the specified fieldID.
@@ -121,6 +121,6 @@ type synonymCacheEntry struct {
 	synTermMap map[uint32][]byte
 }
 
-func (ce *synonymCacheEntry) load() (*vellum.FST, map[uint32][]byte, error) {
-	return ce.fst, ce.synTermMap, nil
+func (ce *synonymCacheEntry) load() (*vellum.FST, map[uint32][]byte, uint64, error) {
+	return ce.fst, ce.synTermMap, 0, nil
 }

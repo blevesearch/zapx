@@ -747,29 +747,48 @@ func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum
 	}
 }
 
+func (i *invertedIndexOpaque) initDictsAndKeysFromFields() {
+	numFields := len(i.FieldsInv)
+
+	// Resize or allocate Dicts
+	if cap(i.Dicts) >= numFields {
+		i.Dicts = i.Dicts[:numFields]
+	} else {
+		i.Dicts = make([]map[string]uint64, numFields)
+	}
+
+	// Resize or allocate DictKeys
+	if cap(i.DictKeys) >= numFields {
+		i.DictKeys = i.DictKeys[:numFields]
+	} else {
+		i.DictKeys = make([][]string, numFields)
+	}
+
+	for idx := 0; idx < numFields; idx++ {
+		// --- Dicts ---
+		if i.Dicts[idx] == nil {
+			i.Dicts[idx] = make(map[string]uint64)
+		} else {
+			clear(i.Dicts[idx])
+		}
+
+		// --- DictKeys ---
+		if i.DictKeys[idx] != nil {
+			i.DictKeys[idx] = i.DictKeys[idx][:0]
+		} else {
+			i.DictKeys[idx] = nil
+		}
+	}
+}
+
 func (i *invertedIndexOpaque) realloc() {
 	var pidNext int
 
 	var totTFs int
 	var totLocs int
-	i.FieldsMap = map[string]uint16{}
 
-	i.getOrDefineField("_id") // _id field is fieldID 0
-
-	for _, result := range i.results {
-		result.VisitComposite(func(field index.CompositeField) {
-			i.getOrDefineField(field.Name())
-		})
-		result.VisitFields(func(field index.Field) {
-			i.getOrDefineField(field.Name())
-		})
-	}
-
-	sort.Strings(i.FieldsInv[1:]) // keep _id as first field
-
-	for fieldID, fieldName := range i.FieldsInv {
-		i.FieldsMap[fieldName] = uint16(fieldID + 1)
-	}
+	// initialize dicts and dict keys from fieldsMap
+	i.initDictsAndKeysFromFields()
 
 	visitField := func(field index.Field, docNum int) {
 		fieldID := uint16(i.getOrDefineField(field.Name()))
@@ -935,7 +954,7 @@ func (i *invertedIndexOpaque) getOrDefineField(fieldName string) int {
 func (i *invertedTextIndexSection) InitOpaque(args map[string]interface{}) resetable {
 	rv := &invertedIndexOpaque{
 		fieldAddrs:    map[int]int{},
-		updatedFields: make(map[string]*index.UpdateFieldInfo),
+		updatedFields: map[string]*index.UpdateFieldInfo{},
 	}
 	for k, v := range args {
 		rv.Set(k, v)
@@ -1059,6 +1078,9 @@ func (io *invertedIndexOpaque) Reset() (err error) {
 	io.fieldsSame = false
 	io.numDocs = 0
 
+	clear(io.fieldAddrs)
+	clear(io.updatedFields)
+
 	return err
 }
 func (i *invertedIndexOpaque) Set(key string, val interface{}) {
@@ -1071,6 +1093,8 @@ func (i *invertedIndexOpaque) Set(key string, val interface{}) {
 		i.fieldsSame = val.(bool)
 	case "fieldsMap":
 		i.FieldsMap = val.(map[string]uint16)
+	case "fieldsInv":
+		i.FieldsInv = val.([]string)
 	case "numDocs":
 		i.numDocs = val.(uint64)
 	case "updatedFields":

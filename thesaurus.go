@@ -33,6 +33,8 @@ type Thesaurus struct {
 	fst          *vellum.FST
 
 	fstReader *vellum.Reader
+
+	bytesRead uint64
 }
 
 // represents an immutable, empty Thesaurus

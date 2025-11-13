@@ -174,7 +174,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		if err != nil {
 			return err
 		}
-		err = vo.mergeAndWriteVectorIndexes(vecSegs, indexes, w, closeCh)
+		err = vo.mergeAndWriteVectorIndexes(vecSegs, indexes, fieldName, w, closeCh)
 		if err != nil {
 			return err
 		}
@@ -273,13 +273,12 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 // todo: naive implementation. need to keep in mind the perf implications and improve on this.
 // perhaps, parallelized merging can help speed things up over here.
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
-	vecIndexes []*vecIndexInfo, w *CountHashWriter, closeCh chan struct{}) error {
+	vecIndexes []*vecIndexInfo, fieldName string, w *CountHashWriter, closeCh chan struct{}) error {
 
 	// safe to assume that all the indexes are of the same config values, given
 	// that they are extracted from the field mapping info.
 	var dims, metric int
 	var indexOptimizedFor string
-	var indexOptions index.FieldIndexingOptions
 
 	var validMerge bool
 	var finalVecIDCap, indexDataCap, reconsCap int
@@ -324,6 +323,9 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	if !validMerge {
 		return nil
 	}
+
+	// assign gpu value from the field options
+	gpu := v.fieldsOptions[fieldName].UseGPU()
 
 	finalVecIDs := make([]int64, 0, finalVecIDCap)
 	// merging of indexes with reconstruction method.
@@ -399,7 +401,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		// May fall back to CPU training if GPU training fails due
 		// to any reason such as insufficient memory, or unavailability
 		// of GPUs, etc.
-		faissIndex, err = TrainIndex(faissIndex, indexData, dims, indexOptions.UseGPU())
+		faissIndex, err = TrainIndex(faissIndex, indexData, dims, gpu)
 		if err != nil {
 			return err
 		}
@@ -514,7 +516,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		// read vector index options:
 		// was this field configured
 		// to use GPU for training?
-		useGPU := vo.fieldsOptions
+		gpu := vo.fieldsOptions[content.name].UseGPU()
 
 		nvecs := len(ids)
 		nlist := determineCentroids(nvecs)
@@ -538,7 +540,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			// May fall back to CPU training if GPU training fails due
 			// to any reason such as insufficient memory, or unavailability
 			// of GPUs, etc.
-			faissIndex, err = TrainIndex(faissIndex, vecs, dims)
+			faissIndex, err = TrainIndex(faissIndex, vecs, dims, gpu)
 			if err != nil {
 				return 0, err
 			}
@@ -642,6 +644,7 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 	}
 
 	//process field
+	name := field.Name()
 	vec := field.Vector()
 	dim := field.Dims()
 	metric := field.Similarity()
@@ -673,6 +676,7 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 				dim:               uint16(dim),
 				metric:            metric,
 				indexOptimizedFor: indexOptimizedFor,
+				name:              name,
 			}
 		} else {
 			vo.vecFieldMap[fieldID].vecs[subVecHash] = &vecInfo{
@@ -723,11 +727,11 @@ func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) reseta
 }
 
 type indexContent struct {
+	name              string
 	vecs              map[int64]*vecInfo
 	dim               uint16
 	metric            string
 	indexOptimizedFor string
-	gpu               bool
 }
 
 type vecInfo struct {

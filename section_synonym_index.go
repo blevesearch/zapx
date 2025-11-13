@@ -328,10 +328,7 @@ func (so *synonymIndexOpaque) writeThesauri(w *fileWriter) (thesOffsets []uint64
 
 		thesOffsets[thesaurusID] = uint64(w.Count())
 
-		vellumData, err := w.process(so.builderBuf.Bytes())
-		if err != nil {
-			return nil, err
-		}
+		vellumData := w.process(so.builderBuf.Bytes())
 
 		// write out the length of the vellum data
 		n := binary.PutUvarint(buf, uint64(len(vellumData)))
@@ -505,10 +502,7 @@ func writeSynonyms(postings *roaring64.Bitmap, w *fileWriter, bufMaxVarintLen64 
 	if err != nil {
 		return 0, err
 	}
-	buf, err = w.process(buf)
-	if err != nil {
-		return 0, err
-	}
+	buf = w.process(buf)
 
 	// write out the length
 	n := binary.PutUvarint(bufMaxVarintLen64, uint64(len(buf)))
@@ -552,10 +546,7 @@ func writeSynTermMap(synTermMap map[uint32]string, w *fileWriter, bufMaxVarintLe
 		bufPos += len(term)
 	}
 
-	buf, err = w.process(buf[:bufPos])
-	if err != nil {
-		return err
-	}
+	buf = w.process(buf[:bufPos])
 
 	// write out the length of the map
 	n = binary.PutUvarint(bufMaxVarintLen64, uint64(len(buf)))
@@ -742,10 +733,7 @@ func mergeAndPersistSynonymSection(segments []*SegmentBase, dropsIn []*roaring.B
 		if err != nil {
 			return nil, nil, err
 		}
-		vellumData, err := w.process(vellumBuf.Bytes())
-		if err != nil {
-			return nil, nil, err
-		}
+		vellumData := w.process(vellumBuf.Bytes())
 
 		thesOffset := uint64(w.Count())
 

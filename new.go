@@ -65,7 +65,12 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 	var err error
 	s.results = results
 	s.chunkMode = chunkMode
-	s.w, err = NewFileWriter(NewCountHashWriter(&br))
+	context, err := newContext()
+	if err != nil {
+		return nil, uint64(0), err
+	}
+
+	s.w, err = NewFileWriter(NewCountHashWriter(&br), context)
 	if err != nil {
 		return nil, uint64(0), err
 	}
@@ -76,7 +81,7 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 	}
 
 	sb, err := InitSegmentBase(br.Bytes(), s.w.Sum32(), chunkMode,
-		uint64(len(results)), storedIndexOffset, sectionsIndexOffset, s.w.id)
+		uint64(len(results)), storedIndexOffset, sectionsIndexOffset, s.w.id, s.w.context)
 
 	// get the bytes written before the interim's reset() call
 	// write it to the newly formed segment base.
@@ -380,15 +385,8 @@ func (s *interim) writeStoredFields() (
 		s.incrementBytesWritten(uint64(len(compressed)))
 		docStoredOffsets[docNum] = uint64(s.w.Count())
 
-		bufMeta, err := s.w.process(metaBytes)
-		if err != nil {
-			return 0, err
-		}
-
-		bufCompressed, err := s.w.process(append(idFieldVal, compressed...))
-		if err != nil {
-			return 0, err
-		}
+		bufMeta := s.w.process(metaBytes)
+		bufCompressed := s.w.process(append(idFieldVal, compressed...))
 
 		_, err = writeUvarints(s.w,
 			uint64(len(bufMeta)),

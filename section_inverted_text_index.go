@@ -299,10 +299,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		if err != nil {
 			return nil, 0, err
 		}
-		vellumData, err := w.process(vellumBuf.Bytes())
-		if err != nil {
-			return nil, 0, err
-		}
+		vellumData := w.process(vellumBuf.Bytes())
 
 		// write out the length of the vellum data
 		n := binary.PutUvarint(bufMaxVarintLen64, uint64(len(vellumData)))
@@ -598,10 +595,7 @@ func (io *invertedIndexOpaque) writeDicts(w *fileWriter) (dictOffsets []uint64, 
 		// record where this dictionary starts
 		dictOffsets[fieldID] = uint64(w.Count())
 
-		vellumData, err := w.process(io.builderBuf.Bytes())
-		if err != nil {
-			return nil, err
-		}
+		vellumData := w.process(io.builderBuf.Bytes())
 
 		// write out the length of the vellum data
 		n := binary.PutUvarint(buf, uint64(len(vellumData)))

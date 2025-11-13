@@ -14,6 +14,11 @@
 
 package zap
 
+import (
+	"crypto/rand"
+	"fmt"
+)
+
 // This file provides a mechanism for users of zap to provide callbacks
 // that can process data before it is written to disk, and after it is read
 // from disk.  This can be used for things like encryption, compression, etc.
@@ -40,44 +45,32 @@ package zap
 // within initFileCallbacks.
 
 // Default no-op implementation. Is called before writing any user data to a file.
-var WriterCallbackGetter = func() (string, func(data []byte, _ []byte) ([]byte, error), error) {
-	return "", func(data []byte, _ []byte) ([]byte, error) {
-		return data, nil
-	}, nil
-}
+var WriterHook func(context []byte) (string, func(data []byte) []byte, error)
 
 // Default no-op implementation. Is called after reading any user data from a file.
-var ReaderCallbackGetter = func(string) (func(data []byte) ([]byte, error), error) {
-	return func(data []byte) ([]byte, error) {
-		return data, nil
-	}, nil
-}
-
-// Default no-op implementation. Is called once per write call if a unique counter is
-// needed by the writer callback.
-var CounterGetter = func() ([]byte, error) {
-	return nil, nil
-}
+var ReaderHook func(id string, context []byte) (func(data []byte) ([]byte, error), error)
 
 // fileWriter wraps a CountHashWriter and applies a user provided
 // writer callback to the data being written.
 type fileWriter struct {
-	writerCB func(data []byte, counter []byte) ([]byte, error)
-	counter  []byte
-	id       string
-	c        *CountHashWriter
+	processor func(data []byte) []byte
+	context   []byte
+	id        string
+	c         *CountHashWriter
 }
 
-func NewFileWriter(c *CountHashWriter) (*fileWriter, error) {
-	var err error
-	rv := &fileWriter{c: c}
-	rv.id, rv.writerCB, err = WriterCallbackGetter()
-	if err != nil {
-		return nil, err
+func NewFileWriter(c *CountHashWriter, context []byte) (*fileWriter, error) {
+	rv := &fileWriter{
+		c:       c,
+		context: context,
 	}
-	rv.counter, err = CounterGetter()
-	if err != nil {
-		return nil, err
+
+	if WriterHook != nil {
+		var err error
+		rv.id, rv.processor, err = WriterHook(rv.context)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return rv, nil
@@ -89,24 +82,11 @@ func (w *fileWriter) Write(data []byte) (int, error) {
 
 // process applies the writer callback to the data, if one is set
 // and increments the counter if one is set.
-func (w *fileWriter) process(data []byte) ([]byte, error) {
-	if w.writerCB != nil {
-		w.incrementCounter()
-		return w.writerCB(data, w.counter)
+func (w *fileWriter) process(data []byte) []byte {
+	if w.processor != nil {
+		return w.processor(data)
 	}
-	return data, nil
-}
-
-func (w *fileWriter) incrementCounter() {
-	if w.counter != nil {
-		for i := len(w.counter) - 1; i >= 0; i-- {
-			if w.counter[i] < 255 {
-				w.counter[i]++
-				return
-			}
-			w.counter[i] = 0
-		}
-	}
+	return data
 }
 
 func (w *fileWriter) Count() int {
@@ -119,16 +99,23 @@ func (w *fileWriter) Sum32() uint32 {
 
 // fileReader wraps a reader callback to be applied to data read from a file.
 type fileReader struct {
-	callback func(data []byte) ([]byte, error)
-	id       string
+	processor func(data []byte) ([]byte, error)
+	id        string
+	context   []byte
 }
 
-func NewFileReader(id string) (*fileReader, error) {
-	var err error
-	rv := &fileReader{id: id}
-	rv.callback, err = ReaderCallbackGetter(id)
-	if err != nil {
-		return nil, err
+func NewFileReader(id string, context []byte) (*fileReader, error) {
+
+	rv := &fileReader{
+		id: id,
+	}
+
+	if ReaderHook != nil {
+		var err error
+		rv.processor, err = ReaderHook(id, context)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return rv, nil
@@ -136,8 +123,25 @@ func NewFileReader(id string) (*fileReader, error) {
 
 // process applies the reader callback to the data, if one is set
 func (r *fileReader) process(data []byte) ([]byte, error) {
-	if r.callback != nil {
-		return r.callback(data)
+	if r.processor != nil {
+		return r.processor(data)
 	}
 	return data, nil
+}
+
+func newContext() ([]byte, error) {
+	context := make([]byte, 8)
+	_, err := rand.Read(context)
+	if err != nil {
+		return nil, err
+	}
+	return context, nil
+}
+
+func getIdContext(data []byte) (string, []byte, error) {
+	if len(data) < 8 {
+		return "", nil, fmt.Errorf("length should be greater than 8")
+	}
+
+	return string(data[0 : len(data)-8]), data[len(data)-8:], nil
 }

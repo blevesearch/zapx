@@ -152,10 +152,7 @@ func (c *chunkedIntCoder) Write(w io.Writer) (int, error) {
 			if chunkOffsets[i] == uint64(prevOffset) {
 				continue
 			}
-			buf, err := fw.process(c.final[prevOffset:chunkOffsets[i]])
-			if err != nil {
-				return 0, err
-			}
+			buf := fw.process(c.final[prevOffset:chunkOffsets[i]])
 			processedBuf = append(processedBuf, buf...)
 			prevOffset = int(chunkOffsets[i])
 			c.chunkLens[i] = uint64(len(buf))

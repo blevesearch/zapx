@@ -73,7 +73,12 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 
 	// wrap it for counting (tracking offsets)
 	cr := NewCountHashWriterWithStatsReporter(br, s)
-	w, err := NewFileWriter(cr)
+	writerContext, err := newContext()
+	if err != nil {
+		cleanup()
+		return nil, 0, err
+	}
+	w, err := NewFileWriter(cr, writerContext)
 	if err != nil {
 		cleanup()
 		return nil, 0, err
@@ -88,7 +93,7 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 
 	// passing the sectionsIndexOffset as fieldsIndexOffset and the docValueOffset as 0 for the footer
 	err = persistFooter(numDocs, storedIndexOffset, sectionsIndexOffset, sectionsIndexOffset,
-		0, chunkMode, cr.Sum32(), w, w.id)
+		0, chunkMode, cr.Sum32(), w, w.id, w.context)
 	if err != nil {
 		cleanup()
 		return nil, 0, err
@@ -531,10 +536,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 			// record where we're about to start writing
 			docNumOffsets[newDocNum] = uint64(w.Count())
 
-			bufMeta, err := w.process(metaBytes)
-			if err != nil {
-				return 0, nil, err
-			}
+			bufMeta := w.process(metaBytes)
 
 			// idFieldVal is a pointer to a mem mapped byte slice, so we copy
 			// before merging it with the compressed data
@@ -542,10 +544,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 			buf = append(buf, idFieldVal...)
 			buf = append(buf, compressed...)
 
-			bufCompressed, err := w.process(buf)
-			if err != nil {
-				return 0, nil, err
-			}
+			bufCompressed := w.process(buf)
 
 			// write out the meta len and compressed data len
 			_, err = writeUvarints(w,

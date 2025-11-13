@@ -239,10 +239,7 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *fileWriter,
 		pos += binary.PutVarint(idBuf, vecID)
 		pos += binary.PutUvarint(idBuf, docID)
 	}
-	idBuf, err = w.process(idBuf[:pos])
-	if err != nil {
-		return err
-	}
+	idBuf = w.process(idBuf[:pos])
 
 	n = binary.PutUvarint(tempBuf, uint64(len(idBuf)))
 	_, err = w.Write(tempBuf[:n])
@@ -262,13 +259,10 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *fileWriter,
 func (v *vectorIndexOpaque) flushVectorIndex(indexBytes []byte, w *fileWriter) error {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 
-	indexBytes, err := w.process(indexBytes)
-	if err != nil {
-		return err
-	}
+	indexBytes = w.process(indexBytes)
 
 	n := binary.PutUvarint(tempBuf, uint64(len(indexBytes)))
-	_, err = w.Write(tempBuf[:n])
+	_, err := w.Write(tempBuf[:n])
 	if err != nil {
 		return err
 	}
@@ -321,10 +315,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		}
 
 		// read the index bytes. todo: parallelize this
-		indexBytes, err := w.process(segBase.mem[vecIndexes[segI].startOffset : vecIndexes[segI].startOffset+int(vecIndexes[segI].indexSize)])
-		if err != nil {
-			return err
-		}
+		indexBytes := w.process(segBase.mem[vecIndexes[segI].startOffset : vecIndexes[segI].startOffset+int(vecIndexes[segI].indexSize)])
 		index, err := faiss.ReadIndexFromBuffer(indexBytes, faissIOFlags)
 		if err != nil {
 			freeReconstructedIndexes(vecIndexes)
@@ -602,10 +593,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *fileWriter) (offset uint64, e
 			pos += binary.PutVarint(idBuf[pos:], vecID)
 			pos += binary.PutUvarint(idBuf[pos:], uint64(docID))
 		}
-		idBuf, err = w.process(idBuf[:pos])
-		if err != nil {
-			return 0, err
-		}
+		idBuf = w.process(idBuf[:pos])
 
 		n = binary.PutUvarint(tempBuf, uint64(len(idBuf)))
 		_, err = w.Write(tempBuf[:n])
@@ -624,10 +612,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *fileWriter) (offset uint64, e
 			return 0, err
 		}
 
-		buf, err = w.process(buf)
-		if err != nil {
-			return 0, err
-		}
+		buf = w.process(buf)
 
 		// record the fieldStart value for this section.
 		// write the vecID -> docID mapping

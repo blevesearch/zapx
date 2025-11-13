@@ -423,7 +423,7 @@ func (s *interim) writeStoredFields() (
 	// write the child -> parent edge list
 	// child and parent are both flattened doc ids
 	for child, parent := range s.edgeList {
-		err = binary.Write(s.w, binary.BigEndian, uint64(child))
+		err = binary.Write(s.w, binary.BigEndian, child)
 		if err != nil {
 			return 0, err
 		}
@@ -480,7 +480,7 @@ func flattenNestedDocuments(docs []index.Document) ([]index.Document, map[uint64
 		flattened = append(flattened, d)
 
 		if hasParent {
-			edgeMap[curIdx] = uint64(parentIdx)
+			edgeMap[curIdx] = parentIdx
 		}
 
 		if nestedDoc, ok := d.(index.NestedDocument); ok {

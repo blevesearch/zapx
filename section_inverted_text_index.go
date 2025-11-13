@@ -1080,7 +1080,6 @@ func (io *invertedIndexOpaque) Reset() (err error) {
 	io.numDocs = 0
 
 	clear(io.fieldAddrs)
-	clear(io.updatedFields)
 
 	return err
 }

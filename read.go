@@ -43,9 +43,9 @@ func (sb *SegmentBase) getDocStoredOffsets(docNum uint64) (
 }
 
 func (sb *SegmentBase) getEdgeListOffset() uint64 {
-	// Edge list comes right after document content and before doc stored offsets
+	// Edge list comes after the stored fields index (doc stored offsets)
 	// The stored index offset points to where the doc offsets start
-	// So edge list starts right after the last document content
+	// So edge list starts right after the last document offset
 	// which is at sb.storedIndexOffset + (8 * sb.numDocs)
 	// since each doc offset is 8 bytes
 	return sb.storedIndexOffset + (8 * sb.numDocs)

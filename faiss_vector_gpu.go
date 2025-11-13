@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build vectors
+// +build vectors
+
 package zap
 
 import (
@@ -160,23 +163,25 @@ func TrainIndex(index *faiss.IndexImpl, vecs []float32, dims int, useGPU bool) (
 		// no GPUs available, fallback to CPU training
 		return TrainCPU()
 	}
-	// lock the selected GPU for the duration of the transfer and training
+	// lock the selected GPU for the duration of the transfer
 	GPULocks[deviceID].Lock()
-	defer GPULocks[deviceID].Unlock()
 	// check if enough free memory is available
 	estimatedMemNeeded := uint64(float64(len(vecs)*SizeOfFloat32) * GPUTransferOverheadFactor) // input vectors + overhead
 	freeMem, err := faiss.FreeMemory(deviceID)
 	if err != nil || freeMem < estimatedMemNeeded {
 		// unable to get free memory info or not enough free memory,
 		// fallback to CPU training
+		GPULocks[deviceID].Unlock()
 		return TrainCPU()
 	}
 	// transfer index to GPU
 	gpuIndex, err := faiss.TransferToGPU(index, deviceID)
 	if err != nil {
 		// transfer failed, fallback to CPU training
+		GPULocks[deviceID].Unlock()
 		return TrainCPU()
 	}
+	GPULocks[deviceID].Unlock()
 	// train on GPU
 	err = gpuIndex.Train(vecs)
 	if err != nil {
@@ -184,13 +189,17 @@ func TrainIndex(index *faiss.IndexImpl, vecs []float32, dims int, useGPU bool) (
 		gpuIndex.Close()
 		return TrainCPU()
 	}
+	// acquire lock again for transfer back to CPU
+	GPULocks[deviceID].Lock()
 	// transfer back to CPU
 	cpuIndex, err := faiss.TransferToCPU(gpuIndex)
 	gpuIndex.Close()
 	if err != nil {
+		GPULocks[deviceID].Unlock()
 		// transfer back failed, fallback to CPU training
 		return TrainCPU()
 	}
+	GPULocks[deviceID].Unlock()
 	// successful GPU training and transfer back to CPU
 	// now free the original index and return the new trained index
 	index.Close()

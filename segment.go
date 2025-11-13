@@ -734,7 +734,7 @@ func (sb *SegmentBase) loadDvReaders() error {
 				pos += uint64(n)
 				read += uint64(n)
 				fieldLocEnd, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-				if read <= 0 {
+				if n <= 0 {
 					return fmt.Errorf("loadDvReaders: failed to read the docvalue offset end for field %v", sb.fieldsInv[fieldID])
 				}
 				pos += uint64(n)

@@ -75,7 +75,6 @@ type vecIndexInfo struct {
 	indexSize         uint64
 	vecIds            []int64
 	indexOptimizedFor string
-	indexOptions      index.FieldIndexingOptions
 	index             *faiss.IndexImpl
 }
 
@@ -127,10 +126,6 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
-			// the field indexing options represented as a uint64
-			fieldIndexingOptionsInt, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-			pos += n
-
 			// the index optimization type represented as an int
 			indexOptimizationTypeInt, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
@@ -142,7 +137,6 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			indexes = append(indexes, &vecIndexInfo{
 				vecIds:            make([]int64, 0, numVecs),
 				indexOptimizedFor: index.VectorIndexOptimizationsReverseLookup[int(indexOptimizationTypeInt)],
-				indexOptions:      index.FieldIndexingOptions(fieldIndexingOptionsInt),
 			})
 
 			curIdx := len(indexes) - 1
@@ -207,12 +201,6 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter
 		return err
 	}
 	n = binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
-	_, err = w.Write(tempBuf[:n])
-	if err != nil {
-		return err
-	}
-	// write out the field indexing options
-	n = binary.PutUvarint(tempBuf, uint64(indexes[0].indexOptions))
 	_, err = w.Write(tempBuf[:n])
 	if err != nil {
 		return err
@@ -330,7 +318,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		dims = index.D()
 		metric = int(index.MetricType())
 		indexOptimizedFor = vecIndexes[segI].indexOptimizedFor
-		indexOptions = vecIndexes[segI].indexOptions
 	}
 
 	// not a valid merge operation as there are no valid indexes to merge.
@@ -527,7 +514,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 		// read vector index options:
 		// was this field configured
 		// to use GPU for training?
-		useGPU := content.options.UseGPU()
+		useGPU := vo.fieldsOptions
 
 		nvecs := len(ids)
 		nlist := determineCentroids(nvecs)
@@ -551,7 +538,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			// May fall back to CPU training if GPU training fails due
 			// to any reason such as insufficient memory, or unavailability
 			// of GPUs, etc.
-			faissIndex, err = TrainIndex(faissIndex, vecs, dims, useGPU)
+			faissIndex, err = TrainIndex(faissIndex, vecs, dims)
 			if err != nil {
 				return 0, err
 			}
@@ -576,12 +563,6 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			return 0, err
 		}
 		n = binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
-		_, err = w.Write(tempBuf[:n])
-		if err != nil {
-			return 0, err
-		}
-		// write out the field indexing options
-		n = binary.PutUvarint(tempBuf, uint64(content.options))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return 0, err
@@ -665,7 +646,6 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 	dim := field.Dims()
 	metric := field.Similarity()
 	indexOptimizedFor := field.IndexOptimizedFor()
-	options := field.Options()
 
 	// caller is supposed to make sure len(vec) is a multiple of dim.
 	// Not double checking it here to avoid the overhead.
@@ -693,7 +673,6 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 				dim:               uint16(dim),
 				metric:            metric,
 				indexOptimizedFor: indexOptimizedFor,
-				options:           options,
 			}
 		} else {
 			vo.vecFieldMap[fieldID].vecs[subVecHash] = &vecInfo{
@@ -748,7 +727,7 @@ type indexContent struct {
 	dim               uint16
 	metric            string
 	indexOptimizedFor string
-	options           index.FieldIndexingOptions
+	gpu               bool
 }
 
 type vecInfo struct {

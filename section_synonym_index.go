@@ -116,7 +116,8 @@ func (so *synonymIndexOpaque) Reset() (err error) {
 	// cleanup stuff over here
 	so.results = nil
 	so.init = false
-	so.ThesaurusMap = nil
+	so.FieldsMap = nil
+	clear(so.ThesaurusMap)
 	so.ThesaurusInv = so.ThesaurusInv[:0]
 	for i := range so.Thesauri {
 		so.Thesauri[i] = nil
@@ -134,9 +135,10 @@ func (so *synonymIndexOpaque) Reset() (err error) {
 	if so.builder != nil {
 		err = so.builder.Reset(&so.builderBuf)
 	}
-	so.FieldIDtoThesaurusID = nil
+	clear(so.FieldIDtoThesaurusID)
 	so.SynonymTermToID = so.SynonymTermToID[:0]
 	so.SynonymIDtoTerm = so.SynonymIDtoTerm[:0]
+	clear(so.thesaurusAddrs)
 
 	so.tmp0 = so.tmp0[:0]
 	return err
@@ -176,8 +178,6 @@ func (so *synonymIndexOpaque) process(field index.SynonymField, fieldID uint16, 
 func (so *synonymIndexOpaque) realloc() {
 	var pidNext int
 	var sidNext uint32
-	so.ThesaurusMap = map[string]uint16{}
-	so.FieldIDtoThesaurusID = map[uint16]int{}
 
 	// count the number of unique thesauri from the batch of documents
 	for _, result := range so.results {
@@ -398,7 +398,9 @@ func (s *synonymIndexSection) getSynonymIndexOpaque(opaque map[int]resetable) *s
 // results in the opaque before the section processes a synonym field.
 func (s *synonymIndexSection) InitOpaque(args map[string]interface{}) resetable {
 	rv := &synonymIndexOpaque{
-		thesaurusAddrs: map[int]int{},
+		ThesaurusMap:         map[string]uint16{},
+		FieldIDtoThesaurusID: map[uint16]int{},
+		thesaurusAddrs:       map[int]int{},
 	}
 	for k, v := range args {
 		rv.Set(k, v)

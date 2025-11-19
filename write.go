@@ -142,6 +142,18 @@ func persistFooter(numDocs, storedIndexOffset, sectionsIndexOffset uint64,
 		return err
 	}
 
+	// To be replaced with writer id
+	tempId := []byte("")
+	err = binary.Write(w, binary.BigEndian, tempId)
+	if err != nil {
+		return err
+	}
+
+	err = binary.Write(w, binary.BigEndian, uint32(len(tempId)))
+	if err != nil {
+		return err
+	}
+
 	// write out CRC-32 of everything upto but not including this CRC
 	err = binary.Write(w, binary.BigEndian, w.crc)
 	if err != nil {

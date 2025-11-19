@@ -332,6 +332,9 @@ func getSectionContentOffsets(sb *SegmentBase, offset uint64) (
 	numVecs, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
+	_, n = binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+
 	vecDocIDsMappingOffset = pos
 	for i := 0; i < int(numVecs); i++ {
 		_, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])

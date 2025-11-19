@@ -204,16 +204,21 @@ func (s *Segment) DecRef() (err error) {
 func (s *Segment) loadConfig() error {
 	// read offsets of 32 bit values - crc, ver, chunk
 	crcOffset := len(s.mm) - 4
-	verOffset := crcOffset - 4
+	idLenOffset := crcOffset - 4
+
+	// read 32-bit crc
+	s.crc = binary.BigEndian.Uint32(s.mm[crcOffset : crcOffset+4])
+
+	idLen := binary.BigEndian.Uint32(s.mm[idLenOffset : idLenOffset+4])
+
+	idOffset := idLenOffset - int(idLen)
+	verOffset := idOffset - 4
 	chunkOffset := verOffset - 4
 
 	// read offsets of 64 bit values - sectionsIndexOffset, storedIndexOffset, numDocsOffset
 	sectionsIndexOffset := chunkOffset - 8
 	storedIndexOffset := sectionsIndexOffset - 8
 	numDocsOffset := storedIndexOffset - 8
-
-	// read 32-bit crc
-	s.crc = binary.BigEndian.Uint32(s.mm[crcOffset : crcOffset+4])
 
 	// read 32-bit version
 	s.version = binary.BigEndian.Uint32(s.mm[verOffset : verOffset+4])

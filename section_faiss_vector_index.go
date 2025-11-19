@@ -133,6 +133,9 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
+			_, n = binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+
 			vecSegs = append(vecSegs, sb)
 			indexes = append(indexes, &vecIndexInfo{
 				vecIds:            make([]int64, 0, numVecs),
@@ -233,6 +236,12 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter
 		if err != nil {
 			return err
 		}
+	}
+
+	n = binary.PutUvarint(tempBuf, uint64(0))
+	_, err = w.Write(tempBuf[:n])
+	if err != nil {
+		return err
 	}
 
 	v.fieldAddrs[uint16(fieldID)] = fieldStart
@@ -580,6 +589,12 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			if err != nil {
 				return 0, err
 			}
+		}
+
+		n = binary.PutUvarint(tempBuf, 0)
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return 0, err
 		}
 
 		// serialize the built index into a byte slice

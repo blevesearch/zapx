@@ -40,7 +40,7 @@ var vectorCmd = &cobra.Command{
 	4. reconstruct vector given the vectorID.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		data := segment.Data()
-		pos := segment.FieldsIndexOffset()
+		pos := segment.SectionsIndexOffset()
 
 		if pos == 0 {
 			// this is the case only for older file formats

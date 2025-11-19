@@ -104,12 +104,11 @@ func persistFieldsSection(fieldsInv []string, w *CountHashWriter, opaque map[int
 }
 
 // FooterSize is the size of the footer record in bytes
-// crc + ver + chunk + docValueOffset + sectionsIndexOffset + field offset + stored offset + num docs
-const FooterSize = 4 + 4 + 4 + 8 + 8 + 8 + 8 + 8
+// crc + ver + chunk + sectionsIndexOffset + stored offset + num docs
+const FooterSize = 4 + 4 + 4 + 8 + 8 + 8
 
-// in the index sections format, the fieldsIndexOffset points to the sectionsIndexOffset
-func persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, sectionsIndexOffset, docValueOffset uint64,
-	chunkMode uint32, crcBeforeFooter uint32, writerIn io.Writer) error {
+func persistFooter(numDocs, storedIndexOffset, sectionsIndexOffset uint64,
+	chunkMode, crcBeforeFooter uint32, writerIn io.Writer) error {
 	w := NewCountHashWriter(writerIn)
 	w.crc = crcBeforeFooter
 
@@ -118,38 +117,31 @@ func persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, sectionsIndexO
 	if err != nil {
 		return err
 	}
+
 	// write out the stored field index location:
 	err = binary.Write(w, binary.BigEndian, storedIndexOffset)
 	if err != nil {
 		return err
 	}
-	// write out the field index location
-	err = binary.Write(w, binary.BigEndian, fieldsIndexOffset)
-	if err != nil {
-		return err
-	}
 
-	// write out the new field index location (to be removed later, as this can eventually replace the old)
+	// write out the sections index location
 	err = binary.Write(w, binary.BigEndian, sectionsIndexOffset)
 	if err != nil {
 		return err
 	}
 
-	// write out the fieldDocValue location
-	err = binary.Write(w, binary.BigEndian, docValueOffset)
-	if err != nil {
-		return err
-	}
 	// write out 32-bit chunk factor
 	err = binary.Write(w, binary.BigEndian, chunkMode)
 	if err != nil {
 		return err
 	}
+
 	// write out 32-bit version
 	err = binary.Write(w, binary.BigEndian, Version)
 	if err != nil {
 		return err
 	}
+
 	// write out CRC-32 of everything upto but not including this CRC
 	err = binary.Write(w, binary.BigEndian, w.crc)
 	if err != nil {

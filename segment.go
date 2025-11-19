@@ -28,7 +28,6 @@ import (
 	index "github.com/blevesearch/bleve_index_api"
 	mmap "github.com/blevesearch/mmap-go"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
-	"github.com/blevesearch/vellum"
 	"github.com/golang/snappy"
 )
 
@@ -55,7 +54,7 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 	rv := &Segment{
 		SegmentBase: SegmentBase{
 			fieldsMap:      make(map[string]uint16),
-			fieldFSTs:      make(map[uint16]*vellum.FST),
+			invIndexCache:  newInvertedIndexCache(),
 			vecIndexCache:  newVectorIndexCache(),
 			synIndexCache:  newSynonymIndexCache(),
 			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
@@ -73,7 +72,7 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 		return nil, err
 	}
 
-	err = rv.loadFieldsNew()
+	err = rv.loadFields()
 	if err != nil {
 		_ = rv.Close()
 		return nil, err
@@ -102,20 +101,16 @@ type SegmentBase struct {
 	fieldsSectionsMap   []map[uint16]uint64 // fieldID -> section -> address
 	numDocs             uint64
 	storedIndexOffset   uint64
-	fieldsIndexOffset   uint64
 	sectionsIndexOffset uint64
-	docValueOffset      uint64
-	dictLocs            []uint64
 	fieldDvReaders      []map[uint16]*docValueReader // naive chunk cache per field; section->field->reader
 	fieldDvNames        []string                     // field names cached in fieldDvReaders
 	size                uint64
 
+	// index update specific tracking
 	updatedFields map[string]*index.UpdateFieldInfo
 
-	m         sync.Mutex
-	fieldFSTs map[uint16]*vellum.FST
-
-	// this cache comes into play when vectors are supported in builds.
+	// section-specific caches
+	invIndexCache *invertedIndexCache
 	vecIndexCache *vectorIndexCache
 	synIndexCache *synonymIndexCache
 }
@@ -133,11 +128,10 @@ func (sb *SegmentBase) updateSize() {
 		sizeInBytes += (len(k) + SizeOfString) + SizeOfUint16
 	}
 
-	// fieldsInv, dictLocs
+	// fieldsInv
 	for _, entry := range sb.fieldsInv {
 		sizeInBytes += len(entry) + SizeOfString
 	}
-	sizeInBytes += len(sb.dictLocs) * SizeOfUint64
 
 	// fieldDvReaders
 	for _, secDvReaders := range sb.fieldDvReaders {
@@ -155,6 +149,7 @@ func (sb *SegmentBase) updateSize() {
 func (sb *SegmentBase) AddRef()             {}
 func (sb *SegmentBase) DecRef() (err error) { return nil }
 func (sb *SegmentBase) Close() (err error) {
+	sb.invIndexCache.Clear()
 	sb.vecIndexCache.Clear()
 	sb.synIndexCache.Clear()
 	return nil
@@ -207,47 +202,39 @@ func (s *Segment) DecRef() (err error) {
 }
 
 func (s *Segment) loadConfig() error {
+	// read offsets of 32 bit values - crc, ver, chunk
 	crcOffset := len(s.mm) - 4
+	verOffset := crcOffset - 4
+	chunkOffset := verOffset - 4
+
+	// read offsets of 64 bit values - sectionsIndexOffset, storedIndexOffset, numDocsOffset
+	sectionsIndexOffset := chunkOffset - 8
+	storedIndexOffset := sectionsIndexOffset - 8
+	numDocsOffset := storedIndexOffset - 8
+
+	// read 32-bit crc
 	s.crc = binary.BigEndian.Uint32(s.mm[crcOffset : crcOffset+4])
 
-	verOffset := crcOffset - 4
+	// read 32-bit version
 	s.version = binary.BigEndian.Uint32(s.mm[verOffset : verOffset+4])
-	if Version < IndexSectionsVersion && s.version != Version {
+	if s.version != Version {
 		return fmt.Errorf("unsupported version %d != %d", s.version, Version)
 	}
 
-	chunkOffset := verOffset - 4
+	// read 32-bit chunk mode
 	s.chunkMode = binary.BigEndian.Uint32(s.mm[chunkOffset : chunkOffset+4])
 
-	docValueOffset := chunkOffset - 8
-	s.docValueOffset = binary.BigEndian.Uint64(s.mm[docValueOffset : docValueOffset+8])
+	// read 64-bit sections index offset
+	s.sectionsIndexOffset = binary.BigEndian.Uint64(s.mm[sectionsIndexOffset : sectionsIndexOffset+8])
 
-	fieldsIndexOffset := docValueOffset - 8
-
-	// determining the right footer size based on version, this becomes important
-	// while loading the fields portion or the sections portion of the index file.
-	var footerSize int
-	if s.version >= IndexSectionsVersion {
-		// for version 16 and above, parse the sectionsIndexOffset
-		s.sectionsIndexOffset = binary.BigEndian.Uint64(s.mm[fieldsIndexOffset : fieldsIndexOffset+8])
-		fieldsIndexOffset = fieldsIndexOffset - 8
-		footerSize = FooterSize
-	} else {
-		footerSize = FooterSize - 8
-	}
-
-	s.fieldsIndexOffset = binary.BigEndian.Uint64(s.mm[fieldsIndexOffset : fieldsIndexOffset+8])
-
-	storedIndexOffset := fieldsIndexOffset - 8
+	// read 64-bit stored index offset
 	s.storedIndexOffset = binary.BigEndian.Uint64(s.mm[storedIndexOffset : storedIndexOffset+8])
 
-	numDocsOffset := storedIndexOffset - 8
+	// read 64-bit num docs
 	s.numDocs = binary.BigEndian.Uint64(s.mm[numDocsOffset : numDocsOffset+8])
 
-	// 8*4 + 4*3 = 44 bytes being accounted from all the offsets
-	// above being read from the file
-	s.incrementBytesRead(uint64(footerSize))
-	s.SegmentBase.mem = s.mm[:len(s.mm)-footerSize]
+	s.incrementBytesRead(uint64(FooterSize))
+	s.SegmentBase.mem = s.mm[:len(s.mm)-FooterSize]
 	return nil
 }
 
@@ -291,44 +278,10 @@ func (sb *SegmentBase) incrementBytesRead(val uint64) {
 }
 
 func (sb *SegmentBase) loadFields() error {
-	// NOTE for now we assume the fields index immediately precedes
-	// the footer, and if this changes, need to adjust accordingly (or
-	// store explicit length), where s.mem was sliced from s.mm in Open().
-	fieldsIndexEnd := uint64(len(sb.mem))
-
-	// iterate through fields index
-	var fieldID uint64
-	for sb.fieldsIndexOffset+(8*fieldID) < fieldsIndexEnd {
-		addr := binary.BigEndian.Uint64(sb.mem[sb.fieldsIndexOffset+(8*fieldID) : sb.fieldsIndexOffset+(8*fieldID)+8])
-
-		// accounting the address of the dictLoc being read from file
-		sb.incrementBytesRead(8)
-
-		dictLoc, read := binary.Uvarint(sb.mem[addr:fieldsIndexEnd])
-		n := uint64(read)
-		sb.dictLocs = append(sb.dictLocs, dictLoc)
-
-		var nameLen uint64
-		nameLen, read = binary.Uvarint(sb.mem[addr+n : fieldsIndexEnd])
-		n += uint64(read)
-
-		name := string(sb.mem[addr+n : addr+n+nameLen])
-
-		sb.incrementBytesRead(n + nameLen)
-		sb.fieldsInv = append(sb.fieldsInv, name)
-		sb.fieldsMap[name] = uint16(fieldID + 1)
-
-		fieldID++
-	}
-	return nil
-}
-
-func (sb *SegmentBase) loadFieldsNew() error {
 	pos := sb.sectionsIndexOffset
 
 	if pos == 0 {
-		// this is the case only for older file formats
-		return sb.loadFields()
+		return fmt.Errorf("no sections index present")
 	}
 
 	seek := pos + binary.MaxVarintLen64
@@ -360,7 +313,7 @@ func (sb *SegmentBase) loadFieldsNew() error {
 
 		fieldSectionMap := make(map[uint16]uint64)
 
-		err := sb.loadFieldNew(uint16(fieldID), addr, fieldSectionMap)
+		err := sb.loadField(uint16(fieldID), addr, fieldSectionMap)
 		if err != nil {
 			return err
 		}
@@ -374,7 +327,7 @@ func (sb *SegmentBase) loadFieldsNew() error {
 	return nil
 }
 
-func (sb *SegmentBase) loadFieldNew(fieldID uint16, pos uint64,
+func (sb *SegmentBase) loadField(fieldID uint16, pos uint64,
 	fieldSectionMap map[uint16]uint64) error {
 	if pos == 0 {
 		// there is no indexing structure present for this field/section
@@ -401,28 +354,6 @@ func (sb *SegmentBase) loadFieldNew(fieldID uint16, pos uint64,
 		fieldSectionAddr := binary.BigEndian.Uint64(sb.mem[pos : pos+8])
 		pos += 8
 		fieldSectionMap[fieldSectionType] = fieldSectionAddr
-		if fieldSectionType == SectionInvertedTextIndex {
-			// for the fields which don't have the inverted index, the offset is
-			// 0 and during query time, because there is no valid dictionary we
-			// will just have follow a no-op path.
-			if fieldSectionAddr == 0 {
-				sb.dictLocs = append(sb.dictLocs, 0)
-				continue
-			}
-
-			read := 0
-			// skip the doc values
-			_, n := binary.Uvarint(sb.mem[fieldSectionAddr : fieldSectionAddr+binary.MaxVarintLen64])
-			fieldSectionAddr += uint64(n)
-			read += n
-			_, n = binary.Uvarint(sb.mem[fieldSectionAddr : fieldSectionAddr+binary.MaxVarintLen64])
-			fieldSectionAddr += uint64(n)
-			read += n
-			dictLoc, n := binary.Uvarint(sb.mem[fieldSectionAddr : fieldSectionAddr+binary.MaxVarintLen64])
-			// account the bytes read while parsing the field's inverted index section
-			sb.incrementBytesRead(uint64(read + n))
-			sb.dictLocs = append(sb.dictLocs, dictLoc)
-		}
 	}
 
 	// account the bytes read while parsing the sections field index.
@@ -441,41 +372,33 @@ func (sb *SegmentBase) Dictionary(field string) (segment.TermDictionary, error) 
 
 func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 	fieldIDPlus1 := sb.fieldsMap[field]
-	if fieldIDPlus1 > 0 {
+	if fieldIDPlus1 == 0 {
+		return nil, nil
+	}
+	pos := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionInvertedTextIndex]
+	if pos > 0 {
 		rv = &Dictionary{
 			sb:      sb,
 			field:   field,
 			fieldID: fieldIDPlus1 - 1,
 		}
-
-		dictStart := sb.dictLocs[rv.fieldID]
-		if dictStart > 0 {
-			var ok bool
-			sb.m.Lock()
-			if rv.fst, ok = sb.fieldFSTs[rv.fieldID]; !ok {
-				// read the length of the vellum data
-				vellumLen, read := binary.Uvarint(sb.mem[dictStart : dictStart+binary.MaxVarintLen64])
-				if vellumLen == 0 {
-					sb.m.Unlock()
-					return nil, fmt.Errorf("empty dictionary for field: %v", field)
-				}
-				fstBytes := sb.mem[dictStart+uint64(read) : dictStart+uint64(read)+vellumLen]
-				rv.incrementBytesRead(uint64(read) + vellumLen)
-				rv.fst, err = vellum.Load(fstBytes)
-				if err != nil {
-					sb.m.Unlock()
-					return nil, fmt.Errorf("dictionary field %s vellum err: %v", field, err)
-				}
-
-				sb.fieldFSTs[rv.fieldID] = rv.fst
-			}
-
-			sb.m.Unlock()
-			rv.fstReader, err = rv.fst.Reader()
-			if err != nil {
-				return nil, fmt.Errorf("dictionary field %s vellum reader err: %v", field, err)
-			}
+		// skip the doc value offsets to get to the dictionary portion
+		for i := 0; i < 2; i++ {
+			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += uint64(n)
 		}
+		dictLoc, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += uint64(n)
+		fst, bytesRead, err := sb.invIndexCache.loadOrCreate(rv.fieldID, sb.mem[dictLoc:])
+		if err != nil {
+			return nil, fmt.Errorf("dictionary for field %s err: %v", field, err)
+		}
+		rv.fst = fst
+		rv.fstReader, err = rv.fst.Reader()
+		if err != nil {
+			return nil, fmt.Errorf("dictionary for field %s, vellum reader err: %v", field, err)
+		}
+		rv.bytesRead += bytesRead
 	}
 
 	return rv, nil
@@ -509,7 +432,7 @@ func (sb *SegmentBase) thesaurus(name string) (rv *Thesaurus, err error) {
 		}
 		thesLoc, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
-		fst, synTermMap, err := sb.synIndexCache.loadOrCreate(rv.fieldID, sb.mem[thesLoc:])
+		fst, synTermMap, bytesRead, err := sb.synIndexCache.loadOrCreate(rv.fieldID, sb.mem[thesLoc:])
 		if err != nil {
 			return nil, fmt.Errorf("thesaurus name %s err: %v", name, err)
 		}
@@ -519,6 +442,7 @@ func (sb *SegmentBase) thesaurus(name string) (rv *Thesaurus, err error) {
 		if err != nil {
 			return nil, fmt.Errorf("thesaurus name %s vellum reader err: %v", name, err)
 		}
+		rv.bytesRead += bytesRead
 	}
 	return rv, nil
 }
@@ -700,6 +624,7 @@ func (s *Segment) Close() (err error) {
 
 func (s *Segment) closeActual() (err error) {
 	// clear contents from the vector and synonym index cache before un-mmapping
+	s.invIndexCache.Clear()
 	s.vecIndexCache.Clear()
 	s.synIndexCache.Clear()
 
@@ -740,19 +665,14 @@ func (s *Segment) ChunkMode() uint32 {
 	return s.chunkMode
 }
 
-// FieldsIndexOffset returns the fields index offset in the file footer
-func (s *Segment) FieldsIndexOffset() uint64 {
-	return s.fieldsIndexOffset
+// SectionsIndexOffset returns the sections index offset in the file footer
+func (s *Segment) SectionsIndexOffset() uint64 {
+	return s.sectionsIndexOffset
 }
 
 // StoredIndexOffset returns the stored value index offset in the file footer
 func (s *Segment) StoredIndexOffset() uint64 {
 	return s.storedIndexOffset
-}
-
-// DocValueOffset returns the docValue offset in the file footer
-func (s *Segment) DocValueOffset() uint64 {
-	return s.docValueOffset
 }
 
 // NumDocs returns the number of documents in the file footer
@@ -767,8 +687,16 @@ func (s *Segment) DictAddr(field string) (uint64, error) {
 	if !ok {
 		return 0, fmt.Errorf("no such field '%s'", field)
 	}
-
-	return s.dictLocs[fieldIDPlus1-1], nil
+	dictStart := s.fieldsSectionsMap[fieldIDPlus1-1][SectionInvertedTextIndex]
+	if dictStart == 0 {
+		return 0, fmt.Errorf("no dictionary for field '%s'", field)
+	}
+	for i := 0; i < 2; i++ {
+		_, n := binary.Uvarint(s.mem[dictStart : dictStart+binary.MaxVarintLen64])
+		dictStart += uint64(n)
+	}
+	dictLoc, _ := binary.Uvarint(s.mem[dictStart : dictStart+binary.MaxVarintLen64])
+	return dictLoc, nil
 }
 
 // ThesaurusAddr is a helper function to compute the file offset where the
@@ -790,137 +718,13 @@ func (s *Segment) ThesaurusAddr(name string) (uint64, error) {
 	return thesLoc, nil
 }
 
-func (s *Segment) getSectionDvOffsets(fieldID int, secID uint16) (uint64, uint64, uint64, error) {
-	// Version is gonna be 16
-	var fieldLocStart uint64 = fieldNotUninverted
-	fieldLocEnd := fieldLocStart
-	sectionMap := s.fieldsSectionsMap[fieldID]
-	fieldAddrStart := sectionMap[secID]
-	n := 0
-
-	if fieldAddrStart > 0 {
-		// fixed encoding as of now, need to uvarint this
-		var read uint64
-		fieldLocStart, n = binary.Uvarint(s.mem[fieldAddrStart+read : fieldAddrStart+read+binary.MaxVarintLen64])
-		if n <= 0 {
-			return 0, 0, 0, fmt.Errorf("loadDvReaders: failed to read the docvalue offset start for field %d", fieldID)
-		}
-		read += uint64(n)
-
-		fieldLocEnd, n = binary.Uvarint(s.mem[fieldAddrStart+read : fieldAddrStart+read+binary.MaxVarintLen64])
-		if n <= 0 {
-			return 0, 0, 0, fmt.Errorf("loadDvReaders: failed to read the docvalue offset end for field %d", fieldID)
-		}
-		read += uint64(n)
-
-		s.incrementBytesRead(read)
-	}
-
-	return fieldLocStart, fieldLocEnd, 0, nil
-}
-
-func (s *Segment) loadDvReader(fieldID int, secID uint16) error {
-	start, end, _, err := s.getSectionDvOffsets(fieldID, secID)
-	if err != nil {
-		return err
-	}
-
-	fieldDvReader, err := s.loadFieldDocValueReader(s.fieldsInv[fieldID], start, end)
-	if err != nil {
-		return err
-	}
-
-	if fieldDvReader != nil {
-		if s.fieldDvReaders[secID] == nil {
-			s.fieldDvReaders[secID] = make(map[uint16]*docValueReader)
-		}
-		// fix the structure of fieldDvReaders
-		// currently it populates the inverted index doc values
-		s.fieldDvReaders[secID][uint16(fieldID)] = fieldDvReader
-		s.fieldDvNames = append(s.fieldDvNames, s.fieldsInv[fieldID])
-	}
-	return nil
-}
-
-func (s *Segment) loadDvReadersLegacy() error {
-	// older file formats to parse the docValueIndex and if that says doc values
-	// aren't there in this segment file, just return nil
-	if s.docValueOffset == fieldNotUninverted {
-		return nil
-	}
-
-	for fieldID := range s.fieldsInv {
-		var read uint64
-		start, n := binary.Uvarint(s.mem[s.docValueOffset+read : s.docValueOffset+read+binary.MaxVarintLen64])
-		if n <= 0 {
-			return fmt.Errorf("loadDvReaders: failed to read the docvalue offset start for field %d", fieldID)
-		}
-		read += uint64(n)
-		end, n := binary.Uvarint(s.mem[s.docValueOffset+read : s.docValueOffset+read+binary.MaxVarintLen64])
-		if n <= 0 {
-			return fmt.Errorf("loadDvReaders: failed to read the docvalue offset end for field %d", fieldID)
-		}
-		read += uint64(n)
-		s.incrementBytesRead(read)
-
-		fieldDvReader, err := s.loadFieldDocValueReader(s.fieldsInv[fieldID], start, end)
-		if err != nil {
-			return err
-		}
-
-		if fieldDvReader != nil {
-			// older file formats have docValues corresponding only to inverted index
-			// ignore the rest.
-			if s.fieldDvReaders[SectionInvertedTextIndex] == nil {
-				s.fieldDvReaders[SectionInvertedTextIndex] = make(map[uint16]*docValueReader)
-			}
-			// fix the structure of fieldDvReaders
-			// currently it populates the inverted index doc values
-			s.fieldDvReaders[SectionInvertedTextIndex][uint16(fieldID)] = fieldDvReader
-			s.fieldDvNames = append(s.fieldDvNames, s.fieldsInv[fieldID])
-		}
-	}
-
-	return nil
-}
-
-// Segment is a file segment, and loading the dv readers from that segment
-// must account for the version while loading since the formats are different
-// in the older and the Version version.
-func (s *Segment) loadDvReaders() error {
-	if s.numDocs == 0 {
-		return nil
-	}
-
-	if s.version < IndexSectionsVersion {
-		return s.loadDvReadersLegacy()
-	}
-
-	// for every section of every field, load the doc values and register
-	// the readers.
-	for fieldID := range s.fieldsInv {
-		for secID := range segmentSections {
-			s.loadDvReader(fieldID, secID)
-		}
-	}
-
-	return nil
-}
-
-// since segmentBase is an in-memory segment, it can be called only
-// for v16 file formats as part of InitSegmentBase() while introducing
-// a segment into the system.
 func (sb *SegmentBase) loadDvReaders() error {
-
-	// evaluate -> s.docValueOffset == fieldNotUninverted
 	if sb.numDocs == 0 {
 		return nil
 	}
-
 	for fieldID, sections := range sb.fieldsSectionsMap {
 		for secID, secOffset := range sections {
 			if secOffset > 0 {
-				// fixed encoding as of now, need to uvarint this
 				pos := secOffset
 				var read uint64
 				fieldLocStart, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
@@ -930,7 +734,7 @@ func (sb *SegmentBase) loadDvReaders() error {
 				pos += uint64(n)
 				read += uint64(n)
 				fieldLocEnd, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-				if read <= 0 {
+				if n <= 0 {
 					return fmt.Errorf("loadDvReaders: failed to read the docvalue offset end for field %v", sb.fieldsInv[fieldID])
 				}
 				pos += uint64(n)

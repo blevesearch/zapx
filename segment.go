@@ -741,6 +741,12 @@ func (s *Segment) ThesaurusAddr(name string) (uint64, error) {
 	return thesLoc, nil
 }
 
+// EdgeListAddr is the exported helper function to compute the
+// file offset where the edge list is stored.
+func (s *Segment) EdgeListAddr() (uint64, error) {
+	return s.getEdgeListOffset(), nil
+}
+
 func (sb *SegmentBase) loadDvReaders() error {
 	if sb.numDocs == 0 {
 		return nil

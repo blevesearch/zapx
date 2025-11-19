@@ -153,7 +153,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		}
 	}
 
-	_, n = binary.Varint(mem[pos : pos+binary.MaxVarintLen64])
+	_, n = binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
 	indexSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])

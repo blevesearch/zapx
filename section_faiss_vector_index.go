@@ -254,8 +254,14 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter
 func (v *vectorIndexOpaque) flushVectorIndex(indexBytes []byte, w *CountHashWriter) error {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 
-	n := binary.PutUvarint(tempBuf, uint64(len(indexBytes)))
+	n := binary.PutUvarint(tempBuf, 0)
 	_, err := w.Write(tempBuf[:n])
+	if err != nil {
+		return err
+	}
+
+	n = binary.PutUvarint(tempBuf, uint64(len(indexBytes)))
+	_, err = w.Write(tempBuf[:n])
 	if err != nil {
 		return err
 	}

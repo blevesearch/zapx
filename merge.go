@@ -124,7 +124,7 @@ func filterFields(fieldsInv []string, fieldInfo map[string]*index.UpdateFieldInf
 // Remove field options for fields using updateFieldInfo to override the
 // options selected during mergeFields, if needed. This is mainly
 // for the case where there is a field option update which has not been
-// propogated yet, because a new segment has not been created yet.
+// propagated yet, because a new segment has not been created yet.
 func finalizeFieldOptions(fieldOptions map[string]index.FieldIndexingOptions,
 	updatedFields map[string]*index.UpdateFieldInfo) map[string]index.FieldIndexingOptions {
 	for field, opts := range fieldOptions {

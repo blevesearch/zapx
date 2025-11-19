@@ -183,6 +183,10 @@ In a vector index, each vector in a document is given a unique Id. This vector I
     |   |   +~~~~~~~~~~~~+~~~~~~~~~~~~+                                  |
     |   |                                                                |
     |   |   +~~~~~~~~~~~~~+                                              |
+    |   |   |  INDEX TYPE |                                              |
+    |   |   +~~~~~~~~~~~~~+                                              |
+    |   |                                                                |
+    |   |   +~~~~~~~~~~~~~+                                              |
     |   |   |  FAISS LEN  |                                              |
     |   |   +~~~~~~~~~~~~~+                                              |
     |   |                                                                |
@@ -203,6 +207,7 @@ In a vector index, each vector in a document is given a unique Id. This vector I
          VI   - Vector Index
          VIO  - Vector Index Optimized for
          NVEC - Number of vectors
+         INDEX TYPE - Type of the vector index
          FAISS LEN - Length of serialized FAISS index
 
 ## Synonym Index Section
@@ -217,18 +222,18 @@ In a synonyms index, the relationship between a term and its synonyms is represe
         |                                                                |
         |    (Offset)  +~~~~~+----------+...+---+                        |
         |   +--------->|  RL | ROARING64 BITMAP |                        |
-        |   |          +~~~~~+----------+...+---+                        +-------------------+         
-        |   |(Term -> Offset)                                                                |    
+        |   |          +~~~~~+----------+...+---+                        +-------------------+
+        |   |(Term -> Offset)                                                                |
         |   +--------+                                                                       |
-        |            |                            Term ID to Term map (NST Entries)          |   
+        |            |                            Term ID to Term map (NST Entries)          |
         |    +~~~~+~~~~+~~~~~[{~~~~~+~~~~+~~~~~~}{~~~~~+~~~~+~~~~~~}...{~~~~~+~~~~+~~~~~~}]  |
         | +->| VL | VD | NST || TID | TL | Term || TID | TL | Term |   | TID | TL | Term |   |
         | |  +~~~~+~~~~+~~~~~[{~~~~~+~~~~+~~~~~~}{~~~~~+~~~~+~~~~~~}...{~~~~~+~~~~+~~~~~~}]  |
         | |                                                                                  |
         | +----------------------------+                                                     |
-        |                              |                                                     |   
+        |                              |                                                     |
         | +~~~~~~~~~~+~~~~~~~~+~~~~~~~~~~~~~~~~~+                                            |
-    +-----> DV Start | DV End | ThesaurusOffset |                                            |   
+    +-----> DV Start | DV End | ThesaurusOffset |                                            |
     |   | +~~~~~~~~~~+~~~~~~~~+~~~~~~~~~~~~~~~~~+                        +-------------------+
     |   |                                                                |
     |   |                                                                |

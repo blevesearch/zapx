@@ -105,7 +105,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			if _, ok := sb.fieldsMap[fieldName]; !ok {
 				continue
 			}
-			// early exit if field is is not required to be indexed
+			// early exit if field is not required to be indexed
 			if !vo.fieldsOptions[fieldName].IsIndexed() {
 				continue
 			}

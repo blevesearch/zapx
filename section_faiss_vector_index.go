@@ -607,6 +607,12 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			return 0, err
 		}
 
+		n = binary.PutUvarint(tempBuf, 0)
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return 0, err
+		}
+
 		// record the fieldStart value for this section.
 		// write the vecID -> docID mapping
 		// write the index bytes and its length

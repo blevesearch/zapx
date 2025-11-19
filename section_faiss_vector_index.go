@@ -773,6 +773,7 @@ func (v *vectorIndexOpaque) Reset() (err error) {
 	v.vecFieldMap = nil
 	v.vecIDMap = nil
 	v.tmp0 = v.tmp0[:0]
+	v.updatedFields = nil
 
 	v.fieldsOptions = nil
 

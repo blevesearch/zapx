@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -26,14 +27,34 @@ var edgeListCmd = &cobra.Command{
 	Short: "prints the edge list for nested documents",
 	Long:  `The edgeList command will print the edge list for nested documents in the segment.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		edgeList := segment.EdgeList()
-		if len(edgeList) == 0 {
+		edgeListAddr, err := segment.EdgeListAddr()
+		if err != nil {
+			return fmt.Errorf("error getting edge list: %v", err)
+		}
+		data := segment.Data()
+		// read edge list
+		// pos stores the current read position
+		pos := edgeListAddr
+		// read number of nested documents which is also the number of edges
+		numEdges := binary.BigEndian.Uint64(data[pos : pos+8])
+		pos += 8
+		// if no edges or no nested documents, return
+		if numEdges == 0 {
 			fmt.Println("no nested documents present")
 			return nil
 		}
+		// edgeList as a map[node]parent
+		edgeList := make(map[uint64]uint64, numEdges)
+		for i := uint64(0); i < numEdges; i++ {
+			child := binary.BigEndian.Uint64(data[pos : pos+8])
+			pos += 8
+			parent := binary.BigEndian.Uint64(data[pos : pos+8])
+			pos += 8
+			edgeList[child] = parent
+		}
 		// print number of edges / nested documents
 		fmt.Printf("number of edges / nested documents: %d\n", len(edgeList))
-		fmt.Printf("Child Document Number -> Parent Document Number\n")
+		fmt.Printf("child document number -> parent document number\n")
 		for child, parent := range edgeList {
 			fmt.Printf("%d -> %d\n", child, parent)
 		}

@@ -238,8 +238,9 @@ func (s *Segment) loadConfig() error {
 	// read 64-bit num docs
 	s.numDocs = binary.BigEndian.Uint64(s.mm[numDocsOffset : numDocsOffset+8])
 
-	s.incrementBytesRead(uint64(FooterSize))
-	s.SegmentBase.mem = s.mm[:len(s.mm)-FooterSize]
+	footerSize := FooterSize + int(idLen)
+	s.incrementBytesRead(uint64(footerSize))
+	s.SegmentBase.mem = s.mm[:len(s.mm)-footerSize]
 	return nil
 }
 

@@ -104,8 +104,9 @@ func persistFieldsSection(fieldsInv []string, w *CountHashWriter, opaque map[int
 }
 
 // FooterSize is the size of the footer record in bytes
-// crc + ver + chunk + sectionsIndexOffset + stored offset + num docs
-const FooterSize = 4 + 4 + 4 + 8 + 8 + 8
+// crc + id length + ver + chunk + sectionsIndexOffset + stored offset + num docs
+// Does not include the length of the id because it is variable length
+const FooterSize = 4 + 4 + 4 + 4 + 8 + 8 + 8
 
 func persistFooter(numDocs, storedIndexOffset, sectionsIndexOffset uint64,
 	chunkMode, crcBeforeFooter uint32, writerIn io.Writer) error {

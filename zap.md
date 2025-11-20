@@ -248,7 +248,7 @@ In a synonyms index, the relationship between a term and its synonyms is represe
          VD  - Vellum Data (Term -> Offset)
          RL  - Roaring64 Length
          NST - Number of entries in the term ID to term map
-         ML  - Lengtth of the term ID to term map
+         ML  - Length of the term ID to term map
          TID - Term ID (32-bit)
          TL  - Term Length
 

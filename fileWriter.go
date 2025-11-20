@@ -45,29 +45,35 @@ import (
 // within initFileCallbacks.
 
 // Default no-op implementation. Is called before writing any user data to a file.
-var WriterHook func(context []byte) (string, func(data []byte) []byte, error)
+var WriterHook func(context interface{}) (string, func(data []byte) []byte, error)
 
 // Default no-op implementation. Is called after reading any user data from a file.
-var ReaderHook func(id string, context []byte) (func(data []byte) ([]byte, error), error)
+var ReaderHook func(id string, context interface{}) (func(data []byte) ([]byte, error), error)
 
 // fileWriter wraps a CountHashWriter and applies a user provided
 // writer callback to the data being written.
 type fileWriter struct {
 	processor func(data []byte) []byte
-	context   []byte
 	id        string
 	c         *CountHashWriter
 }
 
-func NewFileWriter(c *CountHashWriter, context []byte) (*fileWriter, error) {
+func NewFileWriterEmpty(c *CountHashWriter) *fileWriter {
 	rv := &fileWriter{
-		c:       c,
-		context: context,
+		c: c,
+	}
+
+	return rv
+}
+
+func NewFileWriter(c *CountHashWriter, context interface{}) (*fileWriter, error) {
+	rv := &fileWriter{
+		c: c,
 	}
 
 	if WriterHook != nil {
 		var err error
-		rv.id, rv.processor, err = WriterHook(rv.context)
+		rv.id, rv.processor, err = WriterHook(context)
 		if err != nil {
 			return nil, err
 		}
@@ -139,6 +145,10 @@ func newContext() ([]byte, error) {
 }
 
 func getIdContext(data []byte) (string, []byte, error) {
+	if len(data) == 0 {
+		return "", nil, nil
+	}
+
 	if len(data) < 8 {
 		return "", nil, fmt.Errorf("length should be greater than 8")
 	}

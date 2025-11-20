@@ -73,12 +73,7 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 
 	// wrap it for counting (tracking offsets)
 	cr := NewCountHashWriterWithStatsReporter(br, s)
-	writerContext, err := newContext()
-	if err != nil {
-		cleanup()
-		return nil, 0, err
-	}
-	w, err := NewFileWriter(cr, writerContext)
+	w, err := NewFileWriter(cr, []byte(path))
 	if err != nil {
 		cleanup()
 		return nil, 0, err
@@ -93,7 +88,7 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 
 	// passing the sectionsIndexOffset as fieldsIndexOffset and the docValueOffset as 0 for the footer
 	err = persistFooter(numDocs, storedIndexOffset, sectionsIndexOffset, sectionsIndexOffset,
-		0, chunkMode, cr.Sum32(), w, w.id, w.context)
+		0, chunkMode, cr.Sum32(), w, w.id)
 	if err != nil {
 		cleanup()
 		return nil, 0, err

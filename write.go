@@ -114,7 +114,7 @@ const FooterSize = 4 + 4 + 4 + 8 + 8 + 8 + 8 + 8
 
 // in the index sections format, the fieldsIndexOffset points to the sectionsIndexOffset
 func persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, sectionsIndexOffset, docValueOffset uint64,
-	chunkMode uint32, crcBeforeFooter uint32, writerIn io.Writer, writerId string, writerContext []byte) error {
+	chunkMode uint32, crcBeforeFooter uint32, writerIn io.Writer, writerId string) error {
 	w := NewCountHashWriter(writerIn)
 	w.crc = crcBeforeFooter
 
@@ -156,13 +156,13 @@ func persistFooter(numDocs, storedIndexOffset, fieldsIndexOffset, sectionsIndexO
 		return err
 	}
 
-	buf := append([]byte(writerId), writerContext...)
 	// write out the length of the writer id and the writer id
-	_, err = w.Write(buf)
+	_, err = w.Write([]byte(writerId))
 	if err != nil {
 		return err
 	}
-	err = binary.Write(w, binary.BigEndian, uint32(len(buf)))
+
+	err = binary.Write(w, binary.BigEndian, uint32(len(writerId)))
 	if err != nil {
 		return err
 	}

@@ -139,14 +139,14 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 				indexOptimizedFor: index.VectorIndexOptimizationsReverseLookup[int(indexOptimizationTypeInt)],
 			})
 
-			idMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			mapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
-			buf, err := sb.fileReader.process(sb.mem[pos : pos+int(idMapLen)])
+			buf, err := sb.fileReader.process(sb.mem[pos : pos+int(mapLen)])
 			if err != nil {
 				return err
 			}
-			pos += int(idMapLen)
+			pos += int(mapLen)
 
 			bufPos := 0
 			bufLen := len(buf)
@@ -236,8 +236,8 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *fileWriter,
 
 	for vecID, docID := range vecToDocID {
 		// write the vecID
-		pos += binary.PutVarint(idBuf, vecID)
-		pos += binary.PutUvarint(idBuf, docID)
+		pos += binary.PutVarint(idBuf[pos:], vecID)
+		pos += binary.PutUvarint(idBuf[pos:], docID)
 	}
 	idBuf = w.process(idBuf[:pos])
 
@@ -315,7 +315,11 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		}
 
 		// read the index bytes. todo: parallelize this
-		indexBytes := w.process(segBase.mem[vecIndexes[segI].startOffset : vecIndexes[segI].startOffset+int(vecIndexes[segI].indexSize)])
+		indexBytes, err := segBase.fileReader.process(segBase.mem[vecIndexes[segI].startOffset : vecIndexes[segI].startOffset+int(vecIndexes[segI].indexSize)])
+		if err != nil {
+			freeReconstructedIndexes(vecIndexes)
+			return err
+		}
 		index, err := faiss.ReadIndexFromBuffer(indexBytes, faissIOFlags)
 		if err != nil {
 			freeReconstructedIndexes(vecIndexes)

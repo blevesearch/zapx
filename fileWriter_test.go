@@ -23,33 +23,30 @@ import (
 	"crypto/rand"
 	"fmt"
 	"testing"
-
-	crypto "github.com/couchbase/gocbcrypto"
 )
 
 func initFileCallbacks(t *testing.T) {
-	encryptionKey := make([]byte, 32)
-	if _, err := rand.Read(encryptionKey); err != nil {
-		panic("failed to generate AES key: " + err.Error())
-	}
-
 	key := make([]byte, 32)
 	keyId := "test-key-id"
-	label := []byte("test-label")
 
 	if _, err := rand.Read(key); err != nil {
 		panic("Failed to generate random key: " + err.Error())
 	}
 
-	WriterHook = func(context []byte) (string, func(data []byte) []byte, error) {
+	WriterHook = func(context interface{}) (string, func(data []byte) []byte, error) {
 
-		derivedKey := make([]byte, 32)
-		derivedKey, err := crypto.OpenSSLKBKDFDeriveKey(key, label, context, derivedKey, "SHA2-256", "")
-		if err != nil {
-			return "", nil, err
+		if context == nil {
+			return "", func(data []byte) []byte {
+				return data
+			}, nil
 		}
 
-		block, err := aes.NewCipher(derivedKey)
+		_, ok := context.([]byte)
+		if !ok {
+			return "", nil, fmt.Errorf("invalid context type")
+		}
+
+		block, err := aes.NewCipher(key)
 		if err != nil {
 			panic("Failed to create AES cipher: " + err.Error())
 		}
@@ -81,18 +78,24 @@ func initFileCallbacks(t *testing.T) {
 		return keyId, writerCallback, nil
 	}
 
-	ReaderHook = func(id string, context []byte) (func(data []byte) ([]byte, error), error) {
+	ReaderHook = func(id string, context interface{}) (func(data []byte) ([]byte, error), error) {
+
+		if id == "" {
+			return func(data []byte) ([]byte, error) {
+				return data, nil
+			}, nil
+		}
+
 		if id != keyId {
 			return nil, fmt.Errorf("unknown callback ID: %s", id)
 		}
 
-		derivedKey := make([]byte, 32)
-		derivedKey, err := crypto.OpenSSLKBKDFDeriveKey(key, label, context, derivedKey, "SHA2-256", "")
-		if err != nil {
-			return nil, err
+		_, ok := context.([]byte)
+		if !ok {
+			return nil, fmt.Errorf("invalid context type")
 		}
 
-		block, err := aes.NewCipher(derivedKey)
+		block, err := aes.NewCipher(key)
 		if err != nil {
 			panic("Failed to create AES cipher: " + err.Error())
 		}

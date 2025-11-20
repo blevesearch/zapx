@@ -65,15 +65,8 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 	var err error
 	s.results = results
 	s.chunkMode = chunkMode
-	context, err := newContext()
-	if err != nil {
-		return nil, uint64(0), err
-	}
 
-	s.w, err = NewFileWriter(NewCountHashWriter(&br), context)
-	if err != nil {
-		return nil, uint64(0), err
-	}
+	s.w = NewFileWriterEmpty(NewCountHashWriter(&br))
 
 	storedIndexOffset, sectionsIndexOffset, err := s.convert()
 	if err != nil {
@@ -81,7 +74,7 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 	}
 
 	sb, err := InitSegmentBase(br.Bytes(), s.w.Sum32(), chunkMode,
-		uint64(len(results)), storedIndexOffset, sectionsIndexOffset, s.w.id, s.w.context)
+		uint64(len(results)), storedIndexOffset, sectionsIndexOffset, s.w.id)
 
 	// get the bytes written before the interim's reset() call
 	// write it to the newly formed segment base.

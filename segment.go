@@ -73,7 +73,7 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 		return nil, err
 	}
 
-	rv.fileReader, err = NewFileReader(rv.writerId, rv.writerContext)
+	rv.fileReader, err = NewFileReader(rv.writerId, []byte(rv.path))
 	if err != nil {
 		_ = rv.Close()
 		return nil, err
@@ -116,7 +116,6 @@ type SegmentBase struct {
 	fieldDvNames        []string                     // field names cached in fieldDvReaders
 	size                uint64
 	writerId            string
-	writerContext       []byte
 	fileReader          *fileReader
 
 	updatedFields map[string]*index.UpdateFieldInfo
@@ -216,17 +215,13 @@ func (s *Segment) DecRef() (err error) {
 }
 
 func (s *Segment) loadConfig() error {
-	var err error
 	crcOffset := len(s.mm) - 4
 	s.crc = binary.BigEndian.Uint32(s.mm[crcOffset : crcOffset+4])
 
 	idLenOffset := crcOffset - 4
 	idLen := binary.BigEndian.Uint32(s.mm[idLenOffset : idLenOffset+4])
 	idOffset := idLenOffset - int(idLen)
-	s.writerId, s.writerContext, err = getIdContext(s.mm[idOffset : idOffset+int(idLen)])
-	if err != nil {
-		return fmt.Errorf("failed to get writer ID and context: %w", err)
-	}
+	s.writerId = string(s.mm[idOffset : idOffset+int(idLen)])
 
 	verOffset := idOffset - 4
 	s.version = binary.BigEndian.Uint32(s.mm[verOffset : verOffset+4])

@@ -532,7 +532,8 @@ func writeSynTermMap(synTermMap map[uint32]string, w *CountHashWriter, bufMaxVar
 		return err
 	}
 
-	n = binary.PutUvarint(bufMaxVarintLen64, uint64(0))
+	// write the size of the term map (unused for now)
+	n = binary.PutUvarint(bufMaxVarintLen64, 0)
 	_, err = w.Write(bufMaxVarintLen64[:n])
 	if err != nil {
 		return err

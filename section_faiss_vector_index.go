@@ -123,6 +123,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
+			// read the vector optimized for value
 			_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
@@ -133,7 +134,8 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
-			_, n = binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			// read the length of the vector to docID map (unused for now)
+			_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
 			vecSegs = append(vecSegs, sb)
@@ -238,7 +240,8 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter
 		}
 	}
 
-	n = binary.PutUvarint(tempBuf, uint64(0))
+	// write the size of the vector to docID map (unused for now)
+	n = binary.PutUvarint(tempBuf, 0)
 	_, err = w.Write(tempBuf[:n])
 	if err != nil {
 		return err
@@ -591,6 +594,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			}
 		}
 
+		// write the size of the vector to docID map (unused for now)
 		n = binary.PutUvarint(tempBuf, 0)
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {

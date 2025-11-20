@@ -204,21 +204,19 @@ func (s *Segment) DecRef() (err error) {
 func (s *Segment) loadConfig() error {
 	// read offsets of 32 bit values - crc, ver, chunk
 	crcOffset := len(s.mm) - 4
-	idLenOffset := crcOffset - 4
-
-	// read 32-bit crc
-	s.crc = binary.BigEndian.Uint32(s.mm[crcOffset : crcOffset+4])
-
-	idLen := binary.BigEndian.Uint32(s.mm[idLenOffset : idLenOffset+4])
-
-	idOffset := idLenOffset - int(idLen)
-	verOffset := idOffset - 4
+	verOffset := crcOffset - 4
 	chunkOffset := verOffset - 4
 
 	// read offsets of 64 bit values - sectionsIndexOffset, storedIndexOffset, numDocsOffset
 	sectionsIndexOffset := chunkOffset - 8
 	storedIndexOffset := sectionsIndexOffset - 8
 	numDocsOffset := storedIndexOffset - 8
+
+	// read offsets for the writer id length (unused for now)
+	idLenOffset := numDocsOffset - 4
+
+	// read 32-bit crc
+	s.crc = binary.BigEndian.Uint32(s.mm[crcOffset : crcOffset+4])
 
 	// read 32-bit version
 	s.version = binary.BigEndian.Uint32(s.mm[verOffset : verOffset+4])
@@ -237,6 +235,9 @@ func (s *Segment) loadConfig() error {
 
 	// read 64-bit num docs
 	s.numDocs = binary.BigEndian.Uint64(s.mm[numDocsOffset : numDocsOffset+8])
+
+	// read the length of the id (unused for now)
+	idLen := binary.BigEndian.Uint32(s.mm[idLenOffset : idLenOffset+4])
 
 	footerSize := FooterSize + int(idLen)
 	s.incrementBytesRead(uint64(footerSize))

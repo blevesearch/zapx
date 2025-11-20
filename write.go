@@ -113,8 +113,23 @@ func persistFooter(numDocs, storedIndexOffset, sectionsIndexOffset uint64,
 	w := NewCountHashWriter(writerIn)
 	w.crc = crcBeforeFooter
 
+	// To be replaced with writer id (unused for now)
+	tempId := []byte("")
+
+	// Write the writer id
+	err := binary.Write(w, binary.BigEndian, tempId)
+	if err != nil {
+		return err
+	}
+
+	// Write the length of the writer id
+	err = binary.Write(w, binary.BigEndian, uint32(len(tempId)))
+	if err != nil {
+		return err
+	}
+
 	// write out the number of docs
-	err := binary.Write(w, binary.BigEndian, numDocs)
+	err = binary.Write(w, binary.BigEndian, numDocs)
 	if err != nil {
 		return err
 	}
@@ -139,18 +154,6 @@ func persistFooter(numDocs, storedIndexOffset, sectionsIndexOffset uint64,
 
 	// write out 32-bit version
 	err = binary.Write(w, binary.BigEndian, Version)
-	if err != nil {
-		return err
-	}
-
-	// To be replaced with writer id
-	tempId := []byte("")
-	err = binary.Write(w, binary.BigEndian, tempId)
-	if err != nil {
-		return err
-	}
-
-	err = binary.Write(w, binary.BigEndian, uint32(len(tempId)))
 	if err != nil {
 		return err
 	}

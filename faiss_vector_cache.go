@@ -127,7 +127,8 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	numVecs, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
-	_, n := binary.Varint(mem[pos : pos+binary.MaxVarintLen64])
+	// read the length of the vector to docID map (unused for now)
+	_, n = binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
 	vecDocIDMap = make(map[int64]uint32, numVecs)

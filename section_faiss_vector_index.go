@@ -162,6 +162,10 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 				}
 			}
 
+			// read the type of vector index (unused for now)
+			_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+
 			indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
@@ -242,6 +246,7 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter
 func (v *vectorIndexOpaque) flushVectorIndex(indexBytes []byte, w *CountHashWriter) error {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 
+	// write the type of the vector index (unused for now)
 	n := binary.PutUvarint(tempBuf, 0)
 	_, err := w.Write(tempBuf[:n])
 	if err != nil {
@@ -594,6 +599,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			return 0, err
 		}
 
+		// write the type of the vector index (unused for now)
 		n = binary.PutUvarint(tempBuf, 0)
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {

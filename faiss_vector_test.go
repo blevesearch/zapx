@@ -345,6 +345,10 @@ func getSectionContentOffsets(sb *SegmentBase, offset uint64) (
 		pos += uint64(n)
 	}
 
+	// read the type of vector index (unused for now)
+	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+
 	indexBytesLen, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 

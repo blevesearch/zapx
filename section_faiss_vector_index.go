@@ -224,6 +224,13 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter
 		return err
 	}
 
+	// write the size of the vector to docID map (unused for now)
+	n = binary.PutUvarint(tempBuf, 0)
+	_, err = w.Write(tempBuf[:n])
+	if err != nil {
+		return err
+	}
+
 	for vecID, docID := range vecToDocID {
 		// write the vecID
 		n = binary.PutVarint(tempBuf, vecID)
@@ -238,13 +245,6 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter
 		if err != nil {
 			return err
 		}
-	}
-
-	// write the size of the vector to docID map (unused for now)
-	n = binary.PutUvarint(tempBuf, 0)
-	_, err = w.Write(tempBuf[:n])
-	if err != nil {
-		return err
 	}
 
 	v.fieldAddrs[uint16(fieldID)] = fieldStart
@@ -572,6 +572,13 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			return 0, err
 		}
 
+		// write the size of the vector to docID map (unused for now)
+		n = binary.PutUvarint(tempBuf, 0)
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return 0, err
+		}
+
 		// fixme: this can cause a write amplification. need to improve this.
 		// todo: might need to a reformating to optimize according to mmap needs.
 		// reformating idea: storing all the IDs mapping towards the end of the
@@ -592,13 +599,6 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) (offset uint
 			if err != nil {
 				return 0, err
 			}
-		}
-
-		// write the size of the vector to docID map (unused for now)
-		n = binary.PutUvarint(tempBuf, 0)
-		_, err = w.Write(tempBuf[:n])
-		if err != nil {
-			return 0, err
 		}
 
 		// serialize the built index into a byte slice

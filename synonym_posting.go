@@ -110,7 +110,10 @@ func (rv *SynonymsList) read(synonymsOffset uint64, t *Thesaurus) error {
 	synonymsLen, read = binary.Uvarint(t.sb.mem[synonymsOffset+n : synonymsOffset+n+binary.MaxVarintLen64])
 	n += uint64(read)
 
-	roaringBytes := t.sb.mem[synonymsOffset+n : synonymsOffset+n+synonymsLen]
+	roaringBytes, err := t.sb.fileReader.process(t.sb.mem[synonymsOffset+n : synonymsOffset+n+synonymsLen])
+	if err != nil {
+		return err
+	}
 
 	if rv.synonyms == nil {
 		rv.synonyms = roaring64.NewBitmap()
@@ -118,7 +121,7 @@ func (rv *SynonymsList) read(synonymsOffset uint64, t *Thesaurus) error {
 
 	rv.buffer.Reset(roaringBytes)
 
-	_, err := rv.synonyms.ReadFrom(rv.buffer)
+	_, err = rv.synonyms.ReadFrom(rv.buffer)
 	if err != nil {
 		return fmt.Errorf("error loading roaring bitmap: %v", err)
 	}

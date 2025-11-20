@@ -73,9 +73,14 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 
 	// wrap it for counting (tracking offsets)
 	cr := NewCountHashWriterWithStatsReporter(br, s)
+	w, err := NewFileWriter(cr, []byte(path))
+	if err != nil {
+		cleanup()
+		return nil, 0, err
+	}
 
 	newDocNums, numDocs, storedIndexOffset, _, _, sectionsIndexOffset, err :=
-		mergeToWriter(segmentBases, drops, chunkMode, cr, closeCh)
+		mergeToWriter(segmentBases, drops, chunkMode, w, closeCh)
 	if err != nil {
 		cleanup()
 		return nil, 0, err
@@ -83,7 +88,7 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 
 	// passing the sectionsIndexOffset as fieldsIndexOffset and the docValueOffset as 0 for the footer
 	err = persistFooter(numDocs, storedIndexOffset, sectionsIndexOffset, sectionsIndexOffset,
-		0, chunkMode, cr.Sum32(), cr)
+		0, chunkMode, cr.Sum32(), w, w.id)
 	if err != nil {
 		cleanup()
 		return nil, 0, err
@@ -124,7 +129,7 @@ func filterFields(fieldsInv []string, fieldInfo map[string]*index.UpdateFieldInf
 }
 
 func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
-	chunkMode uint32, cr *CountHashWriter, closeCh chan struct{}) (
+	chunkMode uint32, w *fileWriter, closeCh chan struct{}) (
 	newDocNums [][]uint64, numDocs, storedIndexOffset uint64,
 	fieldsInv []string, fieldsMap map[string]uint16, sectionsIndexOffset uint64,
 	err error) {
@@ -155,7 +160,7 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 
 	if numDocs > 0 {
 		storedIndexOffset, newDocNums, err = mergeStoredAndRemap(segments, drops,
-			fieldsMap, fieldsInv, fieldsSame, numDocs, cr, closeCh, updatedFields)
+			fieldsMap, fieldsInv, fieldsSame, numDocs, w, closeCh, updatedFields)
 		if err != nil {
 			return nil, 0, 0, nil, nil, 0, err
 		}
@@ -163,8 +168,7 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		// at this point, ask each section implementation to merge itself
 		for i, x := range segmentSections {
 			mergeOpaque[int(i)] = x.InitOpaque(args)
-
-			err = x.Merge(mergeOpaque, segments, drops, fieldsInv, newDocNums, cr, closeCh)
+			err = x.Merge(mergeOpaque, segments, drops, fieldsInv, newDocNums, w, closeCh)
 			if err != nil {
 				return nil, 0, 0, nil, nil, 0, err
 			}
@@ -173,7 +177,7 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 
 	// we can persist the fields section index now, this will point
 	// to the various indexes (each in different section) available for a field.
-	sectionsIndexOffset, err = persistFieldsSection(fieldsInv, cr, mergeOpaque)
+	sectionsIndexOffset, err = persistFieldsSection(fieldsInv, w, mergeOpaque)
 	if err != nil {
 		return nil, 0, 0, nil, nil, 0, err
 	}
@@ -319,7 +323,7 @@ func mergeTermFreqNormLocs(fieldsMap map[string]uint16, term []byte, postItr *Po
 
 func writePostings(postings *roaring.Bitmap, tfEncoder, locEncoder *chunkedIntCoder,
 	use1HitEncoding func(uint64) (bool, uint64, uint64),
-	w *CountHashWriter, bufMaxVarintLen64 []byte) (
+	w *fileWriter, bufMaxVarintLen64 []byte) (
 	offset uint64, err error) {
 	if postings == nil {
 		return 0, nil
@@ -375,7 +379,7 @@ type varintEncoder func(uint64) (int, error)
 
 func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 	fieldsMap map[string]uint16, fieldsInv []string, fieldsSame bool, newSegDocCount uint64,
-	w *CountHashWriter, closeCh chan struct{}, updatedFields map[string]*index.UpdateFieldInfo) (uint64, [][]uint64, error) {
+	w *fileWriter, closeCh chan struct{}, updatedFields map[string]*index.UpdateFieldInfo) (uint64, [][]uint64, error) {
 	var rv [][]uint64 // The remapped or newDocNums for each segment.
 
 	var newDocNum uint64
@@ -392,6 +396,16 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 	vals := make([][][]byte, len(fieldsInv))
 	typs := make([][]byte, len(fieldsInv))
 	poss := make([][][]uint64, len(fieldsInv))
+
+	// copying data from segments is only possible when
+	// there are no writer callbacks across all segments
+	copyFlag := false
+	for _, segment := range segments {
+		if segment.writerId != "" {
+			copyFlag = true
+			break
+		}
+	}
 
 	var posBuf []uint64
 
@@ -415,7 +429,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 		// segments and there are no deletions, via byte-copying
 		// of stored docs bytes directly to the writer
 		// cannot copy directly if fields might have been deleted
-		if fieldsSame && (dropsI == nil || dropsI.GetCardinality() == 0) && len(updatedFields) == 0 {
+		if fieldsSame && (dropsI == nil || dropsI.GetCardinality() == 0) && copyFlag && w.id == "" && len(updatedFields) == 0 {
 			err := segment.copyStoredDocs(newDocNum, docNumOffsets, w)
 			if err != nil {
 				return 0, nil, err
@@ -517,25 +531,30 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 			// record where we're about to start writing
 			docNumOffsets[newDocNum] = uint64(w.Count())
 
+			bufMeta := w.process(metaBytes)
+
+			// idFieldVal is a pointer to a mem mapped byte slice, so we copy
+			// before merging it with the compressed data
+			buf := make([]byte, 0, len(idFieldVal)+len(compressed))
+			buf = append(buf, idFieldVal...)
+			buf = append(buf, compressed...)
+
+			bufCompressed := w.process(buf)
+
 			// write out the meta len and compressed data len
 			_, err = writeUvarints(w,
-				uint64(len(metaBytes)),
-				uint64(len(idFieldVal)+len(compressed)))
+				uint64(len(bufMeta)),
+				uint64(len(bufCompressed)))
 			if err != nil {
 				return 0, nil, err
 			}
 			// now write the meta
-			_, err = w.Write(metaBytes)
-			if err != nil {
-				return 0, nil, err
-			}
-			// now write the _id field val (counted as part of the 'compressed' data)
-			_, err = w.Write(idFieldVal)
+			_, err = w.Write(bufMeta)
 			if err != nil {
 				return 0, nil, err
 			}
 			// now write the compressed data
-			_, err = w.Write(compressed)
+			_, err = w.Write(bufCompressed)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -564,7 +583,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 // using a single Write() call for the entire set of bytes.  The
 // newDocNumOffsets is filled with the new offsets for each doc.
 func (sb *SegmentBase) copyStoredDocs(newDocNum uint64, newDocNumOffsets []uint64,
-	w *CountHashWriter) error {
+	w *fileWriter) error {
 	if sb.numDocs <= 0 {
 		return nil
 	}

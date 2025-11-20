@@ -26,12 +26,13 @@ type chunkedIntDecoder struct {
 	curChunkBytes   []byte
 	data            []byte
 	r               *memUvarintReader
+	fr              *fileReader
 
 	bytesRead uint64
 }
 
 // newChunkedIntDecoder expects an optional or reset chunkedIntDecoder for better reuse.
-func newChunkedIntDecoder(buf []byte, offset uint64, rv *chunkedIntDecoder) *chunkedIntDecoder {
+func newChunkedIntDecoder(buf []byte, offset uint64, rv *chunkedIntDecoder, fr *fileReader) *chunkedIntDecoder {
 	if rv == nil {
 		rv = &chunkedIntDecoder{startOffset: offset, data: buf}
 	} else {
@@ -59,6 +60,7 @@ func newChunkedIntDecoder(buf []byte, offset uint64, rv *chunkedIntDecoder) *chu
 	}
 	rv.bytesRead += n
 	rv.dataStartOffset = offset + n
+	rv.fr = fr
 	return rv
 }
 
@@ -86,8 +88,13 @@ func (d *chunkedIntDecoder) loadChunk(chunk int) error {
 	s, e := readChunkBoundary(chunk, d.chunkOffsets)
 	start += s
 	end += e
-	d.curChunkBytes = d.data[start:end]
-	d.bytesRead += uint64(len(d.curChunkBytes))
+
+	var err error
+	d.curChunkBytes, err = d.fr.process(d.data[start:end])
+	if err != nil {
+		return fmt.Errorf("error processing chunk %d: %w", chunk, err)
+	}
+	d.bytesRead += end - start
 	if d.r == nil {
 		d.r = newMemUvarintReader(d.curChunkBytes)
 	} else {

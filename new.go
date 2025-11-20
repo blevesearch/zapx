@@ -62,9 +62,11 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 		br.Grow(estimateAvgBytesPerDoc * estimateNumResults)
 	}
 
+	var err error
 	s.results = results
 	s.chunkMode = chunkMode
-	s.w = NewCountHashWriter(&br)
+
+	s.w = NewFileWriterEmpty(NewCountHashWriter(&br))
 
 	storedIndexOffset, sectionsIndexOffset, err := s.convert()
 	if err != nil {
@@ -72,7 +74,7 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 	}
 
 	sb, err := InitSegmentBase(br.Bytes(), s.w.Sum32(), chunkMode,
-		uint64(len(results)), storedIndexOffset, sectionsIndexOffset)
+		uint64(len(results)), storedIndexOffset, sectionsIndexOffset, s.w.id)
 
 	// get the bytes written before the interim's reset() call
 	// write it to the newly formed segment base.
@@ -96,7 +98,7 @@ type interim struct {
 
 	chunkMode uint32
 
-	w *CountHashWriter
+	w *fileWriter
 
 	// FieldsMap adds 1 to field id to avoid zero value issues
 	//  name -> field id + 1
@@ -376,24 +378,22 @@ func (s *interim) writeStoredFields() (
 		s.incrementBytesWritten(uint64(len(compressed)))
 		docStoredOffsets[docNum] = uint64(s.w.Count())
 
-		_, err := writeUvarints(s.w,
-			uint64(len(metaBytes)),
-			uint64(len(idFieldVal)+len(compressed)))
+		bufMeta := s.w.process(metaBytes)
+		bufCompressed := s.w.process(append(idFieldVal, compressed...))
+
+		_, err = writeUvarints(s.w,
+			uint64(len(bufMeta)),
+			uint64(len(bufCompressed)))
 		if err != nil {
 			return 0, err
 		}
 
-		_, err = s.w.Write(metaBytes)
+		_, err = s.w.Write(bufMeta)
 		if err != nil {
 			return 0, err
 		}
 
-		_, err = s.w.Write(idFieldVal)
-		if err != nil {
-			return 0, err
-		}
-
-		_, err = s.w.Write(compressed)
+		_, err = s.w.Write(bufCompressed)
 		if err != nil {
 			return 0, err
 		}

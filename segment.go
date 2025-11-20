@@ -73,6 +73,12 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 		return nil, err
 	}
 
+	rv.fileReader, err = NewFileReader(rv.writerId, []byte(rv.path))
+	if err != nil {
+		_ = rv.Close()
+		return nil, err
+	}
+
 	err = rv.loadFieldsNew()
 	if err != nil {
 		_ = rv.Close()
@@ -109,6 +115,8 @@ type SegmentBase struct {
 	fieldDvReaders      []map[uint16]*docValueReader // naive chunk cache per field; section->field->reader
 	fieldDvNames        []string                     // field names cached in fieldDvReaders
 	size                uint64
+	writerId            string
+	fileReader          *fileReader
 
 	updatedFields map[string]*index.UpdateFieldInfo
 
@@ -210,7 +218,12 @@ func (s *Segment) loadConfig() error {
 	crcOffset := len(s.mm) - 4
 	s.crc = binary.BigEndian.Uint32(s.mm[crcOffset : crcOffset+4])
 
-	verOffset := crcOffset - 4
+	idLenOffset := crcOffset - 4
+	idLen := binary.BigEndian.Uint32(s.mm[idLenOffset : idLenOffset+4])
+	idOffset := idLenOffset - int(idLen)
+	s.writerId = string(s.mm[idOffset : idOffset+int(idLen)])
+
+	verOffset := idOffset - 4
 	s.version = binary.BigEndian.Uint32(s.mm[verOffset : verOffset+4])
 	if Version < IndexSectionsVersion && s.version != Version {
 		return fmt.Errorf("unsupported version %d != %d", s.version, Version)
@@ -385,11 +398,14 @@ func (sb *SegmentBase) loadFieldNew(fieldID uint16, pos uint64,
 	fieldNameLen, sz := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(sz)
 
-	fieldName := string(sb.mem[pos : pos+fieldNameLen])
+	fieldName, err := sb.fileReader.process(sb.mem[pos : pos+fieldNameLen])
+	if err != nil {
+		return err
+	}
 	pos += fieldNameLen
 
-	sb.fieldsInv = append(sb.fieldsInv, fieldName)
-	sb.fieldsMap[fieldName] = uint16(fieldID + 1)
+	sb.fieldsInv = append(sb.fieldsInv, string(fieldName))
+	sb.fieldsMap[string(fieldName)] = uint16(fieldID + 1)
 
 	fieldNumSections, sz := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(sz)
@@ -461,6 +477,11 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 				}
 				fstBytes := sb.mem[dictStart+uint64(read) : dictStart+uint64(read)+vellumLen]
 				rv.incrementBytesRead(uint64(read) + vellumLen)
+				fstBytes, err := sb.fileReader.process(fstBytes)
+				if err != nil {
+					sb.m.Unlock()
+					return nil, err
+				}
 				rv.fst, err = vellum.Load(fstBytes)
 				if err != nil {
 					sb.m.Unlock()
@@ -509,7 +530,7 @@ func (sb *SegmentBase) thesaurus(name string) (rv *Thesaurus, err error) {
 		}
 		thesLoc, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
-		fst, synTermMap, err := sb.synIndexCache.loadOrCreate(rv.fieldID, sb.mem[thesLoc:])
+		fst, synTermMap, err := sb.synIndexCache.loadOrCreate(rv.fieldID, sb.mem[thesLoc:], sb.fileReader)
 		if err != nil {
 			return nil, fmt.Errorf("thesaurus name %s err: %v", name, err)
 		}
@@ -550,7 +571,10 @@ func (sb *SegmentBase) visitStoredFields(vdc *visitDocumentCtx, num uint64,
 	visitor segment.StoredFieldValueVisitor) error {
 	// first make sure this is a valid number in this segment
 	if num < sb.numDocs {
-		meta, compressed := sb.getDocStoredMetaAndCompressed(num)
+		meta, compressed, err := sb.getDocStoredMetaAndCompressed(num)
+		if err != nil {
+			return err
+		}
 
 		vdc.reader.Reset(meta)
 
@@ -630,7 +654,10 @@ func (sb *SegmentBase) DocID(num uint64) ([]byte, error) {
 
 	vdc := visitDocumentCtxPool.Get().(*visitDocumentCtx)
 
-	meta, compressed := sb.getDocStoredMetaAndCompressed(num)
+	meta, compressed, err := sb.getDocStoredMetaAndCompressed(num)
+	if err != nil {
+		return nil, err
+	}
 
 	vdc.reader.Reset(meta)
 
@@ -964,4 +991,8 @@ func (s *SegmentBase) GetUpdatedFields() map[string]*index.UpdateFieldInfo {
 // Setter method to store updateFieldInfo within segment base
 func (s *SegmentBase) SetUpdatedFields(updatedFields map[string]*index.UpdateFieldInfo) {
 	s.updatedFields = updatedFields
+}
+
+func (sb *SegmentBase) CallbackId() string {
+	return sb.writerId
 }

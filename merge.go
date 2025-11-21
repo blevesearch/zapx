@@ -121,6 +121,38 @@ func filterFields(fieldsInv []string, fieldInfo map[string]*index.UpdateFieldInf
 	return fieldsInv[:idx]
 }
 
+// Update field options using updateFieldInfo to override the options
+// selected during mergeFields, if needed. This includes removing field
+// options for deleted fields and updating options for fields with changes
+// that have not yet been propagated because a new segment has not been created.
+func finalizeFieldOptions(fieldOptions map[string]index.FieldIndexingOptions,
+	updatedFields map[string]*index.UpdateFieldInfo) map[string]index.FieldIndexingOptions {
+	for field, opts := range fieldOptions {
+		if info, ok := updatedFields[field]; ok {
+			// if field is deleted, remove its options
+			if info.Deleted {
+				delete(fieldOptions, field)
+				continue
+			}
+			// otherwise, update options based on info
+			if info.Index {
+				// ensure indexing is disabled
+				opts &^= index.IndexField
+			}
+			if info.Store {
+				// ensure storing is disabled
+				opts &^= index.StoreField
+			}
+			if info.DocValues {
+				// ensure doc values is disabled
+				opts &^= index.DocValues
+			}
+			fieldOptions[field] = opts
+		}
+	}
+	return fieldOptions
+}
+
 func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	chunkMode uint32, cr *CountHashWriter, closeCh chan struct{}) (
 	newDocNums [][]uint64, numDocs, storedIndexOffset uint64,
@@ -128,10 +160,16 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	err error) {
 
 	var fieldsSame bool
-	fieldsSame, fieldsInv = mergeFields(segments)
+	var fieldsOptions map[string]index.FieldIndexingOptions
+	fieldsSame, fieldsInv, fieldsOptions = mergeFields(segments)
 	updatedFields := mergeUpdatedFields(segments)
 	fieldsInv = filterFields(fieldsInv, updatedFields)
 	fieldsMap = mapFields(fieldsInv)
+	fieldsOptions = finalizeFieldOptions(fieldsOptions, updatedFields)
+	// fieldsSame cannot be true if fields were deleted
+	if len(updatedFields) > 0 {
+		fieldsSame = false
+	}
 
 	numDocs = computeNewDocCount(segments, drops)
 
@@ -148,12 +186,12 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		"fieldsSame":    fieldsSame,
 		"fieldsMap":     fieldsMap,
 		"numDocs":       numDocs,
-		"updatedFields": updatedFields,
+		"fieldsOptions": fieldsOptions,
 	}
 
 	if numDocs > 0 {
 		storedIndexOffset, newDocNums, err = mergeStoredAndRemap(segments, drops,
-			fieldsMap, fieldsInv, fieldsSame, numDocs, cr, closeCh, updatedFields)
+			fieldsMap, fieldsInv, fieldsOptions, fieldsSame, numDocs, cr, closeCh)
 		if err != nil {
 			return nil, 0, 0, nil, nil, 0, err
 		}
@@ -171,7 +209,7 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 
 	// we can persist the fields section index now, this will point
 	// to the various indexes (each in different section) available for a field.
-	sectionsIndexOffset, err = persistFieldsSection(fieldsInv, cr, mergeOpaque)
+	sectionsIndexOffset, err = persistFieldsSection(fieldsInv, fieldsOptions, cr, mergeOpaque)
 	if err != nil {
 		return nil, 0, 0, nil, nil, 0, err
 	}
@@ -372,8 +410,10 @@ func writePostings(postings *roaring.Bitmap, tfEncoder, locEncoder *chunkedIntCo
 type varintEncoder func(uint64) (int, error)
 
 func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
-	fieldsMap map[string]uint16, fieldsInv []string, fieldsSame bool, newSegDocCount uint64,
-	w *CountHashWriter, closeCh chan struct{}, updatedFields map[string]*index.UpdateFieldInfo) (uint64, [][]uint64, error) {
+	fieldsMap map[string]uint16, fieldsInv []string,
+	fieldsOptions map[string]index.FieldIndexingOptions,
+	fieldsSame bool, newSegDocCount uint64,
+	w *CountHashWriter, closeCh chan struct{}) (uint64, [][]uint64, error) {
 	var rv [][]uint64 // The remapped or newDocNums for each segment.
 
 	var newDocNum uint64
@@ -413,7 +453,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 		// segments and there are no deletions, via byte-copying
 		// of stored docs bytes directly to the writer
 		// cannot copy directly if fields might have been deleted
-		if fieldsSame && (dropsI == nil || dropsI.GetCardinality() == 0) && len(updatedFields) == 0 {
+		if fieldsSame && (dropsI == nil || dropsI.GetCardinality() == 0) {
 			err := segment.copyStoredDocs(newDocNum, docNumOffsets, w)
 			if err != nil {
 				return 0, nil, err
@@ -456,8 +496,8 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 					// no entry for field in fieldsMap
 					return false
 				}
-				// early exit if the stored portion of the field is deleted
-				if val, ok := updatedFields[fieldsInv[fieldID]]; ok && val.Store {
+				// early exit if the store is not wanted for this field
+				if !fieldsOptions[field].IsStored() {
 					return true
 				}
 				vals[fieldID] = append(vals[fieldID], value)
@@ -491,8 +531,12 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 
 			// now walk the non-"_id" fields in order
 			for fieldID := 1; fieldID < len(fieldsInv); fieldID++ {
-				// early exit if the stored portion of the field is deleted
-				if val, ok := updatedFields[fieldsInv[fieldID]]; ok && val.Store {
+				// early exit if the store is not wanted for this field
+				if !fieldsOptions[fieldsInv[fieldID]].IsStored() {
+					continue
+				}
+				// early exit if no stored values for this field
+				if len(vals[fieldID]) == 0 {
 					continue
 				}
 				storedFieldValues := vals[fieldID]
@@ -597,7 +641,7 @@ func (sb *SegmentBase) copyStoredDocs(newDocNum uint64, newDocNumOffsets []uint6
 // input segments, and computes whether the fields are the same across
 // segments (which depends on fields to be sorted in the same way
 // across segments)
-func mergeFields(segments []*SegmentBase) (bool, []string) {
+func mergeFields(segments []*SegmentBase) (bool, []string, map[string]index.FieldIndexingOptions) {
 	fieldsSame := true
 
 	var segment0Fields []string
@@ -606,10 +650,26 @@ func mergeFields(segments []*SegmentBase) (bool, []string) {
 	}
 
 	fieldsExist := map[string]struct{}{}
+	fieldOptions := map[string]index.FieldIndexingOptions{}
 	for _, segment := range segments {
 		fields := segment.Fields()
 		for fieldi, field := range fields {
 			fieldsExist[field] = struct{}{}
+
+			if prev, ok := fieldOptions[field]; ok {
+				// Merge options conservatively: once a field option is disabled (bit cleared)
+				// in any segment, it remains disabled. This ensures deterministic behavior
+				// when options can only transition from true -> false.
+				fieldOptions[field] = prev & segment.fieldsOptions[field]
+				// check if any bits were cleared
+				if fieldOptions[field] != prev {
+					// Some bits were cleared (option changed from true -> false)
+					fieldsSame = false
+				}
+			} else {
+				// first occurrence of the field
+				fieldOptions[field] = segment.fieldsOptions[field]
+			}
 			if len(segment0Fields) != len(fields) || segment0Fields[fieldi] != field {
 				fieldsSame = false
 			}
@@ -627,7 +687,7 @@ func mergeFields(segments []*SegmentBase) (bool, []string) {
 
 	sort.Strings(rv[1:]) // leave _id as first
 
-	return fieldsSame, rv
+	return fieldsSame, rv, fieldOptions
 }
 
 // Combine updateFieldInfo from all segments
@@ -639,8 +699,10 @@ func mergeUpdatedFields(segments []*SegmentBase) map[string]*index.UpdateFieldIn
 			if fieldInfo == nil {
 				fieldInfo = make(map[string]*index.UpdateFieldInfo)
 			}
+			// if field not present, add it
 			if _, ok := fieldInfo[field]; !ok {
 				fieldInfo[field] = &index.UpdateFieldInfo{
+					// mark whether field is deleted in any segment
 					Deleted:   info.Deleted,
 					Index:     info.Index,
 					Store:     info.Store,
@@ -650,7 +712,7 @@ func mergeUpdatedFields(segments []*SegmentBase) map[string]*index.UpdateFieldIn
 				fieldInfo[field].Deleted = fieldInfo[field].Deleted || info.Deleted
 				fieldInfo[field].Index = fieldInfo[field].Index || info.Index
 				fieldInfo[field].Store = fieldInfo[field].Store || info.Store
-				fieldInfo[field].DocValues = fieldInfo[field].Store || info.DocValues
+				fieldInfo[field].DocValues = fieldInfo[field].DocValues || info.DocValues
 			}
 		}
 

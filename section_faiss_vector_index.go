@@ -105,8 +105,8 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			if _, ok := sb.fieldsMap[fieldName]; !ok {
 				continue
 			}
-			// early exit if index data is supposed to be deleted
-			if info, ok := vo.updatedFields[fieldName]; ok && info.Index {
+			// early exit if field is not required to be indexed
+			if !vo.fieldsOptions[fieldName].IsIndexed() {
 				continue
 			}
 
@@ -690,10 +690,9 @@ func (v *faissVectorIndexSection) getvectorIndexOpaque(opaque map[int]resetable)
 
 func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) resetable {
 	rv := &vectorIndexOpaque{
-		fieldAddrs:    make(map[uint16]int),
-		vecIDMap:      make(map[int64]*vecInfo),
-		vecFieldMap:   make(map[uint16]*indexContent),
-		updatedFields: make(map[string]*index.UpdateFieldInfo),
+		fieldAddrs:  make(map[uint16]int),
+		vecIDMap:    make(map[int64]*vecInfo),
+		vecFieldMap: make(map[uint16]*indexContent),
 	}
 	for k, v := range args {
 		rv.Set(k, v)
@@ -732,7 +731,8 @@ type vectorIndexOpaque struct {
 	// index to be build.
 	vecFieldMap map[uint16]*indexContent
 
-	updatedFields map[string]*index.UpdateFieldInfo
+	// field indexing options
+	fieldsOptions map[string]index.FieldIndexingOptions
 
 	tmp0 []byte
 }
@@ -773,7 +773,8 @@ func (v *vectorIndexOpaque) Reset() (err error) {
 	v.vecFieldMap = nil
 	v.vecIDMap = nil
 	v.tmp0 = v.tmp0[:0]
-	v.updatedFields = nil
+
+	v.fieldsOptions = nil
 
 	atomic.StoreUint64(&v.bytesWritten, 0)
 
@@ -782,7 +783,7 @@ func (v *vectorIndexOpaque) Reset() (err error) {
 
 func (v *vectorIndexOpaque) Set(key string, val interface{}) {
 	switch key {
-	case "updatedFields":
-		v.updatedFields = val.(map[string]*index.UpdateFieldInfo)
+	case "fieldsOptions":
+		v.fieldsOptions = val.(map[string]index.FieldIndexingOptions)
 	}
 }

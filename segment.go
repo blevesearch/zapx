@@ -54,6 +54,7 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 	rv := &Segment{
 		SegmentBase: SegmentBase{
 			fieldsMap:      make(map[string]uint16),
+			fieldsOptions:  make(map[string]index.FieldIndexingOptions),
 			invIndexCache:  newInvertedIndexCache(),
 			vecIndexCache:  newVectorIndexCache(),
 			synIndexCache:  newSynonymIndexCache(),
@@ -96,9 +97,10 @@ type SegmentBase struct {
 	mem                 []byte
 	memCRC              uint32
 	chunkMode           uint32
-	fieldsMap           map[string]uint16   // fieldName -> fieldID+1
-	fieldsInv           []string            // fieldID -> fieldName
-	fieldsSectionsMap   []map[uint16]uint64 // fieldID -> section -> address
+	fieldsMap           map[string]uint16                     // fieldName -> fieldID+1
+	fieldsOptions       map[string]index.FieldIndexingOptions // fieldName -> fieldOptions
+	fieldsInv           []string                              // fieldID -> fieldName
+	fieldsSectionsMap   []map[uint16]uint64                   // fieldID -> section -> address
 	numDocs             uint64
 	storedIndexOffset   uint64
 	sectionsIndexOffset uint64
@@ -126,6 +128,11 @@ func (sb *SegmentBase) updateSize() {
 	// fieldsMap
 	for k := range sb.fieldsMap {
 		sizeInBytes += (len(k) + SizeOfString) + SizeOfUint16
+	}
+
+	// fieldsOptions
+	for k := range sb.fieldsOptions {
+		sizeInBytes += (len(k) + SizeOfString) + SizeOfUint64
 	}
 
 	// fieldsInv
@@ -341,8 +348,13 @@ func (sb *SegmentBase) loadField(fieldID uint16, pos uint64,
 	fieldName := string(sb.mem[pos : pos+fieldNameLen])
 	pos += fieldNameLen
 
+	// read field options
+	fieldOptions, sz := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(sz)
+
 	sb.fieldsInv = append(sb.fieldsInv, fieldName)
 	sb.fieldsMap[fieldName] = uint16(fieldID + 1)
+	sb.fieldsOptions[fieldName] = index.FieldIndexingOptions(fieldOptions)
 
 	fieldNumSections, sz := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(sz)

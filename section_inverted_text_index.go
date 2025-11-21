@@ -80,9 +80,8 @@ func (i *invertedTextIndexSection) AddrForField(opaque map[int]resetable, fieldI
 }
 
 func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
-	fieldsInv []string, fieldsMap map[string]uint16, fieldsSame bool,
-	newDocNumsIn [][]uint64, newSegDocCount uint64, chunkMode uint32,
-	updatedFields map[string]*index.UpdateFieldInfo, w *CountHashWriter,
+	fieldsInv []string, fieldsMap map[string]uint16, fieldsOptions map[string]index.FieldIndexingOptions,
+	fieldsSame bool, newDocNumsIn [][]uint64, newSegDocCount uint64, chunkMode uint32, w *CountHashWriter,
 	closeCh chan struct{}) (map[int]int, uint64, error) {
 	var bufMaxVarintLen64 []byte = make([]byte, binary.MaxVarintLen64)
 	var bufLoc []uint64
@@ -126,8 +125,8 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			if isClosed(closeCh) {
 				return nil, 0, seg.ErrClosed
 			}
-			// early exit if index data is supposed to be deleted
-			if info, ok := updatedFields[fieldName]; ok && info.Index {
+			// early exit if the field's index option is false
+			if !fieldsOptions[fieldName].IsIndexed() {
 				continue
 			}
 
@@ -249,8 +248,8 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 
 			postItr = postings.iterator(true, true, true, postItr)
 
-			// can only safely copy data if no field data has been deleted
-			if fieldsSame && len(updatedFields) == 0 {
+			// can only safely copy data if all segments have same fields
+			if fieldsSame {
 				// can optimize by copying freq/norm/loc bytes directly
 				lastDocNum, lastFreq, lastNorm, err = mergeTermFreqNormLocsByCopying(
 					term, postItr, newDocNums[itrI], newRoaring,
@@ -323,8 +322,8 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			if isClosed(closeCh) {
 				return nil, 0, seg.ErrClosed
 			}
-			// early exit if docvalues data is supposed to be deleted
-			if info, ok := updatedFields[fieldName]; ok && info.DocValues {
+			// early exit if docvalues are not wanted for this field
+			if !fieldsOptions[fieldName].IncludeDocValues() {
 				continue
 			}
 			fieldIDPlus1 := uint16(segment.fieldsMap[fieldName])
@@ -407,7 +406,7 @@ func (i *invertedTextIndexSection) Merge(opaque map[int]resetable, segments []*S
 	w *CountHashWriter, closeCh chan struct{}) error {
 	io := i.getInvertedIndexOpaque(opaque)
 	fieldAddrs, _, err := mergeAndPersistInvertedSection(segments, drops, fieldsInv,
-		io.FieldsMap, io.fieldsSame, newDocNumsIn, io.numDocs, io.chunkMode, io.updatedFields, w, closeCh)
+		io.FieldsMap, io.FieldsOptions, io.fieldsSame, newDocNumsIn, io.numDocs, io.chunkMode, w, closeCh)
 	if err != nil {
 		return err
 	}
@@ -953,8 +952,7 @@ func (i *invertedIndexOpaque) getOrDefineField(fieldName string) int {
 
 func (i *invertedTextIndexSection) InitOpaque(args map[string]interface{}) resetable {
 	rv := &invertedIndexOpaque{
-		fieldAddrs:    map[int]int{},
-		updatedFields: map[string]*index.UpdateFieldInfo{},
+		fieldAddrs: map[int]int{},
 	}
 	for k, v := range args {
 		rv.Set(k, v)
@@ -980,6 +978,10 @@ type invertedIndexOpaque struct {
 	// FieldsInv is the inverse of FieldsMap
 	//  field id -> name
 	FieldsInv []string
+
+	// Field indexing options
+	//  field name -> options
+	FieldsOptions map[string]index.FieldIndexingOptions
 
 	// Term dictionaries for each field
 	//  field id -> term -> postings list id + 1
@@ -1023,8 +1025,6 @@ type invertedIndexOpaque struct {
 
 	fieldAddrs map[int]int
 
-	updatedFields map[string]*index.UpdateFieldInfo
-
 	fieldsSame bool
 	numDocs    uint64
 }
@@ -1035,6 +1035,7 @@ func (io *invertedIndexOpaque) Reset() (err error) {
 	io.init = false
 	io.chunkMode = 0
 	io.FieldsMap = nil
+	io.FieldsOptions = nil
 	io.FieldsInv = nil
 	for i := range io.Dicts {
 		io.Dicts[i] = nil
@@ -1079,7 +1080,6 @@ func (io *invertedIndexOpaque) Reset() (err error) {
 	io.numDocs = 0
 
 	clear(io.fieldAddrs)
-	clear(io.updatedFields)
 
 	return err
 }
@@ -1093,11 +1093,11 @@ func (i *invertedIndexOpaque) Set(key string, val interface{}) {
 		i.fieldsSame = val.(bool)
 	case "fieldsMap":
 		i.FieldsMap = val.(map[string]uint16)
+	case "fieldsOptions":
+		i.FieldsOptions = val.(map[string]index.FieldIndexingOptions)
 	case "fieldsInv":
 		i.FieldsInv = val.([]string)
 	case "numDocs":
 		i.numDocs = val.(uint64)
-	case "updatedFields":
-		i.updatedFields = val.(map[string]*index.UpdateFieldInfo)
 	}
 }

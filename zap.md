@@ -66,16 +66,45 @@ Footer section describes the configuration of particular ZAP file. The format of
 ## Stored Fields
 
 Stored Fields Index is `D#` consecutive 64-bit unsigned integers - offsets, where relevant Stored Fields Data records are located.
+We also store the EdgeList for nested documents, if present in the segment, to preserve hierarchical relationships.
+If there are NE edges, it means there are NE nested or sub-documents, with each edge representing a child -> parent relationship.
 
-    0                                [SF]                   [SF + D# * 8]
-    | Stored Fields                  | Stored Fields Index              |
-    |================================|==================================|
-    |                                |                                  |
-    |       |--------------------|   ||--------|--------|. . .|--------||
-    |   |-> | Stored Fields Data |   ||      0 |      1 |     | D# - 1 ||
-    |   |   |--------------------|   ||--------|----|---|. . .|--------||
-    |   |                            |              |                   |
-    |===|============================|==============|===================|
+    0                                [SF]                   [SF + D# * 8]                       
+    | Stored Fields                  | Stored Fields Index              | Edge List Information                                                  |
+    |================================|==================================|========================================================================|
+    |                                |                                  |                                                                        | 
+    |       |--------------------|   ||--------|--------|. . .|--------|||--------|--------|--------|--------|--------|. . .|---------|---------||
+    |   |-> | Stored Fields Data |   ||      0 |      1 |     | D# - 1 |||   NE   |   C1   |   P1   |   C2   |   P2   |     |   CNE   |   PNE   ||
+    |   |   |--------------------|   ||--------|----|---|. . .|--------|||--------|--------|--------|--------|--------|. . .|---------|---------||
+    |   |                            |              |                   |                                                                        |
+    |===|============================|==============|===================|========================================================================|
+
+
+    **Edge List Information structure:**
+    - NE (8 bytes): Number of edges (uint64)
+    - For each edge (16 bytes total):
+        - Ci (8 bytes): Child document number (uint64)
+        - Pi (8 bytes): Parent document number (uint64)
+
+    Example: If NE=2, the structure contains:
+    [8 bytes: count=2][8 bytes: child1][8 bytes: parent1][8 bytes: child2][8 bytes: parent2]
+
+        | NE | C1 | P1 | C2 | P2 |
+        |----|----|----|----|----|
+        |  2 |  5 |  1 |  6 |  5 |
+
+    Where:
+    - NE: Number of edges (2)
+    - C1: Child document number (5)
+    - P1: Parent document number (1)
+    - C2: Child document number (6)
+    - P2: Parent document number (5)
+
+        |------------------------------------------|
+        | 8 bytes | 8 bytes | 8 bytes | ...        |
+        |------------------------------------------|
+        |   NE    |   C1    |   P1    | ...        |
+        |------------------------------------------|
         |                                           |
         |-------------------------------------------|
 

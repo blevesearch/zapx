@@ -58,6 +58,7 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 			invIndexCache:  newInvertedIndexCache(),
 			vecIndexCache:  newVectorIndexCache(),
 			synIndexCache:  newSynonymIndexCache(),
+			nstIndexCache:  newNestedIndexCache(),
 			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
 		},
 		f:    f,
@@ -115,6 +116,7 @@ type SegmentBase struct {
 	invIndexCache *invertedIndexCache
 	vecIndexCache *vectorIndexCache
 	synIndexCache *synonymIndexCache
+	nstIndexCache *nestedIndexCache
 }
 
 func (sb *SegmentBase) Size() int {
@@ -159,6 +161,7 @@ func (sb *SegmentBase) Close() (err error) {
 	sb.invIndexCache.Clear()
 	sb.vecIndexCache.Clear()
 	sb.synIndexCache.Clear()
+	sb.nstIndexCache.Clear()
 	return nil
 }
 
@@ -639,6 +642,7 @@ func (s *Segment) closeActual() (err error) {
 	s.invIndexCache.Clear()
 	s.vecIndexCache.Clear()
 	s.synIndexCache.Clear()
+	s.nstIndexCache.Clear()
 
 	if s.mm != nil {
 		err = s.mm.Unmap()
@@ -730,6 +734,12 @@ func (s *Segment) ThesaurusAddr(name string) (uint64, error) {
 	return thesLoc, nil
 }
 
+// EdgeListAddr is the exported helper function to compute the
+// file offset where the edge list is stored.
+func (s *Segment) EdgeListAddr() (uint64, error) {
+	return s.getEdgeListOffset(), nil
+}
+
 func (sb *SegmentBase) loadDvReaders() error {
 	if sb.numDocs == 0 {
 		return nil
@@ -780,4 +790,70 @@ func (s *SegmentBase) GetUpdatedFields() map[string]*index.UpdateFieldInfo {
 // Setter method to store updateFieldInfo within segment base
 func (s *SegmentBase) SetUpdatedFields(updatedFields map[string]*index.UpdateFieldInfo) {
 	s.updatedFields = updatedFields
+}
+
+// Ancestors returns a slice of document numbers representing the ancestors of the
+// specified document (docNum) within the segment. If the document has no ancestors,
+// an empty slice is returned.
+func (sb *SegmentBase) Ancestors(docNum uint64) []uint64 {
+	return sb.nstIndexCache.getAncestry(sb.getEdgeListOffset(), sb.mem, docNum)
+}
+
+// CountRoot returns the number of root documents in the segment, excluding any
+// documents that are marked as deleted in the provided bitmap. The deleted bitmap
+// may contain both root and sub-document numbers, and the method ensures that
+// only root documents are counted.
+func (sb *SegmentBase) CountRoot(deleted *roaring.Bitmap) uint64 {
+	// the formula is as follows:
+	// Total Docs (T) = Root Docs (R) + Sub Docs (S)
+	// R = T - S
+	// Now if we have D deleted docs, some of which may be sub-docs, we need to exclude
+	// those from the root doc count. Let D = dR + dS, where dR is the number of deleted
+	// root docs and dS is the number of deleted sub docs.
+	// dR = D - dS
+	// Therefore, the count of root docs excluding deleted ones is:
+	// R - dR = (T - S) - (D - dS)
+	return (sb.Count() - sb.CountNested()) - (sb.nstIndexCache.countRoot(sb.getEdgeListOffset(), sb.mem, deleted))
+}
+
+// SubDocCount returns the number of sub-documents present in the segment.
+// This is determined using the segment's edge list.
+func (sb *SegmentBase) CountNested() uint64 {
+	return sb.nstIndexCache.getNumSubDocs(sb.getEdgeListOffset(), sb.mem)
+}
+
+// EdgeList returns a map representing the parent-child relationships between documents in the segment.
+// The map keys are child document numbers (uint64), and the values are their corresponding parent document numbers (uint64).
+// If a document has no parent, it may not appear in the map. This is useful for navigating document hierarchies.
+func (sb *SegmentBase) EdgeList() map[uint64]uint64 {
+	return sb.nstIndexCache.getEdgeList(sb.getEdgeListOffset(), sb.mem)
+}
+
+// AddNestedDocuments returns a bitmap containing the original document numbers in drops,
+// plus any descendant document numbers for each dropped document. The drops
+// parameter represents a set of document numbers to be dropped, and the returned
+// bitmap includes both the original drops and all their descendants (if any).
+func (sb *SegmentBase) AddNestedDocuments(drops *roaring.Bitmap) *roaring.Bitmap {
+	// If no drops or no subDocs, nothing to do
+	if drops == nil || drops.GetCardinality() == 0 || sb.CountNested() == 0 {
+		return drops
+	}
+	// Get the edge list for this segment
+	el := sb.EdgeList()
+	// Algorithm => iterate through each child->parent mapping in the edge list,
+	// and for each pair, check if the parent is in the drops bitmap.
+	// If it is, and the child is also not already in the drops bitmap,
+	// add the child to the drops. Repeat this process until no
+	// new additions are made in an iteration.
+	changed := true
+	for changed {
+		changed = false
+		for child, parent := range el {
+			if drops.Contains(uint32(parent)) && !drops.Contains(uint32(child)) {
+				drops.Add(uint32(child))
+				changed = true
+			}
+		}
+	}
+	return drops
 }

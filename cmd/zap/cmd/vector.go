@@ -131,6 +131,11 @@ func decodeSection(data []byte, start uint64) (int, int, map[int64]uint64, *fais
 	// read the number vectors indexed for this field and load the vector to docID mapping.
 	numVecs, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += n
+
+	// read the length of the vector to docID map (unused for now)
+	_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
 	for i := 0; i < int(numVecs); i++ {
 		vecID, n := binary.Varint(data[pos : pos+binary.MaxVarintLen64])
 		pos += n

@@ -62,6 +62,11 @@ var thesaurusCmd = &cobra.Command{
 		if numSyns == 0 {
 			return fmt.Errorf("no synonyms found")
 		}
+
+		// Read the length of the synonym term map (unused for now)
+		_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+		pos += uint64(n)
+
 		synTermMap := make(map[uint32][]byte, numSyns)
 		for i := 0; i < int(numSyns); i++ {
 			synID, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])

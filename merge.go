@@ -121,10 +121,10 @@ func filterFields(fieldsInv []string, fieldInfo map[string]*index.UpdateFieldInf
 	return fieldsInv[:idx]
 }
 
-// Remove field options for fields using updateFieldInfo to override the
-// options selected during mergeFields, if needed. This is mainly
-// for the case where there is a field option update which has not been
-// propogated yet, because a new segment has not been created yet.
+// Update field options using updateFieldInfo to override the options
+// selected during mergeFields, if needed. This includes removing field
+// options for deleted fields and updating options for fields with changes
+// that have not yet been propagated because a new segment has not been created.
 func finalizeFieldOptions(fieldOptions map[string]index.FieldIndexingOptions,
 	updatedFields map[string]*index.UpdateFieldInfo) map[string]index.FieldIndexingOptions {
 	for field, opts := range fieldOptions {
@@ -531,6 +531,10 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 
 			// now walk the non-"_id" fields in order
 			for fieldID := 1; fieldID < len(fieldsInv); fieldID++ {
+				// early exit if the store is not wanted for this field
+				if !fieldsOptions[fieldsInv[fieldID]].IsStored() {
+					continue
+				}
 				// early exit if no stored values for this field
 				if len(vals[fieldID]) == 0 {
 					continue

@@ -95,17 +95,17 @@ Stored Fields Data is an arbitrary size record, which consists of metadata and [
 
 Sections Index is a set of NF uint64 addresses (0 through F# - 1) each of which are offsets to the records in the Sections Info. Inside the sections info, we have further offsets to specific type of index section for that particular field in the segment file. For example, field 0 may correspond to Vector Indexing and its records would have offsets to the Vector Index Section whereas a field 1 may correspond to Text Indexing and its records would rather point to somewhere within the Inverted Text Index Section.
 
-       (...)                                                                        [F]                           [F + F#]
-       + Sections Info                                                              + Sections Index                      +
-       |============================================================================|=====================================|
-       |                                                                            |                                     |
-       | +---------+---------+-----+---------+---------+~~~~~~~~+-+...+-+~~~~~~~~+ | +-------+--------+...+------+-----+ |
-    +----> S1 Addr | S1 Type | ... | Sn Addr | Sn Type | NS | O |  Name | Length | | |     0 |      1 |   | F#-1 | NF  | |
-    |  | +---------+---------+-----+---------+---------+~~~~~~~~+-+...+-+~~~~~~~~+ | +-------+----+---+...+------+-----+ |
-    |  |                                                                            |              |                      |
-    |  +============================================================================+==============|======================+
-    |                                                                                              |
-    +----------------------------------------------------,------------------------------------------+
+       (...)                                                                     [F]                          [F + F#]
+       + Sections Info                                                             + Sections Index                  +
+       |===========================================================================|=================================|
+       |                                                                           |                                 |
+       |  +--------+------+---+----+---------+---------+~~~~~+--+...+--+~~~~~~~~~+ | +------+------+...+------+----+ |
+    +---->| Length | Name | O | NS | S1 Type | S1 Addr | ... | Sn Type | Sn Addr | | |    0 |    1 |   | F#-1 | NF | |
+    |  |  +--------+------+---+----+---------+---------+~~~~~+--+...+--+~~~~~~~~~+ | +------+----+-+...+------+----+ |
+    |  |                                                                           |             |                   |
+    |  +===========================================================================+=============|===================+
+    |                                                                                            |
+    +--------------------------------------------------------------------------------------------+
 
      NF. Number of fields
      NS. Number of index sections

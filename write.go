@@ -112,16 +112,32 @@ func persistFieldsSection(fieldsInv []string, fieldsOptions map[string]index.Fie
 }
 
 // FooterSize is the size of the footer record in bytes
-// crc + ver + chunk + sectionsIndexOffset + stored offset + num docs
-const FooterSize = 4 + 4 + 4 + 8 + 8 + 8
+// crc + id length + ver + chunk + sectionsIndexOffset + stored offset + num docs
+// Does not include the length of the id because it is variable length
+const FooterSize = 4 + 4 + 4 + 4 + 8 + 8 + 8
 
 func persistFooter(numDocs, storedIndexOffset, sectionsIndexOffset uint64,
 	chunkMode, crcBeforeFooter uint32, writerIn io.Writer) error {
 	w := NewCountHashWriter(writerIn)
 	w.crc = crcBeforeFooter
 
+	// To be replaced with writer id (unused for now)
+	tempId := []byte("")
+
+	// Write the writer id
+	err := binary.Write(w, binary.BigEndian, tempId)
+	if err != nil {
+		return err
+	}
+
+	// Write the length of the writer id
+	err = binary.Write(w, binary.BigEndian, uint32(len(tempId)))
+	if err != nil {
+		return err
+	}
+
 	// write out the number of docs
-	err := binary.Write(w, binary.BigEndian, numDocs)
+	err = binary.Write(w, binary.BigEndian, numDocs)
 	if err != nil {
 		return err
 	}

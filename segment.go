@@ -219,6 +219,9 @@ func (s *Segment) loadConfig() error {
 	storedIndexOffset := sectionsIndexOffset - 8
 	numDocsOffset := storedIndexOffset - 8
 
+	// read offsets for the writer id length (unused for now)
+	idLenOffset := numDocsOffset - 4
+
 	// read 32-bit crc
 	s.crc = binary.BigEndian.Uint32(s.mm[crcOffset : crcOffset+4])
 
@@ -240,8 +243,12 @@ func (s *Segment) loadConfig() error {
 	// read 64-bit num docs
 	s.numDocs = binary.BigEndian.Uint64(s.mm[numDocsOffset : numDocsOffset+8])
 
-	s.incrementBytesRead(uint64(FooterSize))
-	s.SegmentBase.mem = s.mm[:len(s.mm)-FooterSize]
+	// read the length of the id (unused for now)
+	idLen := binary.BigEndian.Uint32(s.mm[idLenOffset : idLenOffset+4])
+
+	footerSize := FooterSize + int(idLen)
+	s.incrementBytesRead(uint64(footerSize))
+	s.SegmentBase.mem = s.mm[:len(s.mm)-footerSize]
 	return nil
 }
 

@@ -801,8 +801,8 @@ func (s *SegmentBase) SetUpdatedFields(updatedFields map[string]*index.UpdateFie
 
 // Ancestors returns a slice of document numbers representing the ancestors of the
 // specified document (docNum) within the segment. If the document has no ancestors,
-// an empty slice is returned.
-func (sb *SegmentBase) Ancestors(docNum uint64) []uint64 {
+// a slice containing only the document number itself is returned.
+func (sb *SegmentBase) Ancestors(docNum uint64) []index.AncestorID {
 	return sb.nstIndexCache.getAncestry(sb.getEdgeListOffset(), sb.mem, docNum)
 }
 

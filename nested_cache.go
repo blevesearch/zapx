@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/RoaringBitmap/roaring/v2"
+	index "github.com/blevesearch/bleve_index_api"
 )
 
 func newNestedIndexCache() *nestedIndexCache {
@@ -72,24 +73,24 @@ func (sc *nestedIndexCache) createAndCacheLOCKED(edgeListOffset uint64, mem []by
 	return sc.cache
 }
 
-func getDocAncestors(edgeList map[uint64]uint64, docNum uint64) []uint64 {
-	var ancestors []uint64
+func getDocAncestors(edgeList map[uint64]uint64, docNum uint64) []index.AncestorID {
+	ancestors := []index.AncestorID{index.NewAncestorID(docNum)}
 	current := docNum
 	for {
 		parent, ok := edgeList[current]
 		if !ok {
 			break
 		}
-		ancestors = append(ancestors, parent)
+		ancestors = append(ancestors, index.NewAncestorID(parent))
 		current = parent
 	}
 	return ancestors
 }
 
-func (nc *nestedIndexCache) getAncestry(edgeListOffset uint64, mem []byte, docNum uint64) []uint64 {
+func (nc *nestedIndexCache) getAncestry(edgeListOffset uint64, mem []byte, docNum uint64) []index.AncestorID {
 	cache := nc.loadOrCreate(edgeListOffset, mem)
 	if cache == nil || cache.edgeList == nil {
-		return nil
+		return []index.AncestorID{index.NewAncestorID(docNum)}
 	}
 	return getDocAncestors(cache.edgeList, docNum)
 }

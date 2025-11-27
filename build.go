@@ -190,5 +190,8 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		return nil, err
 	}
 
+	// initialize any of the caches if needed
+	sb.nstIndexCache.initialize(sb.getEdgeListOffset(), sb.mem)
+
 	return sb, nil
 }

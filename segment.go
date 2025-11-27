@@ -85,6 +85,10 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 		_ = rv.Close()
 		return nil, err
 	}
+
+	// initalize any of the caches if needed
+	rv.nstIndexCache.initialize(rv.getEdgeListOffset(), rv.mem)
+
 	return rv, nil
 }
 
@@ -804,7 +808,7 @@ func (s *SegmentBase) SetUpdatedFields(updatedFields map[string]*index.UpdateFie
 // a slice containing only the document number itself is returned. The prealloc
 // parameter allows for reusing a preallocated slice to avoid additional allocations.
 func (sb *SegmentBase) Ancestors(docNum uint64, prealloc []index.AncestorID) []index.AncestorID {
-	return sb.nstIndexCache.getAncestry(sb.getEdgeListOffset(), sb.mem, docNum, prealloc)
+	return sb.nstIndexCache.ancestry(docNum, prealloc)
 }
 
 // CountRoot returns the number of root documents in the segment, excluding any
@@ -821,20 +825,7 @@ func (sb *SegmentBase) CountRoot(deleted *roaring.Bitmap) uint64 {
 	// dR = D - dS
 	// Therefore, the count of root docs excluding deleted ones is:
 	// R - dR = (T - S) - (D - dS)
-	return (sb.Count() - sb.CountNested()) - (sb.nstIndexCache.countRoot(sb.getEdgeListOffset(), sb.mem, deleted))
-}
-
-// SubDocCount returns the number of sub-documents present in the segment.
-// This is determined using the segment's edge list.
-func (sb *SegmentBase) CountNested() uint64 {
-	return sb.nstIndexCache.getNumSubDocs(sb.getEdgeListOffset(), sb.mem)
-}
-
-// EdgeList returns a map representing the parent-child relationships between documents in the segment.
-// The map keys are child document numbers (uint64), and the values are their corresponding parent document numbers (uint64).
-// If a document has no parent, it may not appear in the map. This is useful for navigating document hierarchies.
-func (sb *SegmentBase) EdgeList() map[uint64]uint64 {
-	return sb.nstIndexCache.getEdgeList(sb.getEdgeListOffset(), sb.mem)
+	return (sb.Count() - sb.nstIndexCache.countNested()) - (sb.nstIndexCache.countRoot(deleted))
 }
 
 // AddNestedDocuments returns a bitmap containing the original document numbers in drops,
@@ -843,7 +834,7 @@ func (sb *SegmentBase) EdgeList() map[uint64]uint64 {
 // bitmap includes both the original drops and all their descendants (if any).
 func (sb *SegmentBase) AddNestedDocuments(drops *roaring.Bitmap) *roaring.Bitmap {
 	// If no drops or no subDocs, nothing to do
-	if drops == nil || drops.GetCardinality() == 0 || sb.CountNested() == 0 {
+	if drops == nil || drops.GetCardinality() == 0 || sb.nstIndexCache.countNested() == 0 {
 		return drops
 	}
 	// Get the edge list for this segment
@@ -864,4 +855,11 @@ func (sb *SegmentBase) AddNestedDocuments(drops *roaring.Bitmap) *roaring.Bitmap
 		}
 	}
 	return drops
+}
+
+// EdgeList returns a map representing the parent-child relationships between documents in the segment.
+// The map keys are child document numbers (uint64), and the values are their corresponding parent document numbers (uint64).
+// If a document has no parent, it may not appear in the map. This is useful for navigating document hierarchies.
+func (sb *SegmentBase) EdgeList() map[uint64]uint64 {
+	return sb.nstIndexCache.edgeList()
 }

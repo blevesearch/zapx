@@ -2,59 +2,30 @@ package zap
 
 import (
 	"encoding/binary"
-	"sync"
 
 	"github.com/RoaringBitmap/roaring/v2"
 	index "github.com/blevesearch/bleve_index_api"
 )
 
+type nestedIndexCache struct {
+	cache *nestedCacheEntry
+}
+
+// newNestedIndexCache creates a new nested index cache instance, which contains cached edge list
+// for a nested segment, pass in the edgeListOffset and memory slice of the segment to initialize it.
 func newNestedIndexCache() *nestedIndexCache {
 	return &nestedIndexCache{}
 }
 
-type nestedIndexCache struct {
-	m sync.RWMutex
-
-	cache *nestedCacheEntry
-}
-
-// Clear clears the nested index cache, removing cached edge lists, ancestry, and descendants.
-func (nc *nestedIndexCache) Clear() {
-	nc.m.Lock()
-	nc.cache = nil
-	nc.m.Unlock()
-}
-
-// Returns edgeList, ancestry, descendants
-func (nc *nestedIndexCache) loadOrCreate(edgeListOffset uint64, mem []byte) *nestedCacheEntry {
-	nc.m.RLock()
-	if nc.cache != nil {
-		nc.m.RUnlock()
-		return nc.cache
-	}
-	nc.m.RUnlock()
-
-	nc.m.Lock()
-	defer nc.m.Unlock()
-
-	if nc.cache != nil {
-		return nc.cache
-	}
-
-	return nc.createAndCacheLOCKED(edgeListOffset, mem)
-}
-
-// createAndCacheLOCKED creates and caches a nested cache entry (edge list, ancestry, descendants) for the given edge list offset and memory slice.
-func (sc *nestedIndexCache) createAndCacheLOCKED(edgeListOffset uint64, mem []byte) *nestedCacheEntry {
+func (nc *nestedIndexCache) initialize(edgeListOffset uint64, mem []byte) {
 	// pos stores the current read position
 	pos := edgeListOffset
 	// read number of subDocs which is also the number of edges
 	numEdges := binary.BigEndian.Uint64(mem[pos : pos+8])
 	pos += 8
-	// if no edges or no subDocs, return empty cache
+	// if no edges or no subDocs, return
 	if numEdges == 0 {
-		sc.cache = &nestedCacheEntry{}
-		return sc.cache
+		return
 	}
 	// edgeList as a map[node]parent
 	edgeList := make(map[uint64]uint64, numEdges)
@@ -65,19 +36,30 @@ func (sc *nestedIndexCache) createAndCacheLOCKED(edgeListOffset uint64, mem []by
 		pos += 8
 		edgeList[child] = parent
 	}
-
-	sc.cache = &nestedCacheEntry{
+	nc.cache = &nestedCacheEntry{
 		edgeList: edgeList,
 	}
-
-	return sc.cache
 }
 
-func getDocAncestors(edgeList map[uint64]uint64, docNum uint64, prealloc []index.AncestorID) []index.AncestorID {
+type nestedCacheEntry struct {
+	// edgeList[child] = parent
+	edgeList map[uint64]uint64
+}
+
+// Clear clears the nested index cache, removing the cached edge list
+func (nc *nestedIndexCache) Clear() {
+	nc.cache = nil
+}
+func (nc *nestedIndexCache) ancestry(docNum uint64, prealloc []index.AncestorID) []index.AncestorID {
+	cache := nc.cache
+	// add self as first ancestor
 	prealloc = append(prealloc, index.NewAncestorID(docNum))
+	if cache == nil || cache.edgeList == nil {
+		return prealloc
+	}
 	current := docNum
 	for {
-		parent, ok := edgeList[current]
+		parent, ok := cache.edgeList[current]
 		if !ok {
 			break
 		}
@@ -87,24 +69,16 @@ func getDocAncestors(edgeList map[uint64]uint64, docNum uint64, prealloc []index
 	return prealloc
 }
 
-func (nc *nestedIndexCache) getAncestry(edgeListOffset uint64, mem []byte, docNum uint64, prealloc []index.AncestorID) []index.AncestorID {
-	cache := nc.loadOrCreate(edgeListOffset, mem)
-	if cache == nil || cache.edgeList == nil {
-		return append(prealloc, index.NewAncestorID(docNum))
-	}
-	return getDocAncestors(cache.edgeList, docNum, prealloc)
-}
-
-func (nc *nestedIndexCache) getEdgeList(edgeListOffset uint64, mem []byte) map[uint64]uint64 {
-	cache := nc.loadOrCreate(edgeListOffset, mem)
+func (nc *nestedIndexCache) edgeList() map[uint64]uint64 {
+	cache := nc.cache
 	if cache == nil || cache.edgeList == nil {
 		return nil
 	}
 	return cache.edgeList
 }
 
-func (nc *nestedIndexCache) getNumSubDocs(edgeListOffset uint64, mem []byte) uint64 {
-	cache := nc.loadOrCreate(edgeListOffset, mem)
+func (nc *nestedIndexCache) countNested() uint64 {
+	cache := nc.cache
 	if cache == nil {
 		return 0
 	}
@@ -112,36 +86,31 @@ func (nc *nestedIndexCache) getNumSubDocs(edgeListOffset uint64, mem []byte) uin
 }
 
 // countRoot returns the number of root documents in the given bitmap
-func (nc *nestedIndexCache) countRoot(edgeListOffset uint64, mem []byte, bm *roaring.Bitmap) uint64 {
+func (nc *nestedIndexCache) countRoot(bm *roaring.Bitmap) uint64 {
 	var totalDocs uint64
 	if bm == nil {
 		// if bitmap is empty, return 0
 		return totalDocs
 	}
 	totalDocs = bm.GetCardinality()
-	cache := nc.loadOrCreate(edgeListOffset, mem)
+	cache := nc.cache
 	if cache == nil {
 		// if cache is nil, no nested docs, so all docs are root docs
 		// so just return the cardinality of the bitmap
 		return totalDocs
 	}
-	// count sub docs in the bitmap, a sub doc is one that has a parent in the edge list
-	var subDocCount uint64
+	// count nested documents in the bitmap, a nested doc is one that has a parent in the edge list
+	var nestedDocCount uint64
 	bm.Iterate(func(docNum uint32) bool {
 		if _, ok := cache.edgeList[uint64(docNum)]; ok {
-			subDocCount++
+			nestedDocCount++
 		}
 		return true
 	})
-	// root docs = total docs - sub docs
-	if totalDocs < subDocCount {
+	// root docs = total docs - nested docs
+	if totalDocs < nestedDocCount {
 		// should not happen, but just in case
 		return 0
 	}
-	return totalDocs - subDocCount
-}
-
-type nestedCacheEntry struct {
-	// edgeList[node] = parent
-	edgeList map[uint64]uint64
+	return totalDocs - nestedDocCount
 }

@@ -73,26 +73,26 @@ func (sc *nestedIndexCache) createAndCacheLOCKED(edgeListOffset uint64, mem []by
 	return sc.cache
 }
 
-func getDocAncestors(edgeList map[uint64]uint64, docNum uint64) []index.AncestorID {
-	ancestors := []index.AncestorID{index.NewAncestorID(docNum)}
+func getDocAncestors(edgeList map[uint64]uint64, docNum uint64, prealloc []index.AncestorID) []index.AncestorID {
+	prealloc = append(prealloc, index.NewAncestorID(docNum))
 	current := docNum
 	for {
 		parent, ok := edgeList[current]
 		if !ok {
 			break
 		}
-		ancestors = append(ancestors, index.NewAncestorID(parent))
+		prealloc = append(prealloc, index.NewAncestorID(parent))
 		current = parent
 	}
-	return ancestors
+	return prealloc
 }
 
-func (nc *nestedIndexCache) getAncestry(edgeListOffset uint64, mem []byte, docNum uint64) []index.AncestorID {
+func (nc *nestedIndexCache) getAncestry(edgeListOffset uint64, mem []byte, docNum uint64, prealloc []index.AncestorID) []index.AncestorID {
 	cache := nc.loadOrCreate(edgeListOffset, mem)
 	if cache == nil || cache.edgeList == nil {
-		return []index.AncestorID{index.NewAncestorID(docNum)}
+		return append(prealloc, index.NewAncestorID(docNum))
 	}
-	return getDocAncestors(cache.edgeList, docNum)
+	return getDocAncestors(cache.edgeList, docNum, prealloc)
 }
 
 func (nc *nestedIndexCache) getEdgeList(edgeListOffset uint64, mem []byte) map[uint64]uint64 {

@@ -87,7 +87,7 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 	}
 
 	// initalize any of the caches if needed
-	rv.nstIndexCache.initialize(rv.getEdgeListOffset(), rv.mem)
+	rv.nstIndexCache.initialize(rv.numDocs, rv.getEdgeListOffset(), rv.mem)
 
 	return rv, nil
 }
@@ -847,12 +847,13 @@ func (sb *SegmentBase) AddNestedDocuments(drops *roaring.Bitmap) *roaring.Bitmap
 	changed := true
 	for changed {
 		changed = false
-		for child, parent := range el {
+		el.Iterate(func(child uint64, parent uint64) bool {
 			if drops.Contains(uint32(parent)) && !drops.Contains(uint32(child)) {
 				drops.Add(uint32(child))
 				changed = true
 			}
-		}
+			return true
+		})
 	}
 	return drops
 }
@@ -860,6 +861,6 @@ func (sb *SegmentBase) AddNestedDocuments(drops *roaring.Bitmap) *roaring.Bitmap
 // EdgeList returns a map representing the parent-child relationships between documents in the segment.
 // The map keys are child document numbers (uint64), and the values are their corresponding parent document numbers (uint64).
 // If a document has no parent, it may not appear in the map. This is useful for navigating document hierarchies.
-func (sb *SegmentBase) EdgeList() map[uint64]uint64 {
+func (sb *SegmentBase) EdgeList() EdgeList {
 	return sb.nstIndexCache.edgeList()
 }

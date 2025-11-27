@@ -610,11 +610,11 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 		// get the edgeList for this segment
 		edgeList := segment.EdgeList()
 		// if no edgeList, nothing to do
-		if len(edgeList) == 0 {
+		if edgeList == nil {
 			continue
 		}
 		newSegDocNums := rv[segI]
-		for oldChild, oldParent := range edgeList {
+		edgeList.Iterate(func(oldChild uint64, oldParent uint64) bool {
 			newParent := newSegDocNums[oldParent]
 			newChild := newSegDocNums[oldChild]
 			if newParent != docDropped &&
@@ -624,7 +624,8 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 				}
 				newEdgeList[newChild] = newParent
 			}
-		}
+			return true
+		})
 	}
 
 	// write out the new edge list

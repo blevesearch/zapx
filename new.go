@@ -131,12 +131,8 @@ func (s *interim) reset() (err error) {
 	s.edgeList = nil
 	s.chunkMode = 0
 	s.w = nil
-	for k := range s.FieldsMap {
-		delete(s.FieldsMap, k)
-	}
-	for k := range s.FieldsOptions {
-		delete(s.FieldsOptions, k)
-	}
+	clear(s.FieldsMap)
+	clear(s.FieldsOptions)
 	s.FieldsInv = s.FieldsInv[:0]
 	s.metaBuf.Reset()
 	s.tmp0 = s.tmp0[:0]

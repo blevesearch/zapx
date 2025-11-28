@@ -425,20 +425,24 @@ func (s *interim) writeStoredFields() (
 
 	// write the number of edges in the child -> parent edge list
 	// this will be zero if there are no nested documents
-	// and this number also reflects the number of sub-documents
+	// and this number also reflects the number of nested documents
 	// in the segment
-	err = binary.Write(s.w, binary.BigEndian, uint64(len(s.edgeList)))
+	buf := make([]byte, binary.MaxVarintLen64)
+	n := binary.PutUvarint(buf, uint64(len(s.edgeList)))
+	_, err = s.w.Write(buf[:n])
 	if err != nil {
 		return 0, err
 	}
 	// write the child -> parent edge list
 	// child and parent are both flattened doc ids
 	for child, parent := range s.edgeList {
-		err = binary.Write(s.w, binary.BigEndian, child)
+		n = binary.PutUvarint(buf, child)
+		_, err = s.w.Write(buf[:n])
 		if err != nil {
 			return 0, err
 		}
-		err = binary.Write(s.w, binary.BigEndian, parent)
+		n = binary.PutUvarint(buf, parent)
+		_, err = s.w.Write(buf[:n])
 		if err != nil {
 			return 0, err
 		}

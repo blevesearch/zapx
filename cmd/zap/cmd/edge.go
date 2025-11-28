@@ -36,8 +36,11 @@ var edgeListCmd = &cobra.Command{
 		// pos stores the current read position
 		pos := edgeListAddr
 		// read number of nested documents which is also the number of edges
-		numEdges := binary.BigEndian.Uint64(data[pos : pos+8])
-		pos += 8
+		numEdges, read := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+		if read <= 0 {
+			return fmt.Errorf("error reading number of edges in nested edge list")
+		}
+		pos += uint64(read)
 		// if no edges or no nested documents, return
 		if numEdges == 0 {
 			fmt.Println("no nested documents present")
@@ -46,10 +49,16 @@ var edgeListCmd = &cobra.Command{
 		// edgeList as a map[node]parent
 		edgeList := make(map[uint64]uint64, numEdges)
 		for i := uint64(0); i < numEdges; i++ {
-			child := binary.BigEndian.Uint64(data[pos : pos+8])
-			pos += 8
-			parent := binary.BigEndian.Uint64(data[pos : pos+8])
-			pos += 8
+			child, read := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+			if read <= 0 {
+				return fmt.Errorf("error reading child doc id in nested edge list")
+			}
+			pos += uint64(read)
+			parent, read := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+			if read <= 0 {
+				return fmt.Errorf("error reading parent doc id in nested edge list")
+			}
+			pos += uint64(read)
 			edgeList[child] = parent
 		}
 		// print number of edges / nested documents

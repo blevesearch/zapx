@@ -632,17 +632,22 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 	// first write out the number of entries
 	// which is also the number of valid subDocs
 	// in the merged segment
-	err := binary.Write(w, binary.BigEndian, uint64(len(newEdgeList)))
+	buf := make([]byte, binary.MaxVarintLen64)
+	n := binary.PutUvarint(buf, uint64(len(newEdgeList)))
+	_, err := w.Write(buf[:n])
 	if err != nil {
 		return 0, nil, err
 	}
-	// now the new edge list
+	// write the child -> parent edge list
+	// child and parent are both flattened doc ids
 	for child, parent := range newEdgeList {
-		err := binary.Write(w, binary.BigEndian, child)
+		n = binary.PutUvarint(buf, child)
+		_, err = w.Write(buf[:n])
 		if err != nil {
 			return 0, nil, err
 		}
-		err = binary.Write(w, binary.BigEndian, parent)
+		n = binary.PutUvarint(buf, parent)
+		_, err = w.Write(buf[:n])
 		if err != nil {
 			return 0, nil, err
 		}

@@ -87,7 +87,11 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 	}
 
 	// initalize any of the caches if needed
-	rv.nstIndexCache.initialize(rv.numDocs, rv.getEdgeListOffset(), rv.mem)
+	err = rv.nstIndexCache.initialize(rv.numDocs, rv.getEdgeListOffset(), rv.mem)
+	if err != nil {
+		_ = rv.Close()
+		return nil, err
+	}
 
 	return rv, nil
 }

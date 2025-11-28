@@ -2,6 +2,7 @@ package zap
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 
 	"github.com/RoaringBitmap/roaring/v2"
@@ -12,33 +13,44 @@ type nestedIndexCache struct {
 	cache *nestedCacheEntry
 }
 
-// newNestedIndexCache creates a new nested index cache instance, which contains cached edge list
-// for a nested segment, pass in the edgeListOffset and memory slice of the segment to initialize it.
+// newNestedIndexCache creates a new nested index cache
+// instance, which contains cached edge list
+// for a nested segment
 func newNestedIndexCache() *nestedIndexCache {
 	return &nestedIndexCache{}
 }
 
-func (nc *nestedIndexCache) initialize(numDocs uint64, edgeListOffset uint64, mem []byte) {
+func (nc *nestedIndexCache) initialize(numDocs uint64, edgeListOffset uint64, mem []byte) error {
 	// pos stores the current read position
 	pos := edgeListOffset
-	// read number of subDocs which is also the number of edges
-	numEdges := binary.BigEndian.Uint64(mem[pos : pos+8])
-	pos += 8
+	// read number of edges in the edge list
+	numEdges, read := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+	if read <= 0 {
+		return fmt.Errorf("error reading number of edges in nested edge list")
+	}
+	pos += uint64(read)
 	// if no edges/nested documents, return
 	if numEdges == 0 {
-		return
+		return nil
 	}
 	edgeList := NewEdgeList(numDocs, numEdges)
 	for i := uint64(0); i < numEdges; i++ {
-		child := binary.BigEndian.Uint64(mem[pos : pos+8])
-		pos += 8
-		parent := binary.BigEndian.Uint64(mem[pos : pos+8])
-		pos += 8
+		child, read := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+		if read <= 0 {
+			return fmt.Errorf("error reading child doc id in nested edge list")
+		}
+		pos += uint64(read)
+		parent, read := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+		if read <= 0 {
+			return fmt.Errorf("error reading parent doc id in nested edge list")
+		}
+		pos += uint64(read)
 		edgeList.AddEdge(child, parent)
 	}
 	nc.cache = &nestedCacheEntry{
 		el: edgeList,
 	}
+	return nil
 }
 
 type nestedCacheEntry struct {

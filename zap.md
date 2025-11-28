@@ -74,40 +74,15 @@ If there are NE edges, it means there are NE nested or sub-documents, with each 
     | Stored Fields                  | Stored Fields Index              | Edge List Information                                                  |
     |================================|==================================|========================================================================|
     |                                |                                  |                                                                        | 
-    |       |--------------------|   ||--------|--------|. . .|--------|||--------|--------|--------|--------|--------|. . .|---------|---------||
+    |       |--------------------|   ||--------|--------|. . .|--------|||~~~~~~~~|~~~~~~~~|~~~~~~~~|~~~~~~~~|~~~~~~~~|. . .|~~~~~~~~~|~~~~~~~~~||
     |   |-> | Stored Fields Data |   ||      0 |      1 |     | D# - 1 |||   NE   |   C1   |   P1   |   C2   |   P2   |     |   CNE   |   PNE   ||
-    |   |   |--------------------|   ||--------|----|---|. . .|--------|||--------|--------|--------|--------|--------|. . .|---------|---------||
+    |   |   |--------------------|   ||--------|----|---|. . .|--------|||~~~~~~~~|~~~~~~~~|~~~~~~~~|~~~~~~~~|~~~~~~~~|. . .|~~~~~~~~~|~~~~~~~~~||
     |   |                            |              |                   |                                                                        |
     |===|============================|==============|===================|========================================================================|
 
-
-    **Edge List Information structure:**
-    - NE (8 bytes): Number of edges (uint64)
-    - For each edge (16 bytes total):
-        - Ci (8 bytes): Child document number (uint64)
-        - Pi (8 bytes): Parent document number (uint64)
-
-    Example: If NE=2, the structure contains:
-    [8 bytes: count=2][8 bytes: child1][8 bytes: parent1][8 bytes: child2][8 bytes: parent2]
-
-        | NE | C1 | P1 | C2 | P2 |
-        |----|----|----|----|----|
-        |  2 |  5 |  1 |  6 |  5 |
-
-    Where:
-    - NE: Number of edges (2)
-    - C1: Child document number (5)
-    - P1: Parent document number (1)
-    - C2: Child document number (6)
-    - P2: Parent document number (5)
-
-        |------------------------------------------|
-        | 8 bytes | 8 bytes | 8 bytes | ...        |
-        |------------------------------------------|
-        |   NE    |   C1    |   P1    | ...        |
-        |------------------------------------------|
-        |                                           |
-        |-------------------------------------------|
+        NE. Number of edges in the edge list.
+        Ci. Child Document Number for edge i.
+        Pi. Parent Document Number for edge i.
 
 Stored Fields Data is an arbitrary size record, which consists of metadata and [Snappy](https://github.com/golang/snappy)-compressed data.
 

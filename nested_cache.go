@@ -29,8 +29,8 @@ func (nc *nestedIndexCache) initialize(numDocs uint64, edgeListOffset uint64, me
 		return fmt.Errorf("error reading number of edges in nested edge list")
 	}
 	pos += uint64(read)
-	// if no edges/nested documents, return
-	if numEdges == 0 {
+	// if no documents or edges/nested documents, return
+	if numDocs == 0 || numEdges == 0 {
 		return nil
 	}
 	edgeList := NewEdgeList(numDocs, numEdges)

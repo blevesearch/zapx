@@ -862,9 +862,9 @@ func (sb *SegmentBase) AddNestedDocuments(drops *roaring.Bitmap) *roaring.Bitmap
 	return drops
 }
 
-// EdgeList returns a map representing the parent-child relationships between documents in the segment.
-// The map keys are child document numbers (uint64), and the values are their corresponding parent document numbers (uint64).
-// If a document has no parent, it may not appear in the map. This is useful for navigating document hierarchies.
+// EdgeList returns an EdgeList interface representing the parent-child relationships between documents in the segment.
+// The EdgeList interface allows iteration over child-parent document pairs, enabling navigation of document hierarchies.
+// The underlying implementation may use a map or a slice, but callers should rely on the interface methods.
 func (sb *SegmentBase) EdgeList() EdgeList {
 	return sb.nstIndexCache.edgeList()
 }

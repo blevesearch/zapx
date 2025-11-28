@@ -243,7 +243,7 @@ func (el *edgeListSlice) Iterate(f func(child uint64, parent uint64) bool) {
 // Memory usage if the edge list is stored as a []uint64:
 //
 //	8 bytes per entry
-//	Total ≈ 8 * N bytes
+//	Total ≈ 8 * T bytes
 //
 // We want the threshold at which a map becomes more memory-efficient than a slice:
 //

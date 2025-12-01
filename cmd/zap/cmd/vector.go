@@ -145,6 +145,10 @@ func decodeSection(data []byte, start uint64) (int, int, map[int64]uint64, *fais
 		vecDocIDMap[vecID] = docID
 	}
 
+	// read the type of the vector index (unused for now)
+	_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
 	// read the index bytes
 	indexSize, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += n

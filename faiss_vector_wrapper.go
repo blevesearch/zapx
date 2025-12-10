@@ -249,8 +249,8 @@ func (v *vectorIndexWrapper) ObtainKCentroidCardinalitiesFromIVFIndex(limit int,
 
 // Utility function to add the corresponding docID and scores for each unique
 // docID retrieved from the vector index search to the newly created vecPostingsList
-func (v *vectorIndexWrapper) addIDsToPostingsList(pl *VecPostingsList, rs ResultSet) {
-	rs.Range(func(docID uint32, score float32) {
+func (v *vectorIndexWrapper) addIDsToPostingsList(pl *VecPostingsList, rs resultSet) {
+	rs.iterate(func(docID uint32, score float32) {
 		// transform the docID and score to vector code format
 		code := getVectorCode(docID, score)
 		// add to postings list, this ensures ordered storage
@@ -265,16 +265,16 @@ func (v *vectorIndexWrapper) addIDsToPostingsList(pl *VecPostingsList, rs Result
 // vectors associated with them.
 func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 	search func() (scores []float32, labels []int64, err error),
-	prepareNextIter func(numIter int, labels []int64)) (ResultSet, error) {
+	prepareNextIter func(numIter int, labels []int64)) (resultSet, error) {
 	// create a result set to hold top K docIDs and their scores
-	rs := NewResultSet(k, numDocs)
+	rs := newResultSet(k, numDocs)
 	// flag to indicate if we have exhausted the vector index
 	var exhausted bool
 	// keep track of number of iterations done
 	numIter := 0
 	// we keep searching until we have k unique docIDs or we have exhausted the vector index
 	// or we have reached the maximum number of deduplication iterations allowed
-	for numIter < MaxDeduplicationIterations && rs.Size() < k && !exhausted {
+	for numIter < MaxDeduplicationIterations && rs.size() < k && !exhausted {
 		// search the vector index
 		numIter++
 		scores, labels, err := search()
@@ -296,10 +296,10 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 				continue
 			}
 			score := scores[i]
-			prevScore, exists := rs.Get(docID)
+			prevScore, exists := rs.get(docID)
 			if !exists {
 				// first time seeing this docID, so just store it
-				rs.Put(docID, score)
+				rs.put(docID, score)
 				continue
 			}
 			// we have seen this docID before, so we must compare scores
@@ -311,17 +311,17 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 			switch v.metricType {
 			case faiss.MetricInnerProduct: // similarity metrics like dot product => higher is better
 				if score > prevScore {
-					rs.Put(docID, score)
+					rs.put(docID, score)
 				}
 			default: // distance metrics like euclidean distance => lower is better
 				if score < prevScore {
-					rs.Put(docID, score)
+					rs.put(docID, score)
 				}
 			}
 		}
 		// if we still have less than k unique docIDs, prepare for the next iteration, provided
 		// we have not exhausted the index
-		if rs.Size() < k && !exhausted {
+		if rs.size() < k && !exhausted {
 			// prepare state for next iteration
 			prepareNextIter(numIter, labels)
 		}
@@ -334,7 +334,7 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 // searchWithoutIDs performs a search on the vector index to retrieve the top K documents while
 // excluding any vector IDs specified in the exclude slice.
 func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclude []int64, params json.RawMessage) (
-	ResultSet, error) {
+	resultSet, error) {
 	return v.docSearch(k, v.sb.numDocs,
 		func() ([]float32, []int64, error) {
 			return v.vecIndex.SearchWithoutIDs(qVector, k, exclude, params)
@@ -355,7 +355,7 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclud
 // searchWithIDs performs a search on the vector index to retrieve the top K documents while only
 // considering the vector IDs specified in the include slice.
 func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include []int64, params json.RawMessage) (
-	ResultSet, error) {
+	resultSet, error) {
 	// if the number of iterations > 1, we will be modifying the include slice
 	// to exclude vector ids already seen, so we use this set to track the
 	// include set for the next iteration, this is reused across iterations
@@ -395,7 +395,7 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include [
 // It takes into account the eligible centroid IDs and ensures that at least minEligibleCentroids are probed.
 func (v *vectorIndexWrapper) searchClustersFromIVFIndex(ids []int64, include bool, eligibleCentroidIDs []int64,
 	minEligibleCentroids int, k int64, x, centroidDis []float32, params json.RawMessage) (
-	ResultSet, error) {
+	resultSet, error) {
 	// if the number of iterations > 1, we will be modifying the include slice
 	// to exclude vector ids already seen, so we use this set to track the
 	// include set for the next iteration, this is reused across iterations
@@ -472,23 +472,23 @@ func (v *vectorIndexWrapper) getDocIDForVectorID(vecID int64) (uint32, bool) {
 	return docID, exists
 }
 
-// ResultSet is a data structure to hold (docID, score) pairs while ensuring
+// resultSet is a data structure to hold (docID, score) pairs while ensuring
 // that each docID is unique. It supports efficient insertion, retrieval,
 // and iteration over the stored pairs.
-type ResultSet interface {
+type resultSet interface {
 	// Add a (docID, score) pair to the result set.
-	Put(docID uint32, score float32)
+	put(docID uint32, score float32)
 	// Get the score for a given docID. Returns false if docID not present.
-	Get(docID uint32) (float32, bool)
-	// Range iterates over all (docID, score) pairs in the result set.
-	Range(func(docID uint32, score float32))
+	get(docID uint32) (float32, bool)
+	// Iterate over all (docID, score) pairs in the result set.
+	iterate(func(docID uint32, score float32))
 	// Get the size of the result set.
-	Size() int64
+	size() int64
 }
 
 // resultSetSliceThreshold defines the threshold ratio of k to total documents
-// in the index, below which a map-based ResultSet is used, and above which
-// a slice-based ResultSet is used.
+// in the index, below which a map-based resultSet is used, and above which
+// a slice-based resultSet is used.
 // It is derived using the following reasoning:
 //
 // Let N = total number of documents
@@ -504,17 +504,18 @@ type ResultSet interface {
 //	4 bytes per entry
 //	Total ≈ 4 * N bytes
 //
-// We want the threshold at which a map becomes more memory-efficient than a slice:
+// We want the threshold below which a map is more memory-efficient than a slice:
 //
 //	20K < 4N
 //	K/N < 4/20
 //
-// Therefore, if the ratio of K to N is less than 0.2 (4/20), we use a map-based ResultSet.
-var resultSetSliceThreshold = 4.0 / 20.0
+// Therefore, if the ratio of K to N is less than 0.2 (4/20), we use a map-based resultSet.
+const resultSetSliceThreshold float64 = 0.2
 
-// NewResultSet creates a new ResultSet
-func NewResultSet(k int64, numDocs uint64) ResultSet {
-	if float64(k)/float64(numDocs) < resultSetSliceThreshold {
+// newResultSet creates a new resultSet
+func newResultSet(k int64, numDocs uint64) resultSet {
+	// if numDocs is zero (empty index), just use map-based resultSet as its a no-op
+	if numDocs == 0 || float64(k)/float64(numDocs) < resultSetSliceThreshold {
 		return newResultSetMap(k)
 	}
 	return newResultSetSlice(numDocs)
@@ -524,37 +525,37 @@ type resultSetMap struct {
 	data map[uint32]float32
 }
 
-func newResultSetMap(k int64) ResultSet {
+func newResultSetMap(k int64) resultSet {
 	return &resultSetMap{
 		data: make(map[uint32]float32, k),
 	}
 }
 
-func (rs *resultSetMap) Put(docID uint32, score float32) {
+func (rs *resultSetMap) put(docID uint32, score float32) {
 	rs.data[docID] = score
 }
 
-func (rs *resultSetMap) Get(docID uint32) (float32, bool) {
+func (rs *resultSetMap) get(docID uint32) (float32, bool) {
 	score, exists := rs.data[docID]
 	return score, exists
 }
 
-func (rs *resultSetMap) Range(f func(docID uint32, score float32)) {
+func (rs *resultSetMap) iterate(f func(docID uint32, score float32)) {
 	for docID, score := range rs.data {
 		f(docID, score)
 	}
 }
 
-func (rs *resultSetMap) Size() int64 {
+func (rs *resultSetMap) size() int64 {
 	return int64(len(rs.data))
 }
 
 type resultSetSlice struct {
-	size int64
-	data []float32
+	count int64
+	data  []float32
 }
 
-func newResultSetSlice(numDocs uint64) ResultSet {
+func newResultSetSlice(numDocs uint64) resultSet {
 	data := make([]float32, numDocs)
 	// scores can be negative, so initialize to a sentinel value which is NaN
 	sentinel := float32(math.NaN())
@@ -562,20 +563,20 @@ func newResultSetSlice(numDocs uint64) ResultSet {
 		data[i] = sentinel
 	}
 	return &resultSetSlice{
-		size: 0,
-		data: data,
+		count: 0,
+		data:  data,
 	}
 }
 
-func (rs *resultSetSlice) Put(docID uint32, score float32) {
-	// only increment size if this docID was not already present
+func (rs *resultSetSlice) put(docID uint32, score float32) {
+	// only increment count if this docID was not already present
 	if math.IsNaN(float64(rs.data[docID])) {
-		rs.size++
+		rs.count++
 	}
 	rs.data[docID] = score
 }
 
-func (rs *resultSetSlice) Get(docID uint32) (float32, bool) {
+func (rs *resultSetSlice) get(docID uint32) (float32, bool) {
 	score := rs.data[docID]
 	if math.IsNaN(float64(score)) {
 		return 0, false
@@ -583,7 +584,7 @@ func (rs *resultSetSlice) Get(docID uint32) (float32, bool) {
 	return score, true
 }
 
-func (rs *resultSetSlice) Range(f func(docID uint32, score float32)) {
+func (rs *resultSetSlice) iterate(f func(docID uint32, score float32)) {
 	for docID, score := range rs.data {
 		if !math.IsNaN(float64(score)) {
 			f(uint32(docID), score)
@@ -591,6 +592,6 @@ func (rs *resultSetSlice) Range(f func(docID uint32, score float32)) {
 	}
 }
 
-func (rs *resultSetSlice) Size() int64 {
-	return rs.size
+func (rs *resultSetSlice) size() int64 {
+	return rs.count
 }

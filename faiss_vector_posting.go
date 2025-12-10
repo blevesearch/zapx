@@ -323,7 +323,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 		sb:                 sb,
 	}
 
-	return rv, err
+	return rv, nil
 }
 
 func (sb *SegmentBase) UpdateFieldStats(stats segment.FieldStats) {

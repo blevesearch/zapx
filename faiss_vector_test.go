@@ -494,15 +494,16 @@ func TestVectorSegment(t *testing.T) {
 	//
 	// First Iteration:
 	// - docID 9: stubVecData[7][0:3] = {0.123, 0.456, 0.789}, L2 ≈ 0.85 (best)
-	//            stubVecData[7][3:6] = {0.987, 0.654, 0.321}, L2 ≈ 1.51 (duplicate, discarded)
-	// - docID 2: stubVecData[0] = {1.0, 2.0, 3.0}, L2 = 14
+	// - docID 9: stubVecData[7][3:6] = {0.987, 0.654, 0.321}, L2 ≈ 1.51 (duplicate, discarded)
+	// - docID 2: stubVecData[0]      = {1.0, 2.0, 3.0},       L2 = 14
 	// We have 2 unique docs so far < 3 requested, continue searching...
 	//
 	// Second Iteration:
-	// - docID 8: stubVecData[6][0:3] = {1.23, 2.45, 2.867}, L2 ≈ 15.74 (best)
-	//            stubVecData[6][3:6] = {3.33, 4.56, 5.67}, L2 ≈ 64.03 (duplicate, discarded)
-	// - docID 6: stubVecData[4] = {4.439, 0.307, 1.063}, L2 ≈ 20.92
+	// - docID 8: stubVecData[6][0:3] = {1.23, 2.45, 2.867},   L2 ≈ 15.74 (best)
+	// - docID 6: stubVecData[4]      = {4.439, 0.307, 1.063}, L2 ≈ 20.92
+	// - docID 8: stubVecData[6][3:6] = {3.33, 4.56, 5.67},    L2 ≈ 64.03 (duplicate, discarded)
 	// We have 4 unique docs now >= 3 requested, stop searching.
+	//
 	// Final unique docs: [9, 2, 8, 6]
 	// Final scores: [0.85, 14, 15.74, 20.92]
 	//
@@ -516,7 +517,7 @@ func TestVectorSegment(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		pl, err := vecIndex.Search([]float32{0.0, 0.0, 0.0}, 3, nil)
+		pl, err := vecIndex.Search(queryVec, 3, nil)
 		if err != nil {
 			vecIndex.Close()
 			t.Fatal(err)
@@ -606,7 +607,7 @@ func TestPersistedVectorSegment(t *testing.T) {
 	}()
 
 	data := stubVecData
-	queryVec := []float32{10.0, 10.0, 10.0}
+	queryVec := []float32{0.555, 0.555, 0.555}
 	// With the deduplication logic for multi-vector documents, each document
 	// appears only once in the results with its best score. The search continues
 	// until k unique documents are found. Results are ordered by docID in the
@@ -615,18 +616,24 @@ func TestPersistedVectorSegment(t *testing.T) {
 	// Expected unique documents (ordered by L2 distance, lower = closer):
 	//
 	// First Iteration (k=3 requested):
-	// - docID 8: stubVecData[6][3:6] = {3.33, 4.56, 5.67}, L2 ≈ 92.83 (best)
-	//            stubVecData[6][0:3] = {1.23, 2.45, 2.867}, L2 ≈ 184.77 (duplicate, not in top 3)
-	// - docID 4: stubVecData[2] = {6.7, 0.876, 9.45}, L2 ≈ 94.46
-	// - docID 7: stubVecData[5] = {6.653, 7.752, 0.972}, L2 ≈ 97.74
-	// We have 3 unique docs = 3 requested, stop searching.
-	// Final unique docs: [8, 4, 7]
-	// Final scores: [92.83, 94.46, 97.74]
+	// - docID 9: stubVecData[7][0:3] = {0.123, 0.456, 0.789}, L2 ≈ 0.24 (best)
+	// - docID 9: stubVecData[7][3:6] = {0.987, 0.654, 0.321}, L2 ≈ 0.24 (duplicate, discarded)
+	// - docID 2: stubVecData[0]      = {1.0, 2.0, 3.0},       L2 ≈ 8.27
+	// We have 2 unique docs so far < 3 requested, continue searching...
 	//
-	// Iteration order is by docID: [4, 7, 8]
+	// Second Iteration (excluding vectors from first iteration):
+	// - docID 8: stubVecData[6][0:3] = {1.23, 2.45, 2.867},   L2 ≈ 9.39 (best)
+	// - docID 6: stubVecData[4]      = {4.439, 0.307, 1.063}, L2 ≈ 15.40
+	// - docID 8: stubVecData[6][3:6] = {3.33, 4.56, 5.67},    L2 ≈ 49.90 (duplicate, discarded)
+	//
+	// We have 4 unique docs now >= 3 requested, stop searching.
+	// Final unique docs: [9, 2, 8, 6]
+	// Final scores: [0.24, 8.27, 9.39, 15.40]
+	//
+	// Iteration order is by docID: [2, 6, 8, 9]
 	// Shortening to k will be done in bleve's knn collector
-	hitDocIDs := []uint64{4, 7, 8}
-	hitVecs := [][]float32{data[2], data[5], data[6][3:6]}
+	hitDocIDs := []uint64{2, 6, 8, 9}
+	hitVecs := [][]float32{data[0], data[4], data[6][0:3], data[7][0:3]}
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
 		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", false, nil)
 		if err != nil {

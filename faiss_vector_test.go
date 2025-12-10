@@ -490,16 +490,16 @@ func TestVectorSegment(t *testing.T) {
 	// until k unique documents are found. Results are ordered by docID in the
 	// postings list.
 	//
-	// Expected unique documents (ordered by L2 distance, lower = closer):
+	// Expected unique documents (ordered by squared L2 distance, lower = closer):
 	//
 	// First Iteration:
-	// - docID 9: stubVecData[7][0:3] = {0.123, 0.456, 0.789}, L2 ≈ 0.85 (best)
-	// - docID 9: stubVecData[7][3:6] = {0.987, 0.654, 0.321}, L2 ≈ 1.51 (duplicate, discarded)
+	// - docID 9: stubVecData[7][0:3] = {0.123, 0.456, 0.789}, L2 ≈ 0.84 (best)
+	// - docID 9: stubVecData[7][3:6] = {0.987, 0.654, 0.321}, L2 ≈ 1.50 (duplicate, discarded)
 	// - docID 2: stubVecData[0]      = {1.0, 2.0, 3.0},       L2 = 14
 	// We have 2 unique docs so far < 3 requested, continue searching...
 	//
 	// Second Iteration:
-	// - docID 8: stubVecData[6][0:3] = {1.23, 2.45, 2.867},   L2 ≈ 15.74 (best)
+	// - docID 8: stubVecData[6][0:3] = {1.23, 2.45, 2.867},   L2 ≈ 15.73 (best)
 	// - docID 6: stubVecData[4]      = {4.439, 0.307, 1.063}, L2 ≈ 20.92
 	// - docID 8: stubVecData[6][3:6] = {3.33, 4.56, 5.67},    L2 ≈ 64.03 (duplicate, discarded)
 	// We have 4 unique docs now >= 3 requested, stop searching.
@@ -613,12 +613,12 @@ func TestPersistedVectorSegment(t *testing.T) {
 	// until k unique documents are found. Results are ordered by docID in the
 	// postings list.
 	//
-	// Expected unique documents (ordered by L2 distance, lower = closer):
+	// Expected unique documents (ordered by squared L2 distance, lower = closer):
 	//
 	// First Iteration (k=3 requested):
-	// - docID 9: stubVecData[7][0:3] = {0.123, 0.456, 0.789}, L2 ≈ 0.24 (best)
-	// - docID 9: stubVecData[7][3:6] = {0.987, 0.654, 0.321}, L2 ≈ 0.24 (duplicate, discarded)
-	// - docID 2: stubVecData[0]      = {1.0, 2.0, 3.0},       L2 ≈ 8.27
+	// - docID 9: stubVecData[7][0:3] = {0.123, 0.456, 0.789}, L2 ≈ 0.25 (best)
+	// - docID 9: stubVecData[7][3:6] = {0.987, 0.654, 0.321}, L2 ≈ 0.25 (duplicate, discarded)
+	// - docID 2: stubVecData[0]      = {1.0, 2.0, 3.0},       L2 ≈ 8.26
 	// We have 2 unique docs so far < 3 requested, continue searching...
 	//
 	// Second Iteration (excluding vectors from first iteration):

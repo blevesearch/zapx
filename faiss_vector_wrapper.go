@@ -313,6 +313,8 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 				if score > prevScore {
 					rs.put(docID, score)
 				}
+			case faiss.MetricL2:
+				fallthrough
 			default: // distance metrics like euclidean distance => lower is better
 				if score < prevScore {
 					rs.put(docID, score)

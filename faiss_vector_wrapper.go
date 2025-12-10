@@ -486,7 +486,7 @@ type ResultSet interface {
 	Size() int64
 }
 
-// resultSetSliceTreshold defines the threshold ratio of k to total documents
+// resultSetSliceThreshold defines the threshold ratio of k to total documents
 // in the index, below which a map-based ResultSet is used, and above which
 // a slice-based ResultSet is used.
 // It is derived using the following reasoning:
@@ -510,11 +510,11 @@ type ResultSet interface {
 //	K/N < 4/20
 //
 // Therefore, if the ratio of K to N is less than 0.2 (4/20), we use a map-based ResultSet.
-var resultSetSliceTreshold = 4.0 / 20.0
+var resultSetSliceThreshold = 4.0 / 20.0
 
 // NewResultSet creates a new ResultSet
 func NewResultSet(k int64, numDocs uint64) ResultSet {
-	if float64(k)/float64(numDocs) < resultSetSliceTreshold {
+	if float64(k)/float64(numDocs) < resultSetSliceThreshold {
 		return newResultSetMap(k)
 	}
 	return newResultSetSlice(numDocs)
@@ -550,22 +550,20 @@ func (rs *resultSetMap) Size() int64 {
 }
 
 type resultSetSlice struct {
-	sentinal float32
-	size     int64
-	data     []float32
+	size int64
+	data []float32
 }
 
 func newResultSetSlice(numDocs uint64) ResultSet {
 	data := make([]float32, numDocs)
-	// scores can be negative, so initialize to a sentinal value which is NaN
+	// scores can be negative, so initialize to a sentinel value which is NaN
 	sentinel := float32(math.NaN())
 	for i := range data {
 		data[i] = sentinel
 	}
 	return &resultSetSlice{
-		sentinal: sentinel,
-		size:     0,
-		data:     data,
+		size: 0,
+		data: data,
 	}
 }
 

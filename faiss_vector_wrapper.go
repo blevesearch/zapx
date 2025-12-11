@@ -39,6 +39,10 @@ type vectorIndexWrapper struct {
 	sb *SegmentBase
 }
 
+func newVectorIndexWrapper() *vectorIndexWrapper {
+	return &vectorIndexWrapper{}
+}
+
 func (v *vectorIndexWrapper) Search(qVector []float32, k int64,
 	params json.RawMessage) (
 	segment.VecPostingsList, error) {
@@ -55,6 +59,10 @@ func (v *vectorIndexWrapper) Search(qVector []float32, k int64,
 
 	if v.vecIndex == nil || v.vecIndex.D() != len(qVector) {
 		// vector index not found or dimensionality mismatched
+		return rv, nil
+	}
+
+	if v.sb.numDocs == 0 {
 		return rv, nil
 	}
 

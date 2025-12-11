@@ -268,7 +268,7 @@ func (vpItr *VecPostingsIterator) BytesWritten() uint64 {
 	return 0
 }
 
-// InterpretVectorIndex returns a construct of closures (vectorIndexWrapper)
+// InterpretVectorIndex returns a struct based implementation (vectorIndexWrapper)
 // that will allow the caller to -
 // (1) search within an attached vector index
 // (2) search limited to a subset of documents within an attached vector index
@@ -277,7 +277,7 @@ func (vpItr *VecPostingsIterator) BytesWritten() uint64 {
 func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool,
 	except *roaring.Bitmap) (
 	segment.VectorIndex, error) {
-	var rv *vectorIndexWrapper
+	rv := newVectorIndexWrapper()
 
 	fieldIDPlus1 := sb.fieldsMap[field]
 	if fieldIDPlus1 <= 0 {

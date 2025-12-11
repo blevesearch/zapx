@@ -36,7 +36,8 @@ var MaxMultiVectorDocSearchRetries = 100
 
 // vectorIndexWrapper conforms to scorch_segment_api's VectorIndex interface
 type vectorIndexWrapper struct {
-	vecIndex           *faiss.IndexImpl
+	fIndex             faiss.FloatIndex
+	bIndex             faiss.BinaryIndex
 	vecDocIDMap        map[int64]uint32
 	docVecIDMap        map[uint32][]int64
 	vectorIDsToExclude []int64
@@ -46,22 +47,27 @@ type vectorIndexWrapper struct {
 	sb *SegmentBase
 }
 
+//  1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
+//  2. both the values can be represented using roaring bitmaps.
+//  3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
+//  4. VecPostings would just have the docNum and the score. Every call of Next()
+//     and Advance just returns the next VecPostings. The caller would do a vp.Number()
+//     and the Score() to get the corresponding values
 func (v *vectorIndexWrapper) Search(qVector []float32, k int64,
 	params json.RawMessage) (
 	segment.VecPostingsList, error) {
-	// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
-	// 2. both the values can be represented using roaring bitmaps.
-	// 3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
-	// 4. VecPostings would just have the docNum and the score. Every call of Next()
-	//    and Advance just returns the next VecPostings. The caller would do a vp.Number()
-	//    and the Score() to get the corresponding values
+
 	rv := &VecPostingsList{
 		except:   nil, // todo: handle the except bitmap within postings iterator.
 		postings: roaring64.New(),
 	}
 
-	if v.vecIndex == nil || v.vecIndex.D() != len(qVector) {
+	if v.fIndex == nil || v.fIndex.D() != len(qVector) {
 		// vector index not found or dimensionality mismatched
+		return rv, nil
+	}
+
+	if v.bIndex != nil && v.bIndex.D() != len(qVector) {
 		return rv, nil
 	}
 
@@ -69,8 +75,13 @@ func (v *vectorIndexWrapper) Search(qVector []float32, k int64,
 		return rv, nil
 	}
 
-	rs, err := v.searchWithoutIDs(qVector, k,
-		v.vectorIDsToExclude, params)
+	var rs resultSet
+	var err error
+	if v.bIndex != nil {
+		rs, err = v.searchBinaryWithoutIDs(qVector, k, v.vectorIDsToExclude, params)
+	} else {
+		rs, err = v.searchFloatWithoutIDs(qVector, k, v.vectorIDsToExclude, params)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +91,69 @@ func (v *vectorIndexWrapper) Search(qVector []float32, k int64,
 	return rv, nil
 }
 
+func (v *vectorIndexWrapper) searchFloatWithoutIDs(qVector []float32, k int64, exclude []int64, params json.RawMessage) (
+	resultSet, error) {
+	return v.docSearch(k, v.sb.numDocs,
+		func() ([]float32, []int64, error) {
+			return v.fIndex.SearchWithoutIDs(qVector, k, exclude, params)
+		},
+		func(numIter int, labels []int64) bool {
+			// if this is the first loop iteration and we have < k unique docIDs,
+			// we must clone the existing exclude slice before appending to it
+			// to avoid modifying the original slice passed in by the caller
+			if numIter == 1 {
+				exclude = slices.Clone(exclude)
+			}
+			// prepare the exclude list for the next iteration by adding
+			// the vector ids retrieved in this iteration
+			exclude = append(exclude, labels...)
+			// with exclude list updated, we can proceed to the next iteration
+			return true
+		})
+}
+
+func (v *vectorIndexWrapper) searchBinaryWithoutIDs(qVector []float32, k int64, exclude []int64, params json.RawMessage) (
+	resultSet, error) {
+
+	binaryQVector := convertToBinary(qVector, 1, v.fIndex.D())
+	binKVal := 4 * k
+	return v.docSearch(k, v.sb.numDocs,
+		func() ([]float32, []int64, error) {
+			_, binIds, err := v.bIndex.SearchBinaryWithoutIDs(binaryQVector, binKVal, exclude, params)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			distances := make([]float32, len(binIds))
+			err = v.fIndex.DistCompute(qVector, binIds, binKVal, distances)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			scores, labels := TopNIDsByDistance(distances, binIds, int(k))
+			return scores, labels, nil
+		},
+		func(numIter int, labels []int64) bool {
+			// if this is the first loop iteration and we have < k unique docIDs,
+			// we must clone the existing exclude slice before appending to it
+			// to avoid modifying the original slice passed in by the caller
+			if numIter == 1 {
+				exclude = slices.Clone(exclude)
+			}
+			// prepare the exclude list for the next iteration by adding
+			// the vector ids retrieved in this iteration
+			exclude = append(exclude, labels...)
+			// with exclude list updated, we can proceed to the next iteration
+			return true
+		})
+}
+
+//  1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
+//  2. both the values can be represented using roaring bitmaps.
+//  3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
+//  4. VecPostings would just have the docNum and the score. Every call of Next()
+//     and Advance just returns the next VecPostings. The caller would do a vp.Number()
+//     and the Score() to get the corresponding values
 func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	eligibleDocIDs []uint64, params json.RawMessage) (
 	segment.VecPostingsList, error) {
@@ -88,17 +162,12 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	if len(eligibleDocIDs) == int(v.sb.numDocs) {
 		return v.Search(qVector, k, params)
 	}
-	// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
-	// 2. both the values can be represented using roaring bitmaps.
-	// 3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
-	// 4. VecPostings would just have the docNum and the score. Every call of Next()
-	//    and Advance just returns the next VecPostings. The caller would do a vp.Number()
-	//    and the Score() to get the corresponding values
+
 	rv := &VecPostingsList{
 		except:   nil, // todo: handle the except bitmap within postings iterator.
 		postings: roaring64.New(),
 	}
-	if v.vecIndex == nil || v.vecIndex.D() != len(qVector) {
+	if v.fIndex == nil || v.fIndex.D() != len(qVector) {
 		// vector index not found or dimensionality mismatched
 		return rv, nil
 	}
@@ -130,7 +199,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	}
 	// If the index is not an IVF index, then the search can be
 	// performed directly, using the Flat index.
-	if !v.vecIndex.IsIVFIndex() {
+	if !v.fIndex.IsIVFIndex() {
 		// vector IDs corresponding to the local doc numbers to be
 		// considered for the search
 		rs, err := v.searchWithIDs(qVector, k,
@@ -144,7 +213,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// Determining which clusters, identified by centroid ID,
 	// have at least one eligible vector and hence, ought to be
 	// probed.
-	clusterVectorCounts, err := v.vecIndex.ObtainClusterVectorCountsFromIVFIndex(vectorIDsToInclude)
+	clusterVectorCounts, err := v.fIndex.ObtainClusterVectorCountsFromIVFIndex(vectorIDsToInclude)
 	if err != nil {
 		return nil, err
 	}
@@ -189,12 +258,12 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		centroidIDs = append(centroidIDs, centroidID)
 	}
 	closestCentroidIDs, centroidDistances, err :=
-		v.vecIndex.ObtainClustersWithDistancesFromIVFIndex(qVector, centroidIDs)
+		v.fIndex.ObtainClustersWithDistancesFromIVFIndex(qVector, centroidIDs)
 	if err != nil {
 		return nil, err
 	}
 	// Getting the nprobe value set at index time.
-	nprobe := int(v.vecIndex.GetNProbe())
+	nprobe := int(v.fIndex.GetNProbe())
 	// Determining the minimum number of centroids to be probed
 	// to ensure that at least 'k' vectors are collected while
 	// examining at least 'nprobe' centroids.
@@ -233,11 +302,11 @@ func (v *vectorIndexWrapper) Size() uint64 {
 
 func (v *vectorIndexWrapper) ObtainKCentroidCardinalitiesFromIVFIndex(limit int, descending bool) (
 	[]index.CentroidCardinality, error) {
-	if v.vecIndex == nil || !v.vecIndex.IsIVFIndex() {
+	if v.fIndex == nil || !v.fIndex.IsIVFIndex() {
 		return nil, nil
 	}
 
-	cardinalities, centroids, err := v.vecIndex.ObtainKCentroidCardinalitiesFromIVFIndex(limit, descending)
+	cardinalities, centroids, err := v.fIndex.ObtainKCentroidCardinalitiesFromIVFIndex(limit, descending)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +353,7 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 	// we have multi-vector documents leading to duplicates in docIDs retrieved
 	numIter := 0
 	// get the metric type of the index to help with deduplication logic
-	metricType := v.vecIndex.MetricType()
+	metricType := v.fIndex.MetricType()
 	// we keep searching until we have k unique docIDs or we have exhausted the vector index
 	// or we have reached the maximum number of deduplication iterations allowed
 	for numIter < MaxMultiVectorDocSearchRetries && rs.size() < k && !exhausted {
@@ -356,7 +425,7 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclud
 	resultSet, error) {
 	return v.docSearch(k, v.sb.numDocs,
 		func() ([]float32, []int64, error) {
-			return v.vecIndex.SearchWithoutIDs(qVector, k, exclude, params)
+			return v.fIndex.SearchWithoutIDs(qVector, k, exclude, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
@@ -384,7 +453,7 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include [
 	var includeSet map[int64]struct{}
 	return v.docSearch(k, v.sb.numDocs,
 		func() ([]float32, []int64, error) {
-			return v.vecIndex.SearchWithIDs(qVector, k, include, params)
+			return v.fIndex.SearchWithIDs(qVector, k, include, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
@@ -441,7 +510,7 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(ids []int64, include boo
 			}
 			// once the main search is done we must free the selector
 			defer selector.Delete()
-			return v.vecIndex.SearchClustersFromIVFIndex(selector, eligibleCentroidIDs,
+			return v.fIndex.SearchClustersFromIVFIndex(selector, eligibleCentroidIDs,
 				centroidsToProbe, k, x, centroidDis, params)
 		},
 		func(numIter int, labels []int64) bool {
@@ -516,6 +585,55 @@ func (v *vectorIndexWrapper) getDocIDForVectorID(vecID int64) (uint32, bool) {
 	docID, exists := v.vecDocIDMap[vecID]
 	return docID, exists
 }
+
+// -----------------------------------------------------------------------
+
+func TopNIDsByDistance(dist []float32, ids []int64, n int) ([]float32, []int64) {
+	if n <= 0 || n > len(dist) {
+		return nil, nil
+	}
+
+	// We want the N largest distances
+	target := len(dist) - n
+
+	quickselect(dist, ids, 0, len(dist)-1, target)
+
+	// Return top-N IDs (unordered)
+	return dist[target:], ids[target:]
+}
+
+func quickselect(dist []float32, ids []int64, left, right, k int) {
+	for left < right {
+		pivot := partition(dist, ids, left, right)
+		if pivot == k {
+			return
+		} else if pivot < k {
+			left = pivot + 1
+		} else {
+			right = pivot - 1
+		}
+	}
+}
+
+func partition(dist []float32, ids []int64, left, right int) int {
+	pivotVal := dist[right]
+	store := left
+
+	for i := left; i < right; i++ {
+		// We want largest distances ⇒ partition small ones left
+		if dist[i] < pivotVal {
+			dist[i], dist[store] = dist[store], dist[i]
+			ids[i], ids[store] = ids[store], ids[i]
+			store++
+		}
+	}
+
+	dist[store], dist[right] = dist[right], dist[store]
+	ids[store], ids[right] = ids[right], ids[store]
+	return store
+}
+
+// -----------------------------------------------------------------------
 
 // resultSet is a data structure to hold (docID, score) pairs while ensuring
 // that each docID is unique. It supports efficient insertion, retrieval,

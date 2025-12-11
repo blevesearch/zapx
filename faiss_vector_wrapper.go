@@ -42,7 +42,6 @@ type vectorIndexWrapper struct {
 	vectorIDsToExclude []int64
 	fieldIDPlus1       uint16
 	vecIndexSize       uint64
-	metricType         int
 
 	sb *SegmentBase
 }
@@ -281,6 +280,8 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 	// keep track of number of iterations done, we execute the loop more than once only when
 	// we have multi-vector documents leading to duplicates in docIDs retrieved
 	numIter := 0
+	// get the metric type of the index to help with deduplication logic
+	metricType := v.vecIndex.MetricType()
 	// we keep searching until we have k unique docIDs or we have exhausted the vector index
 	// or we have reached the maximum number of deduplication iterations allowed
 	for numIter < MaxMultiVectorDocSearchRetries && rs.size() < k && !exhausted {
@@ -317,7 +318,7 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 			// for inner product, higher the score, better the match
 			// for euclidean distance, lower the score/distance, better the match
 			// so we invert the comparison accordingly
-			switch v.metricType {
+			switch metricType {
 			case faiss.MetricInnerProduct: // similarity metrics like dot product => higher is better
 				if score > prevScore {
 					rs.put(docID, score)

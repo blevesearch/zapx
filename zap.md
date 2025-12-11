@@ -192,6 +192,10 @@ In a vector index, each vector in a document is given a unique Id. This vector I
     |   |   +~~~~~~~~~~~~+~~~~~~~~~~~~+                                  |
     |   |                                                                |
     |   |   +~~~~~~~~~~~~~+                                              |
+    |   |   |  INDEX TYPE |                                              |
+    |   |   +~~~~~~~~~~~~~+                                              |
+    |   |                                                                |
+    |   |   +~~~~~~~~~~~~~+                                              |
     |   |   |  FAISS LEN  |                                              |
     |   |   +~~~~~~~~~~~~~+                                              |
     |   |                                                                |
@@ -213,6 +217,7 @@ In a vector index, each vector in a document is given a unique Id. This vector I
          VIO  - Vector Index Optimized for
          NVEC - Number of vectors
          ML   - Length of the vector Id to document Id map
+         INDEX TYPE - Type of the vector index
          FAISS LEN - Length of serialized FAISS index
 
 ## Synonym Index Section

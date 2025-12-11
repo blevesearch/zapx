@@ -47,6 +47,10 @@ type vectorIndexWrapper struct {
 	sb *SegmentBase
 }
 
+func newVectorIndexWrapper() *vectorIndexWrapper {
+	return &vectorIndexWrapper{}
+}
+
 func (v *vectorIndexWrapper) Search(qVector []float32, k int64,
 	params json.RawMessage) (
 	segment.VecPostingsList, error) {

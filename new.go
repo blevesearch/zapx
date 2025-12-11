@@ -68,6 +68,7 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 	}
 
 	s.results, s.edgeList = flattenNestedDocuments(results, s.edgeList)
+	s.config = config
 	s.chunkMode = chunkMode
 	s.w = NewCountHashWriter(&br)
 

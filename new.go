@@ -67,6 +67,7 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 		br.Grow(estimateAvgBytesPerDoc * estimateNumResults)
 	}
 
+	s.config = config
 	s.results = results
 	s.chunkMode = chunkMode
 	s.w = NewCountHashWriter(&br)

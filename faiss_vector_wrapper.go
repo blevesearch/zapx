@@ -495,7 +495,7 @@ func (v *vectorIndexWrapper) getDocIDForVectorID(vecID int64) (uint32, bool) {
 	}
 	// in nested mode and docID exists, so we must get the root docID from the edge list
 	// reuse the wrapper's ancestry slice to avoid allocations
-	v.ancestry = v.sb.Ancestors(uint64(docID), v.ancestry)
+	v.ancestry = v.sb.Ancestors(uint64(docID), v.ancestry[:0])
 	if len(v.ancestry) == 0 {
 		// should not happen, but just in case, return the docID as is
 		return docID, exists

@@ -277,17 +277,16 @@ func (vpItr *VecPostingsIterator) BytesWritten() uint64 {
 func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool,
 	except *roaring.Bitmap) (
 	segment.VectorIndex, error) {
-	rv := newVectorIndexWrapper()
 
 	fieldIDPlus1 := sb.fieldsMap[field]
 	if fieldIDPlus1 <= 0 {
-		return rv, nil
+		return newVectorIndexWrapper(), nil
 	}
 
 	vectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionFaissVectorIndex]
 	// check if the field has a vector section in the segment.
 	if vectorSection <= 0 {
-		return rv, nil
+		return newVectorIndexWrapper(), nil
 	}
 
 	pos := int(vectorSection)
@@ -313,7 +312,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 		vecIndexSize = vecIndex.Size()
 	}
 
-	rv = &vectorIndexWrapper{
+	rv := &vectorIndexWrapper{
 		vecIndex:           vecIndex,
 		vecDocIDMap:        vecDocIDMap,
 		docVecIDMap:        docVecIDMap,
@@ -321,7 +320,6 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 		fieldIDPlus1:       fieldIDPlus1,
 		vecIndexSize:       vecIndexSize,
 		sb:                 sb,
-		metricType:         vecIndex.MetricType(),
 	}
 
 	return rv, nil

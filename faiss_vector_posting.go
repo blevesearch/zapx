@@ -281,14 +281,14 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 	rv := &vectorIndexWrapper{sb: sb}
 	fieldIDPlus1 := sb.fieldsMap[field]
 	if fieldIDPlus1 <= 0 {
-		return newVectorIndexWrapper(), nil
+		return rv, nil
 	}
 	rv.fieldIDPlus1 = fieldIDPlus1
 
 	vectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionFaissVectorIndex]
 	// check if the field has a vector section in the segment.
 	if vectorSection <= 0 {
-		return newVectorIndexWrapper(), nil
+		return rv, nil
 	}
 
 	pos := int(vectorSection)

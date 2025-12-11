@@ -44,6 +44,11 @@ type vectorIndexWrapper struct {
 	vecIndexSize       uint64
 	metricType         int
 
+	// indicates if the vectorIndexWrapper is configured in nested mode
+	nestedMode bool
+	// reusable slice to hold ancestry information during docID retrieval
+	ancestry []index.AncestorID
+
 	sb *SegmentBase
 }
 
@@ -478,9 +483,27 @@ func (v *vectorIndexWrapper) getSelector(ids []int64, include bool) (selector fa
 
 // Utility function to get the docID for a given vectorID, used for the
 // deduplication logic, to map vectorIDs back to their corresponding docIDs
+// if we are in nested mode, this method returns the root docID instead of
+// the nested docID, by consulting the edge list. This ensures that kNN searches
+// return unique root documents when nested documents are involved.
 func (v *vectorIndexWrapper) getDocIDForVectorID(vecID int64) (uint32, bool) {
 	docID, exists := v.vecDocIDMap[vecID]
-	return docID, exists
+	if !v.nestedMode || !exists {
+		// either not in nested mode, or docID does not exist
+		//for the vectorID, so just return the docID as is
+		return docID, exists
+	}
+	// in nested mode and docID exists, so we must get the root docID from the edge list
+	// reuse the wrapper's ancestry slice to avoid allocations
+	v.ancestry = v.sb.Ancestors(uint64(docID), v.ancestry)
+	if len(v.ancestry) == 0 {
+		// should not happen, but just in case, return the docID as is
+		return docID, exists
+	}
+	// return the root docID, which is the last element in the ancestry slice
+	// in case the docID is intself a root doc, the ancestry slice would have
+	// just one element, which is the docID itself
+	return uint32(v.ancestry[len(v.ancestry)-1]), true
 }
 
 // resultSet is a data structure to hold (docID, score) pairs while ensuring

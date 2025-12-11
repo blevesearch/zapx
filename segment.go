@@ -829,7 +829,7 @@ func (sb *SegmentBase) CountRoot(deleted *roaring.Bitmap) uint64 {
 	// dR = D - dS
 	// Therefore, the count of root docs excluding deleted ones is:
 	// R - dR = (T - S) - (D - dS)
-	return (sb.Count() - sb.nstIndexCache.countNested()) - (sb.nstIndexCache.countRoot(deleted))
+	return (sb.Count() - sb.countNested()) - (sb.nstIndexCache.countRoot(deleted))
 }
 
 // AddNestedDocuments returns a bitmap containing the original document numbers in drops,
@@ -838,7 +838,7 @@ func (sb *SegmentBase) CountRoot(deleted *roaring.Bitmap) uint64 {
 // bitmap includes both the original drops and all their descendants (if any).
 func (sb *SegmentBase) AddNestedDocuments(drops *roaring.Bitmap) *roaring.Bitmap {
 	// If no drops or no subDocs, nothing to do
-	if drops == nil || drops.GetCardinality() == 0 || sb.nstIndexCache.countNested() == 0 {
+	if drops == nil || drops.GetCardinality() == 0 || sb.countNested() == 0 {
 		return drops
 	}
 	// Get the edge list for this segment
@@ -867,4 +867,9 @@ func (sb *SegmentBase) AddNestedDocuments(drops *roaring.Bitmap) *roaring.Bitmap
 // The underlying implementation may use a map or a slice, but callers should rely on the interface methods.
 func (sb *SegmentBase) EdgeList() EdgeList {
 	return sb.nstIndexCache.edgeList()
+}
+
+// Utility method to count the number of nested documents in the segment, not exported.
+func (sb *SegmentBase) countNested() uint64 {
+	return sb.nstIndexCache.countNested()
 }

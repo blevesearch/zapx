@@ -313,6 +313,10 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 		vecIndexSize = vecIndex.Size()
 	}
 
+	// get the number of nested documents in this segment, if any
+	// to determing if the wrapper needs to handle nested documents
+	nestedMode := sb.countNested() > 0
+
 	rv = &vectorIndexWrapper{
 		vecIndex:           vecIndex,
 		vecDocIDMap:        vecDocIDMap,
@@ -322,6 +326,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 		vecIndexSize:       vecIndexSize,
 		sb:                 sb,
 		metricType:         vecIndex.MetricType(),
+		nestedMode:         nestedMode,
 	}
 
 	return rv, nil

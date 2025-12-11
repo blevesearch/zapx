@@ -153,7 +153,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		// Use a bitset to efficiently track eligible document IDs.
 		// This reduces the lookup cost when checking if a document ID is eligible,
 		// compared to using a map or slice.
-		bs := bitset.New(uint(len(eligibleDocIDs)))
+		bs := bitset.New(uint(v.sb.numDocs))
 		for _, docID := range eligibleDocIDs {
 			bs.Set(uint(docID))
 		}

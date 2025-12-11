@@ -29,10 +29,10 @@ import (
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 
-// MaxSearchRetries limits repeated searches when deduplicating multi-vector
-// documents. Each retry excludes previously seen vectors to find new unique
-// documents. Acts as a safeguard against pathological data distributions.
-var MaxSearchRetries = 100
+// MaxMultiVectorDocSearchRetries limits repeated searches when deduplicating
+// multi-vector documents. Each retry excludes previously seen vectors to find
+// new unique documents. Acts as a safeguard against pathological data distributions.
+var MaxMultiVectorDocSearchRetries = 100
 
 // vectorIndexWrapper conforms to scorch_segment_api's VectorIndex interface
 type vectorIndexWrapper struct {
@@ -278,11 +278,12 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 	rs := newResultSet(k, numDocs)
 	// flag to indicate if we have exhausted the vector index
 	var exhausted bool
-	// keep track of number of iterations done
+	// keep track of number of iterations done, we execute the loop more than once only when
+	// we have multi-vector documents leading to duplicates in docIDs retrieved
 	numIter := 0
 	// we keep searching until we have k unique docIDs or we have exhausted the vector index
 	// or we have reached the maximum number of deduplication iterations allowed
-	for numIter < MaxSearchRetries && rs.size() < k && !exhausted {
+	for numIter < MaxMultiVectorDocSearchRetries && rs.size() < k && !exhausted {
 		// search the vector index
 		numIter++
 		scores, labels, err := search()

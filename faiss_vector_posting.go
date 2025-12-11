@@ -320,7 +320,6 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 		fieldIDPlus1:       fieldIDPlus1,
 		vecIndexSize:       vecIndexSize,
 		sb:                 sb,
-		metricType:         vecIndex.MetricType(),
 	}
 
 	return rv, nil

@@ -271,9 +271,15 @@ func (v *vectorIndexWrapper) addIDsToPostingsList(pl *VecPostingsList, rs result
 // top k documents based on the provided search function.
 // It handles deduplication of documents that may have multiple
 // vectors associated with them.
+// The prepareNextIter function is used to set up the state
+// for the next iteration, if more searches are needed to find
+// k unique documents. The callback recieves the number of iterations
+// done so far and the vector ids retrieved in the last search. While preparing
+// the next iteration, if its decided that no further searches are needed,
+// the prepareNextIter function can decide whether to continue searching or not
 func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 	search func() (scores []float32, labels []int64, err error),
-	prepareNextIter func(numIter int, labels []int64)) (resultSet, error) {
+	prepareNextIter func(numIter int, labels []int64) bool) (resultSet, error) {
 	// create a result set to hold top K docIDs and their scores
 	rs := newResultSet(k, numDocs)
 	// flag to indicate if we have exhausted the vector index
@@ -336,11 +342,15 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 		// we have not exhausted the index
 		if rs.size() < k && !exhausted {
 			// prepare state for next iteration
-			prepareNextIter(numIter, labels)
+			shouldContinue := prepareNextIter(numIter, labels)
+			if !shouldContinue {
+				break
+			}
 		}
 	}
 	// at this point we either have k unique docIDs or we have exhausted
-	// the vector index, so return what we have
+	// the vector index or we have reached the maximum number of deduplication iterations allowed
+	// or the prepareNextIter function decided to break out of the loop
 	return rs, nil
 }
 
@@ -352,7 +362,7 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclud
 		func() ([]float32, []int64, error) {
 			return v.vecIndex.SearchWithoutIDs(qVector, k, exclude, params)
 		},
-		func(numIter int, labels []int64) {
+		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
 			// we must clone the existing exclude slice before appending to it
 			// to avoid modifying the original slice passed in by the caller
@@ -362,6 +372,8 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclud
 			// prepare the exclude list for the next iteration by adding
 			// the vector ids retrieved in this iteration
 			exclude = append(exclude, labels...)
+			// with exclude list updated, we can proceed to the next iteration
+			return true
 		})
 }
 
@@ -378,7 +390,7 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include [
 		func() ([]float32, []int64, error) {
 			return v.vecIndex.SearchWithIDs(qVector, k, include, params)
 		},
-		func(numIter int, labels []int64) {
+		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
 			// we clone the existing include slice before modifying it
 			if numIter == 1 {
@@ -400,6 +412,8 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include [
 			for id := range includeSet {
 				include = append(include, id)
 			}
+			// only continue searching if we still have vector ids to include
+			return len(include) != 0
 		})
 }
 
@@ -427,7 +441,7 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(ids []int64, include boo
 			return v.vecIndex.SearchClustersFromIVFIndex(selector, eligibleCentroidIDs,
 				minEligibleCentroids, k, x, centroidDis, params)
 		},
-		func(numIter int, labels []int64) {
+		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
 			// we must clone the existing ids slice before modifying it to avoid
 			// modifying the original slice passed in by the caller
@@ -454,10 +468,14 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(ids []int64, include boo
 				for id := range includeSet {
 					ids = append(ids, id)
 				}
+				// only continue searching if we still have vector ids to include
+				return len(ids) != 0
 			} else {
 				// appending the vector ids retrieved in this iteration
 				// to the exclude list
 				ids = append(ids, labels...)
+				// with exclude list updated, we can proceed to the next iteration
+				return true
 			}
 		})
 }

@@ -178,14 +178,9 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		v.addIDsToPostingsList(rv, ids, scores)
 		return rv, nil
 	}
-	// Determining which clusters, identified by centroid ID,
-	// have at least one eligible vector and hence, ought to be
-	// probed.
-	clusterVectorCounts, err := v.fIndex.ObtainClusterVectorCountsFromIVFIndex(vectorIDsToInclude)
-	if err != nil {
-		return nil, err
-	}
-	var selector faiss.Selector
+
+	var ids []int64
+	var include bool
 	// If there are more elements to be included than excluded, it
 	// might be quicker to use an exclusion selector as a filter
 	// instead of an inclusion selector.
@@ -197,7 +192,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		for _, docID := range eligibleDocIDs {
 			bs.Set(uint(docID))
 		}
-		ineligibleVectorIDs := make([]int64, 0, len(v.docVecIDMap)-len(vectorIDsToInclude))
+		ids := make([]int64, 0, len(v.docVecIDMap)-len(vectorIDsToInclude))
 		for docID, vecIDs := range v.docVecIDMap {
 			// Check if the document ID is NOT in the eligible set, marking it as ineligible.
 			if !bs.Test(uint(docID)) {
@@ -206,22 +201,70 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 				// avoid the unnecessary overhead of slice unpacking (append(vecIDs...)).
 				// Directly append the single element for efficiency.
 				if len(vecIDs) == 1 {
-					ineligibleVectorIDs = append(ineligibleVectorIDs, vecIDs[0])
+					ids = append(ids, vecIDs[0])
 				} else {
-					ineligibleVectorIDs = append(ineligibleVectorIDs, vecIDs...)
+					ids = append(ids, vecIDs...)
 				}
 			}
 		}
-		selector, err = faiss.NewIDSelectorNot(ineligibleVectorIDs)
+		include = false
 	} else {
-		selector, err = faiss.NewIDSelectorBatch(vectorIDsToInclude)
+		include = true
+		ids = vectorIDsToInclude
+	}
+
+	if v.bIndex != nil {
+		err := v.searchBinaryWithFilter(qVector, k, params, ids, include, rv)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		err := v.searchFloatWithFilter(qVector, k, params, ids, vectorIDsToInclude, include, rv)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return rv, nil
+}
+
+func (v *vectorIndexWrapper) searchBinaryWithFilter(qVector []float32, k int64,
+	params json.RawMessage, filteredIds []int64, include bool,
+	pl *VecPostingsList) error {
+
+	var ids []int64
+	var err error
+	binVec := convertToBinary(qVector, 1, v.fIndex.D())
+	if include {
+		_, ids, err = v.bIndex.SearchBinaryWithIDs(binVec, k*4, filteredIds, params)
+
+	} else {
+		_, ids, err = v.bIndex.SearchBinaryWithoutIDs(binVec, k*4, filteredIds, params)
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
-	// If no error occurred during the creation of the selector, then
-	// it should be deleted once the search is complete.
-	defer selector.Delete()
+
+	distances := make([]float32, len(ids))
+	err = v.fIndex.DistCompute(qVector, ids, len(ids), distances)
+	if err != nil {
+		return err
+	}
+	scores, ids := TopNIDsByDistance(distances, ids, int(k))
+	v.addIDsToPostingsList(pl, ids, scores)
+	return nil
+}
+
+func (v *vectorIndexWrapper) searchFloatWithFilter(qVector []float32, k int64,
+	params json.RawMessage, filteredIds []int64, idsToInclude []int64,
+	include bool, pl *VecPostingsList) error {
+	// Determining which clusters, identified by centroid ID,
+	// have at least one eligible vector and hence, ought to be
+	// probed.
+	clusterVectorCounts, err := v.fIndex.ObtainClusterVectorCountsFromIVFIndex(idsToInclude)
+	if err != nil {
+		return err
+	}
 	// Ordering the retrieved centroid IDs by increasing order
 	// of distance i.e. decreasing order of proximity to query vector.
 	centroidIDs := make([]int64, 0, len(clusterVectorCounts))
@@ -231,14 +274,12 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	closestCentroidIDs, centroidDistances, err :=
 		v.fIndex.ObtainClustersWithDistancesFromIVFIndex(qVector, centroidIDs)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	var nprobe int
 	// Getting the nprobe value set at index time.
-	if ivfIndex, ok := v.fIndex.(faiss.IVFIndex); ok {
-		nprobe = int(ivfIndex.GetNProbe())
-	}
+	nprobe := int(v.fIndex.GetNProbe())
+
 	// Determining the minimum number of centroids to be probed
 	// to ensure that at least 'k' vectors are collected while
 	// examining at least 'nprobe' centroids.
@@ -253,16 +294,30 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 			break
 		}
 	}
+
+	var selector faiss.Selector
+	if include {
+		selector, err = faiss.NewIDSelectorBatch(filteredIds)
+	} else {
+		selector, err = faiss.NewIDSelectorNot(filteredIds)
+	}
+	if err != nil {
+		return err
+	}
+	// If no error occurred during the creation of the selector, then
+	// it should be deleted once the search is complete.
+	defer selector.Delete()
+
 	// Search the clusters specified by 'closestCentroidIDs' for
 	// vectors whose IDs are present in 'vectorIDsToInclude'
 	scores, ids, err := v.fIndex.SearchClustersFromIVFIndex(
 		selector, closestCentroidIDs, minEligibleCentroids,
 		k, qVector, centroidDistances, params)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	v.addIDsToPostingsList(rv, ids, scores)
-	return rv, nil
+	v.addIDsToPostingsList(pl, ids, scores)
+	return nil
 }
 
 func (v *vectorIndexWrapper) Close() {

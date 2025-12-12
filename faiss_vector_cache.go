@@ -154,7 +154,6 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		}
 	}
 
-	// read the type of the vector index (unused for now)
 	indexType, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
@@ -174,12 +173,14 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		binSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
 
-		index, err := faiss.ReadIndexFromBuffer(mem[pos:pos+int(binSize)], faissIOFlags, faiss.BinaryIndexType)
-		if err != nil {
-			return nil, nil, nil, nil, nil, err
-		}
-		if bIndex, ok = index.(faiss.BinaryIndex); !ok {
-			return nil, nil, nil, nil, nil, fmt.Errorf("failed to get binary index pointer")
+		if binSize > 0 {
+			index, err := faiss.ReadIndexFromBuffer(mem[pos:pos+int(binSize)], faissIOFlags, faiss.BinaryIndexType)
+			if err != nil {
+				return nil, nil, nil, nil, nil, err
+			}
+			if bIndex, ok = index.(faiss.BinaryIndex); !ok {
+				return nil, nil, nil, nil, nil, fmt.Errorf("failed to get binary index pointer")
+			}
 		}
 	}
 

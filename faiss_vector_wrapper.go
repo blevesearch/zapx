@@ -198,21 +198,22 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// Determining the minimum number of centroids to be probed
 	// to ensure that at least 'k' vectors are collected while
 	// examining at least 'nprobe' centroids.
-	var eligibleDocsTillNow int64
-	minEligibleCentroids := len(closestCentroidIDs)
+	// centroidsToProbe range: [nprobe, number of eligible centroids]
+	var eligibleVecsTillNow int64
+	centroidsToProbe := len(closestCentroidIDs)
 	for i, centroidID := range closestCentroidIDs {
-		eligibleDocsTillNow += clusterVectorCounts[centroidID]
+		eligibleVecsTillNow += clusterVectorCounts[centroidID]
 		// Stop once we've examined at least 'nprobe' centroids and
 		// collected at least 'k' vectors.
-		if eligibleDocsTillNow >= k && i+1 >= nprobe {
-			minEligibleCentroids = i + 1
+		if eligibleVecsTillNow >= k && i+1 >= nprobe {
+			centroidsToProbe = i + 1
 			break
 		}
 	}
 	// Search the clusters specified by 'closestCentroidIDs' for
 	// vectors whose IDs are present in 'vectorIDsToInclude'
 	rs, err := v.searchClustersFromIVFIndex(
-		ids, include, closestCentroidIDs, minEligibleCentroids,
+		ids, include, closestCentroidIDs, centroidsToProbe,
 		k, qVector, centroidDistances, params)
 	if err != nil {
 		return nil, err
@@ -400,15 +401,22 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include [
 
 // searchClustersFromIVFIndex performs a search on the IVF vector index to retrieve the top K documents
 // while either including or excluding the vector IDs specified in the ids slice, depending on the include flag.
-// It takes into account the eligible centroid IDs and ensures that at least minEligibleCentroids are probed.
+// It takes into account the eligible centroid IDs and ensures that at least centroidsToProbe are probed.
+// If after a few iterations we haven't found enough documents, it dynamically increases the number of
+// clusters searched (up to the number of eligible centroids) to ensure we can find k unique documents.
 func (v *vectorIndexWrapper) searchClustersFromIVFIndex(ids []int64, include bool, eligibleCentroidIDs []int64,
-	minEligibleCentroids int, k int64, x, centroidDis []float32, params json.RawMessage) (
+	centroidsToProbe int, k int64, x, centroidDis []float32, params json.RawMessage) (
 	resultSet, error) {
 	// if the number of iterations > 1, we will be modifying the include slice
 	// to exclude vector ids already seen, so we use this set to track the
 	// include set for the next iteration, this is reused across iterations
 	// and allocated only once, when numIter == 1
 	var includeSet map[int64]struct{}
+	var totalEligibleCentroids = len(eligibleCentroidIDs)
+	// Threshold for when to start increasing: after 2 iterations without
+	// finding enough documents, we start increasing up to the number of centroidsToProbe
+	// up to the total number of eligible centroids available
+	const nprobeIncreaseThreshold = 2
 	return v.docSearch(k, v.sb.numDocs,
 		func() ([]float32, []int64, error) {
 			// build the selector based on whatever ids is as of now and the
@@ -420,7 +428,7 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(ids []int64, include boo
 			// once the main search is done we must free the selector
 			defer selector.Delete()
 			return v.vecIndex.SearchClustersFromIVFIndex(selector, eligibleCentroidIDs,
-				minEligibleCentroids, k, x, centroidDis, params)
+				centroidsToProbe, k, x, centroidDis, params)
 		},
 		func(numIter int, labels []int64) {
 			// if this is the first loop iteration and we have < k unique docIDs,
@@ -436,6 +444,17 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(ids []int64, include boo
 						includeSet[id] = struct{}{}
 					}
 				}
+			}
+			// if we have iterated atleast nprobeIncreaseThreshold times
+			// and still have not found enough unique docIDs, we increase
+			// the number of centroids to probe for the next iteration
+			// to try and find more vectors/documents
+			if numIter >= nprobeIncreaseThreshold && centroidsToProbe < len(eligibleCentroidIDs) {
+				// Calculate how much to increase: increase by 50% of the remaining centroids to probe,
+				// but at least by 1 to ensure progress.
+				increaseAmount := max((totalEligibleCentroids-centroidsToProbe)/2, 1)
+				// Update centroidsToProbe, ensuring it does not exceed the total eligible centroids
+				centroidsToProbe = min(centroidsToProbe+increaseAmount, len(eligibleCentroidIDs))
 			}
 			// prepare the exclude/include list for the next iteration
 			if include {

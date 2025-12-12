@@ -523,6 +523,9 @@ const resultSetSliceThreshold float64 = 0.2
 // newResultSet creates a new resultSet
 func newResultSet(k int64, numDocs uint64) resultSet {
 	// if numDocs is zero (empty index), just use map-based resultSet as its a no-op
+	// else decide based the percent of documents being retrieved. If we require
+	// greater than 20% of total documents, use slice-based resultSet for better memory efficiency
+	// else use map-based resultSet
 	if numDocs == 0 || float64(k)/float64(numDocs) < resultSetSliceThreshold {
 		return newResultSetMap(k)
 	}

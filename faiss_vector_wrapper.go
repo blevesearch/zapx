@@ -198,21 +198,22 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// Determining the minimum number of centroids to be probed
 	// to ensure that at least 'k' vectors are collected while
 	// examining at least 'nprobe' centroids.
-	var eligibleDocsTillNow int64
-	minEligibleCentroids := len(closestCentroidIDs)
+	// centroidsToProbe range: [nprobe, number of eligible centroids]
+	var eligibleVecsTillNow int64
+	centroidsToProbe := len(closestCentroidIDs)
 	for i, centroidID := range closestCentroidIDs {
-		eligibleDocsTillNow += clusterVectorCounts[centroidID]
+		eligibleVecsTillNow += clusterVectorCounts[centroidID]
 		// Stop once we've examined at least 'nprobe' centroids and
 		// collected at least 'k' vectors.
-		if eligibleDocsTillNow >= k && i+1 >= nprobe {
-			minEligibleCentroids = i + 1
+		if eligibleVecsTillNow >= k && i+1 >= nprobe {
+			centroidsToProbe = i + 1
 			break
 		}
 	}
 	// Search the clusters specified by 'closestCentroidIDs' for
 	// vectors whose IDs are present in 'vectorIDsToInclude'
 	rs, err := v.searchClustersFromIVFIndex(
-		ids, include, closestCentroidIDs, minEligibleCentroids,
+		ids, include, closestCentroidIDs, centroidsToProbe,
 		k, qVector, centroidDistances, params)
 	if err != nil {
 		return nil, err
@@ -266,9 +267,15 @@ func (v *vectorIndexWrapper) addIDsToPostingsList(pl *VecPostingsList, rs result
 // top k documents based on the provided search function.
 // It handles deduplication of documents that may have multiple
 // vectors associated with them.
+// The prepareNextIter function is used to set up the state
+// for the next iteration, if more searches are needed to find
+// k unique documents. The callback recieves the number of iterations
+// done so far and the vector ids retrieved in the last search. While preparing
+// the next iteration, if its decided that no further searches are needed,
+// the prepareNextIter function can decide whether to continue searching or not
 func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 	search func() (scores []float32, labels []int64, err error),
-	prepareNextIter func(numIter int, labels []int64)) (resultSet, error) {
+	prepareNextIter func(numIter int, labels []int64) bool) (resultSet, error) {
 	// create a result set to hold top K docIDs and their scores
 	rs := newResultSet(k, numDocs)
 	// flag to indicate if we have exhausted the vector index
@@ -331,11 +338,15 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 		// we have not exhausted the index
 		if rs.size() < k && !exhausted {
 			// prepare state for next iteration
-			prepareNextIter(numIter, labels)
+			shouldContinue := prepareNextIter(numIter, labels)
+			if !shouldContinue {
+				break
+			}
 		}
 	}
 	// at this point we either have k unique docIDs or we have exhausted
-	// the vector index, so return what we have
+	// the vector index or we have reached the maximum number of deduplication iterations allowed
+	// or the prepareNextIter function decided to break out of the loop
 	return rs, nil
 }
 
@@ -347,7 +358,7 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclud
 		func() ([]float32, []int64, error) {
 			return v.vecIndex.SearchWithoutIDs(qVector, k, exclude, params)
 		},
-		func(numIter int, labels []int64) {
+		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
 			// we must clone the existing exclude slice before appending to it
 			// to avoid modifying the original slice passed in by the caller
@@ -357,6 +368,8 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclud
 			// prepare the exclude list for the next iteration by adding
 			// the vector ids retrieved in this iteration
 			exclude = append(exclude, labels...)
+			// with exclude list updated, we can proceed to the next iteration
+			return true
 		})
 }
 
@@ -373,7 +386,7 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include [
 		func() ([]float32, []int64, error) {
 			return v.vecIndex.SearchWithIDs(qVector, k, include, params)
 		},
-		func(numIter int, labels []int64) {
+		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
 			// we clone the existing include slice before modifying it
 			if numIter == 1 {
@@ -395,20 +408,29 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include [
 			for id := range includeSet {
 				include = append(include, id)
 			}
+			// only continue searching if we still have vector ids to include
+			return len(include) != 0
 		})
 }
 
 // searchClustersFromIVFIndex performs a search on the IVF vector index to retrieve the top K documents
 // while either including or excluding the vector IDs specified in the ids slice, depending on the include flag.
-// It takes into account the eligible centroid IDs and ensures that at least minEligibleCentroids are probed.
+// It takes into account the eligible centroid IDs and ensures that at least centroidsToProbe are probed.
+// If after a few iterations we haven't found enough documents, it dynamically increases the number of
+// clusters searched (up to the number of eligible centroids) to ensure we can find k unique documents.
 func (v *vectorIndexWrapper) searchClustersFromIVFIndex(ids []int64, include bool, eligibleCentroidIDs []int64,
-	minEligibleCentroids int, k int64, x, centroidDis []float32, params json.RawMessage) (
+	centroidsToProbe int, k int64, x, centroidDis []float32, params json.RawMessage) (
 	resultSet, error) {
 	// if the number of iterations > 1, we will be modifying the include slice
 	// to exclude vector ids already seen, so we use this set to track the
 	// include set for the next iteration, this is reused across iterations
 	// and allocated only once, when numIter == 1
 	var includeSet map[int64]struct{}
+	var totalEligibleCentroids = len(eligibleCentroidIDs)
+	// Threshold for when to start increasing: after 2 iterations without
+	// finding enough documents, we start increasing up to the number of centroidsToProbe
+	// up to the total number of eligible centroids available
+	const nprobeIncreaseThreshold = 2
 	return v.docSearch(k, v.sb.numDocs,
 		func() ([]float32, []int64, error) {
 			// build the selector based on whatever ids is as of now and the
@@ -420,9 +442,9 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(ids []int64, include boo
 			// once the main search is done we must free the selector
 			defer selector.Delete()
 			return v.vecIndex.SearchClustersFromIVFIndex(selector, eligibleCentroidIDs,
-				minEligibleCentroids, k, x, centroidDis, params)
+				centroidsToProbe, k, x, centroidDis, params)
 		},
-		func(numIter int, labels []int64) {
+		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
 			// we must clone the existing ids slice before modifying it to avoid
 			// modifying the original slice passed in by the caller
@@ -437,6 +459,17 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(ids []int64, include boo
 					}
 				}
 			}
+			// if we have iterated atleast nprobeIncreaseThreshold times
+			// and still have not found enough unique docIDs, we increase
+			// the number of centroids to probe for the next iteration
+			// to try and find more vectors/documents
+			if numIter >= nprobeIncreaseThreshold && centroidsToProbe < len(eligibleCentroidIDs) {
+				// Calculate how much to increase: increase by 50% of the remaining centroids to probe,
+				// but at least by 1 to ensure progress.
+				increaseAmount := max((totalEligibleCentroids-centroidsToProbe)/2, 1)
+				// Update centroidsToProbe, ensuring it does not exceed the total eligible centroids
+				centroidsToProbe = min(centroidsToProbe+increaseAmount, len(eligibleCentroidIDs))
+			}
 			// prepare the exclude/include list for the next iteration
 			if include {
 				// removing the vector ids retrieved in this iteration
@@ -449,10 +482,14 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(ids []int64, include boo
 				for id := range includeSet {
 					ids = append(ids, id)
 				}
+				// only continue searching if we still have vector ids to include
+				return len(ids) != 0
 			} else {
 				// appending the vector ids retrieved in this iteration
 				// to the exclude list
 				ids = append(ids, labels...)
+				// with exclude list updated, we can proceed to the next iteration
+				return true
 			}
 		})
 }
@@ -523,6 +560,9 @@ const resultSetSliceThreshold float64 = 0.2
 // newResultSet creates a new resultSet
 func newResultSet(k int64, numDocs uint64) resultSet {
 	// if numDocs is zero (empty index), just use map-based resultSet as its a no-op
+	// else decide based the percent of documents being retrieved. If we require
+	// greater than 20% of total documents, use slice-based resultSet for better memory efficiency
+	// else use map-based resultSet
 	if numDocs == 0 || float64(k)/float64(numDocs) < resultSetSliceThreshold {
 		return newResultSetMap(k)
 	}

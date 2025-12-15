@@ -220,6 +220,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	v.addIDsToPostingsList(rv, rs)
 	return rv, nil
 }
+
 func (v *vectorIndexWrapper) Close() {
 	// skipping the closing because the index is cached and it's being
 	// deferred to a later point of time.

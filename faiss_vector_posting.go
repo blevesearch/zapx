@@ -311,11 +311,11 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 	}
 
 	if rv.fIndex != nil {
-		rv.vecIndexSize = rv.findex.Size()
+		rv.vecIndexSize = rv.fIndex.Size()
 	}
 
 	if rv.bIndex != nil {
-		rv.vecIndexSize = rv.bIndex.Size()
+		rv.vecIndexSize += rv.bIndex.Size()
 	}
 
 	return rv, nil

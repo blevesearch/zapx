@@ -96,7 +96,12 @@ var vectorCmd = &cobra.Command{
 					}
 				case 4:
 					if vecID, err := strconv.Atoi(args[3]); err == nil {
-						vec, err := index.Reconstruct(int64(vecID))
+						var fIndex faiss.FloatIndex
+						var ok bool
+						if fIndex, ok = index.(faiss.FloatIndex); !ok {
+							return fmt.Errorf("reconstruct api supported only on flat indexes")
+						}
+						vec, err := fIndex.Reconstruct(int64(vecID))
 						if err != nil {
 							return fmt.Errorf("error while reconstructing vector with ID %v, err: %v", vecID, err)
 						}
@@ -115,7 +120,7 @@ var vectorCmd = &cobra.Command{
 	},
 }
 
-func decodeSection(data []byte, start uint64) (int, int, map[int64]uint64, *faiss.IndexImpl, error) {
+func decodeSection(data []byte, start uint64) (int, int, map[int64]uint64, faiss.Index, error) {
 	pos := int(start)
 	vecDocIDMap := make(map[int64]uint64)
 
@@ -155,7 +160,7 @@ func decodeSection(data []byte, start uint64) (int, int, map[int64]uint64, *fais
 	indexBytes := data[pos : pos+int(indexSize)]
 	pos += int(indexSize)
 
-	vecIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
+	vecIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly, faiss.FloatIndexType)
 	if err != nil {
 		return 0, 0, nil, nil, err
 	}

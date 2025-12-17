@@ -5,6 +5,7 @@ package zap
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"math/rand"
 	"os"
@@ -345,7 +346,7 @@ func getSectionContentOffsets(sb *SegmentBase, offset uint64) (
 		pos += uint64(n)
 	}
 
-	// read the type of vector index (unused for now)
+	// read the type of vector index
 	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
@@ -367,7 +368,7 @@ func serializeVecs(dataset [][]float32) []float32 {
 }
 
 func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
-	indexKey string, isIVF bool) (*faiss.IndexImpl, error) {
+	indexKey string, isIVF bool) (faiss.FloatIndex, error) {
 	// input dataset may have flattened nested vectors, len(vec) > dims
 	// Let's fold them back into nested vectors
 	var dataset [][]float32
@@ -381,9 +382,14 @@ func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
 
 	vecs := serializeVecs(dataset)
 
-	idx, err := faiss.IndexFactory(dims, indexKey, faiss.MetricL2)
+	idx, err := faiss.IndexFactory(dims, indexKey, faiss.MetricL2, faiss.FloatIndexType)
 	if err != nil {
 		return nil, err
+	}
+	var fIdx faiss.FloatIndex
+	var ok bool
+	if fIdx, ok = idx.(faiss.FloatIndex); !ok {
+		return nil, fmt.Errorf("expected a Float index type")
 	}
 
 	ids := make([]int64, len(dataset))
@@ -392,20 +398,24 @@ func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
 	}
 
 	if isIVF {
-		err = idx.SetDirectMap(2)
+		var ivfIdx faiss.IVFIndex
+		if ivfIdx, ok = idx.(faiss.IVFIndex); !ok {
+			return nil, fmt.Errorf("expected an IVF index type")
+		}
+		err = ivfIdx.SetDirectMap(2)
 		if err != nil {
 			return nil, err
 		}
 
-		err = idx.Train(vecs)
+		err = fIdx.Train(vecs)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	idx.AddWithIDs(vecs, ids)
+	fIdx.AddWithIDs(vecs, ids)
 
-	return idx, nil
+	return fIdx, nil
 }
 
 func calculateL2Score(qVec []float32, vec []float32) float32 {
@@ -480,7 +490,7 @@ func TestVectorSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error creating vector index %v", err)
 	}
-	buf, err := faiss.WriteIndexIntoBuffer(vecIndex)
+	buf, err := faiss.WriteIndexIntoBuffer(vecIndex, faiss.FloatIndexType)
 	if err != nil {
 		t.Fatalf("error serializing vector index %v", err)
 	}

@@ -20,10 +20,8 @@ package zap
 import (
 	"encoding/json"
 	"math"
-	"slices"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
-	"github.com/bits-and-blooms/bitset"
 	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
@@ -36,12 +34,11 @@ var MaxMultiVectorDocSearchRetries = 100
 
 // vectorIndexWrapper conforms to scorch_segment_api's VectorIndex interface
 type vectorIndexWrapper struct {
-	vecIndex           *faiss.IndexImpl
-	vecDocIDMap        map[int64]uint32
-	docVecIDMap        map[uint32][]int64
-	vectorIDsToExclude []int64
-	fieldIDPlus1       uint16
-	vecIndexSize       uint64
+	vecIndex     *faiss.IndexImpl
+	mapping      *idMapping
+	exclude      *vectorSelector
+	fieldIDPlus1 uint16
+	vecIndexSize uint64
 
 	sb *SegmentBase
 }
@@ -69,8 +66,7 @@ func (v *vectorIndexWrapper) Search(qVector []float32, k int64,
 		return rv, nil
 	}
 
-	rs, err := v.searchWithoutIDs(qVector, k,
-		v.vectorIDsToExclude, params)
+	rs, err := v.searchWithoutIDs(qVector, k, v.exclude, params)
 	if err != nil {
 		return nil, err
 	}
@@ -109,32 +105,28 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 
 	// vector IDs corresponding to the local doc numbers to be
 	// considered for the search
-	vectorIDsToInclude := make([]int64, 0, len(eligibleDocIDs))
+	// create include selector for vector IDs to be considered
+	include := newVectorSelector(v.mapping.numVectors())
 	for _, id := range eligibleDocIDs {
-		vecIDs := v.docVecIDMap[uint32(id)]
-		// In the common case where vecIDs has only one element, which occurs
-		// when a document has only one vector field, we can
-		// avoid the unnecessary overhead of slice unpacking (append(vecIDs...)).
-		// Directly append the single element for efficiency.
-		if len(vecIDs) == 1 {
-			vectorIDsToInclude = append(vectorIDsToInclude, vecIDs[0])
-		} else {
-			vectorIDsToInclude = append(vectorIDsToInclude, vecIDs...)
+		vecIDs, exists := v.mapping.vecsForDoc(uint32(id))
+		if !exists {
+			continue
 		}
+		include.setMany32(vecIDs)
 	}
 	// In case a doc has invalid vector fields but valid non-vector fields,
 	// filter hit IDs may be ineligible for the kNN since the document does
 	// not have any/valid vectors.
-	if len(vectorIDsToInclude) == 0 {
+	if include.active() == 0 {
 		return rv, nil
 	}
+
 	// If the index is not an IVF index, then the search can be
 	// performed directly, using the Flat index.
 	if !v.vecIndex.IsIVFIndex() {
 		// vector IDs corresponding to the local doc numbers to be
 		// considered for the search
-		rs, err := v.searchWithIDs(qVector, k,
-			vectorIDsToInclude, params)
+		rs, err := v.searchWithIDs(qVector, k, include, params)
 		if err != nil {
 			return nil, err
 		}
@@ -144,43 +136,9 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// Determining which clusters, identified by centroid ID,
 	// have at least one eligible vector and hence, ought to be
 	// probed.
-	clusterVectorCounts, err := v.vecIndex.ObtainClusterVectorCountsFromIVFIndex(vectorIDsToInclude)
+	clusterVectorCounts, err := v.vecIndex.ObtainClusterVectorCountsFromIVFIndex(include.slice())
 	if err != nil {
 		return nil, err
-	}
-	var ids []int64
-	var include bool
-	// If there are more elements to be included than excluded, it
-	// might be quicker to use an exclusion selector as a filter
-	// instead of an inclusion selector.
-	if float32(len(eligibleDocIDs))/float32(len(v.docVecIDMap)) > 0.5 {
-		// Use a bitset to efficiently track eligible document IDs.
-		// This reduces the lookup cost when checking if a document ID is eligible,
-		// compared to using a map or slice.
-		bs := bitset.New(uint(v.sb.numDocs))
-		for _, docID := range eligibleDocIDs {
-			bs.Set(uint(docID))
-		}
-		ineligibleVectorIDs := make([]int64, 0, len(v.vecDocIDMap)-len(vectorIDsToInclude))
-		for docID, vecIDs := range v.docVecIDMap {
-			// Check if the document ID is NOT in the eligible set, marking it as ineligible.
-			if !bs.Test(uint(docID)) {
-				// In the common case where vecIDs has only one element, which occurs
-				// when a document has only one vector field, we can
-				// avoid the unnecessary overhead of slice unpacking (append(vecIDs...)).
-				// Directly append the single element for efficiency.
-				if len(vecIDs) == 1 {
-					ineligibleVectorIDs = append(ineligibleVectorIDs, vecIDs[0])
-				} else {
-					ineligibleVectorIDs = append(ineligibleVectorIDs, vecIDs...)
-				}
-			}
-		}
-		ids = ineligibleVectorIDs
-		include = false
-	} else {
-		ids = vectorIDsToInclude
-		include = true
 	}
 	// Ordering the retrieved centroid IDs by increasing order
 	// of distance i.e. decreasing order of proximity to query vector.
@@ -213,7 +171,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// Search the clusters specified by 'closestCentroidIDs' for
 	// vectors whose IDs are present in 'vectorIDsToInclude'
 	rs, err := v.searchClustersFromIVFIndex(
-		ids, include, closestCentroidIDs, centroidsToProbe,
+		include, closestCentroidIDs, centroidsToProbe,
 		k, qVector, centroidDistances, params)
 	if err != nil {
 		return nil, err
@@ -352,22 +310,26 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 
 // searchWithoutIDs performs a search on the vector index to retrieve the top K documents while
 // excluding any vector IDs specified in the exclude slice.
-func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclude []int64, params json.RawMessage) (
+func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclude *vectorSelector, params json.RawMessage) (
 	resultSet, error) {
 	return v.docSearch(k, v.sb.numDocs,
 		func() ([]float32, []int64, error) {
-			return v.vecIndex.SearchWithoutIDs(qVector, k, exclude, params)
+			if exclude == nil {
+				// no exclude selector provided, so just search normally
+				return v.vecIndex.Search(qVector, k)
+			}
+			return v.vecIndex.SearchWithoutIDs(qVector, k, exclude.bytes(), params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
 			// we must clone the existing exclude slice before appending to it
 			// to avoid modifying the original slice passed in by the caller
 			if numIter == 1 {
-				exclude = slices.Clone(exclude)
+				exclude = exclude.clone()
 			}
 			// prepare the exclude list for the next iteration by adding
 			// the vector ids retrieved in this iteration
-			exclude = append(exclude, labels...)
+			exclude.setMany(labels)
 			// with exclude list updated, we can proceed to the next iteration
 			return true
 		})
@@ -375,41 +337,26 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclud
 
 // searchWithIDs performs a search on the vector index to retrieve the top K documents while only
 // considering the vector IDs specified in the include slice.
-func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include []int64, params json.RawMessage) (
+func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include *vectorSelector, params json.RawMessage) (
 	resultSet, error) {
 	// if the number of iterations > 1, we will be modifying the include slice
 	// to exclude vector ids already seen, so we use this set to track the
 	// include set for the next iteration, this is reused across iterations
 	// and allocated only once, when numIter == 1
-	var includeSet map[int64]struct{}
 	return v.docSearch(k, v.sb.numDocs,
 		func() ([]float32, []int64, error) {
-			return v.vecIndex.SearchWithIDs(qVector, k, include, params)
+			return v.vecIndex.SearchWithIDs(qVector, k, include.bytes(), params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
 			// we clone the existing include slice before modifying it
 			if numIter == 1 {
-				include = slices.Clone(include)
-				// build the include set for subsequent iterations
-				includeSet = make(map[int64]struct{}, len(include))
-				for _, id := range include {
-					includeSet[id] = struct{}{}
-				}
+				include = include.clone()
 			}
-			// prepare the include list for the next iteration
-			// by removing the vector ids retrieved in this iteration
-			// from the include set
-			for _, id := range labels {
-				delete(includeSet, id)
-			}
-			// now build the next include slice from the set
-			include = include[:0]
-			for id := range includeSet {
-				include = append(include, id)
-			}
+			// removing the vector ids retrieved in this iteration
+			include.clearMany(labels)
 			// only continue searching if we still have vector ids to include
-			return len(include) != 0
+			return include.active() != 0
 		})
 }
 
@@ -418,14 +365,13 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include [
 // It takes into account the eligible centroid IDs and ensures that at least centroidsToProbe are probed.
 // If after a few iterations we haven't found enough documents, it dynamically increases the number of
 // clusters searched (up to the number of eligible centroids) to ensure we can find k unique documents.
-func (v *vectorIndexWrapper) searchClustersFromIVFIndex(ids []int64, include bool, eligibleCentroidIDs []int64,
+func (v *vectorIndexWrapper) searchClustersFromIVFIndex(sel *vectorSelector, eligibleCentroidIDs []int64,
 	centroidsToProbe int, k int64, x, centroidDis []float32, params json.RawMessage) (
 	resultSet, error) {
 	// if the number of iterations > 1, we will be modifying the include slice
 	// to exclude vector ids already seen, so we use this set to track the
 	// include set for the next iteration, this is reused across iterations
 	// and allocated only once, when numIter == 1
-	var includeSet map[int64]struct{}
 	var totalEligibleCentroids = len(eligibleCentroidIDs)
 	// Threshold for when to start increasing: after 2 iterations without
 	// finding enough documents, we start increasing up to the number of centroidsToProbe
@@ -435,7 +381,7 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(ids []int64, include boo
 		func() ([]float32, []int64, error) {
 			// build the selector based on whatever ids is as of now and the
 			// include/exclude flag
-			selector, err := v.getSelector(ids, include)
+			selector, err := v.getSelector(sel.bytes())
 			if err != nil {
 				return nil, nil, err
 			}
@@ -449,15 +395,8 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(ids []int64, include boo
 			// we must clone the existing ids slice before modifying it to avoid
 			// modifying the original slice passed in by the caller
 			if numIter == 1 {
-				ids = slices.Clone(ids)
-				if include {
-					// build the include set for subsequent iterations
-					// by adding all the ids initially present in the ids slice
-					includeSet = make(map[int64]struct{}, len(ids))
-					for _, id := range ids {
-						includeSet[id] = struct{}{}
-					}
-				}
+				// clone the existing sel slice
+				sel = sel.clone()
 			}
 			// if we have iterated atleast nprobeIncreaseThreshold times
 			// and still have not found enough unique docIDs, we increase
@@ -470,27 +409,11 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(ids []int64, include boo
 				// Update centroidsToProbe, ensuring it does not exceed the total eligible centroids
 				centroidsToProbe = min(centroidsToProbe+increaseAmount, len(eligibleCentroidIDs))
 			}
-			// prepare the exclude/include list for the next iteration
-			if include {
-				// removing the vector ids retrieved in this iteration
-				// from the include set and rebuild the ids slice from the set
-				for _, id := range labels {
-					delete(includeSet, id)
-				}
-				// now build the next include slice from the set
-				ids = ids[:0]
-				for id := range includeSet {
-					ids = append(ids, id)
-				}
-				// only continue searching if we still have vector ids to include
-				return len(ids) != 0
-			} else {
-				// appending the vector ids retrieved in this iteration
-				// to the exclude list
-				ids = append(ids, labels...)
-				// with exclude list updated, we can proceed to the next iteration
-				return true
-			}
+			// removing the vector ids retrieved in this iteration
+			// from the include set and rebuild the ids slice from the set
+			sel.clearMany(labels)
+			// only continue searching if we still have vector ids to include
+			return sel.active() != 0
 		})
 }
 
@@ -498,12 +421,8 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(ids []int64, include boo
 // and the vector ids provided, if include is true, it returns an inclusion selector,
 // else it returns an exclusion selector. The caller must ensure to free the selector
 // by calling selector.Delete() when done using it.
-func (v *vectorIndexWrapper) getSelector(ids []int64, include bool) (selector faiss.Selector, err error) {
-	if include {
-		selector, err = faiss.NewIDSelectorBatch(ids)
-	} else {
-		selector, err = faiss.NewIDSelectorNot(ids)
-	}
+func (v *vectorIndexWrapper) getSelector(ids []byte) (selector faiss.Selector, err error) {
+	selector, err = faiss.NewIDSelectorBitmap(ids)
 	if err != nil {
 		return nil, err
 	}
@@ -513,7 +432,7 @@ func (v *vectorIndexWrapper) getSelector(ids []int64, include bool) (selector fa
 // Utility function to get the docID for a given vectorID, used for the
 // deduplication logic, to map vectorIDs back to their corresponding docIDs
 func (v *vectorIndexWrapper) getDocIDForVectorID(vecID int64) (uint32, bool) {
-	docID, exists := v.vecDocIDMap[vecID]
+	docID, exists := v.mapping.docForVec(uint32(vecID))
 	return docID, exists
 }
 

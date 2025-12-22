@@ -303,9 +303,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool
 	}
 
 	var err error
-	rv.vecIndex, rv.vecDocIDMap, rv.docVecIDMap, rv.vectorIDsToExclude, err =
-		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], requiresFiltering,
-			except)
+	rv.vecIndex, rv.mapping, rv.exclude, err = sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], uint32(sb.numDocs), except)
 	if err != nil {
 		return nil, err
 	}

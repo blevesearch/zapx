@@ -93,12 +93,14 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 	drops []*roaring.Bitmap, fieldsInv []string,
 	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
 	vo := v.getVectorIndexOpaque(opaque)
-	// the segments with valid vector sections in them
 	// preallocating the space over here, if there are too many fields
 	// in the segment this will help by avoiding multiple allocation
 	// calls.
+	// the segments with valid vector sections in them
 	vecSegs := make([]*SegmentBase, 0, len(segments))
+	// vector index information from those segments
 	indexes := make([]*vecIndexInfo, 0, len(segments))
+	// mapping from vector IDs to docIDs across segments
 	vecToDocID := make([]uint64, 0, len(segments))
 	// for every field, gather the vector indexes from the segments
 	// that have them, merge them and write them out to the writer.

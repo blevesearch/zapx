@@ -47,11 +47,11 @@ const (
 	nprobeLatencyOptimization = 2
 )
 
-// Vector index types supported currently
+// Vector index types currently supported.
 const (
-	// Flat index type, exact search
+	// IndexTypeFlat is a flat index type for exact search.
 	IndexTypeFlat = iota
-	// IVF index type, approximate search
+	// IndexTypeIVF is an IVF index type for approximate search.
 	IndexTypeIVF
 )
 
@@ -78,8 +78,8 @@ func (v *faissVectorIndexSection) AddrForField(opaque map[int]resetable, fieldID
 	return vo.fieldAddrs[uint16(fieldID)]
 }
 
-// information specific to a vector index - (including metadata and
-// the faiss index pointer itself)
+// vecIndexInfo contains information specific to a vector index,
+// including metadata and the faiss index pointer itself.
 type vecIndexInfo struct {
 	startOffset       int
 	indexSize         uint64
@@ -88,7 +88,7 @@ type vecIndexInfo struct {
 	faissIndex        *faiss.IndexImpl
 }
 
-// keep in mind with respect to update and delete operations with respect to vectors
+// Merge merges vector indexes from multiple segments into a single index.
 func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
 	drops []*roaring.Bitmap, fieldsInv []string,
 	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
@@ -155,7 +155,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 					vecToDocID = append(vecToDocID, newDocID)
 					// if the remapped doc ID is valid, track it
 					// as part of vecs to be reconstructed (for larger indexes).
-					// this would account only the valid vector IDs, so the deleted
+					// This accounts only for valid vector IDs, so deleted
 					// ones won't be reconstructed in the final index.
 					newIndexInfo.vecIds = append(newIndexInfo.vecIds, int64(vecID))
 				}
@@ -198,7 +198,7 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter
 	vecToDocID []uint64, indexes []*vecIndexInfo) error {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 	fieldStart := w.Count()
-	// marking the fact that for vector index, doc values isn't valid by
+	// marking the fact that for vector index, doc values are not valid by
 	// storing fieldNotUninverted values.
 	n := binary.PutUvarint(tempBuf, fieldNotUninverted)
 	_, err := w.Write(tempBuf[:n])
@@ -243,8 +243,8 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter
 	return nil
 }
 
-// Calculates the nprobe count, given nlist(number of centroids) based on
-// the metric the index is optimized for.
+// calculateNprobe calculates the nprobe count given nlist (number of centroids)
+// based on the metric the index is optimized for.
 func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 	nprobe := int32(math.Sqrt(float64(nlist)))
 	if indexOptimizedFor == index.IndexOptimizedForLatency {
@@ -414,6 +414,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	return err
 }
 
+// freeReconstructedIndexes closes all faiss indexes in the provided slice.
 func freeReconstructedIndexes(indexes []*vecIndexInfo) {
 	for _, entry := range indexes {
 		if entry.faissIndex != nil {
@@ -422,6 +423,7 @@ func freeReconstructedIndexes(indexes []*vecIndexInfo) {
 	}
 }
 
+// grabBuf returns a reusable buffer of the given size, allocating a new one if needed.
 func (v *vectorIndexOpaque) grabBuf(size int) []byte {
 	buf := v.tmp0
 	if cap(buf) < size {
@@ -431,7 +433,7 @@ func (v *vectorIndexOpaque) grabBuf(size int) []byte {
 	return buf[:size]
 }
 
-// Determines the number of centroids to use for an IVF index.
+// determineCentroids determines the number of centroids to use for an IVF index.
 func determineCentroids(nvecs int) int {
 	var nlist int
 	switch {
@@ -447,8 +449,8 @@ func determineCentroids(nvecs int) int {
 	return nlist
 }
 
-// Returns a description string for the index and quantizer type
-// and an index type.
+// determineIndexToUse returns a description string for the index and quantizer type,
+// and an index type constant.
 func determineIndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, int) {
 	if indexOptimizedFor == index.IndexOptimizedForMemoryEfficient {
 		switch {
@@ -604,7 +606,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 
 func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, docNum uint32) {
 	if fieldID == math.MaxUint16 {
-		// doc processing checkpoint. currently nothing to do
+		// doc processing checkpoint - no action needed
 		return
 	}
 	vec := field.Vector()
@@ -613,8 +615,8 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 	indexOptimizedFor := field.IndexOptimizedFor()
 	// caller is supposed to make sure len(vec) is a multiple of dim.
 	// Not double checking it here to avoid the overhead.
-	// this is to account for multi-vector fields, where a field can have
-	// multiple vectors associated with it. In this case we process all the
+	// This accounts for multi-vector fields, where a field can have
+	// multiple vectors associated with it. In this case we process all
 	// vectors associated with the field as separate vectors.
 	numVectors := len(vec) / dim
 	for i := 0; i < numVectors; i++ {
@@ -622,8 +624,8 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 		// check if we have content for this fieldID already
 		content, ok := vo.fieldVectorIndex[fieldID]
 		if !ok {
-			// create an entry for this fieldID as this is the first time we
-			// are seeing this field
+			// create an entry for this fieldID as this is the first time
+			// we are seeing this field
 			content = &vectorIndexContent{
 				dimension:    dim,
 				metric:       metric,
@@ -659,34 +661,34 @@ func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) reseta
 	return rv
 }
 
-// the information required to create a vector index for a vector field
+// vectorIndexContent contains the information required to create a vector index for a vector field.
 type vectorIndexContent struct {
-	// vectorID -> vectorEntry
+	// vectors maps vectorID to vectorEntry
 	vectors []*vectorEntry
-	// dimension of all the vectors
+	// dimension is the dimension of all vectors
 	dimension int
-	// distance metric to be used
+	// metric is the distance metric to be used
 	metric string
-	// optimization type for the index
+	// optimizedFor is the optimization type for the index
 	optimizedFor string
 }
 
-// vector entry captures the vector and its
-// associated document ID within the segment.
+// vectorEntry captures a vector and its associated document ID within the segment.
 type vectorEntry struct {
 	vector []float32
 	docID  uint32
 }
 
+// vectorIndexOpaque holds the internal state for vector index processing.
 type vectorIndexOpaque struct {
 	bytesWritten uint64
-	// maps the field to the address of its vector section
+	// fieldAddrs maps fieldID to the address of its vector section
 	fieldAddrs map[uint16]int
-	// maps the fieldID of a vector field to its vector index content
+	// fieldVectorIndex maps fieldID to its vector index content
 	fieldVectorIndex map[uint16]*vectorIndexContent
-	// field indexing options
+	// fieldsOptions contains field indexing options
 	fieldsOptions map[string]index.FieldIndexingOptions
-	// reusable buffer
+	// tmp0 is a reusable buffer
 	tmp0 []byte
 }
 
@@ -705,7 +707,7 @@ func (vo *vectorIndexOpaque) BytesRead() uint64 {
 func (vo *vectorIndexOpaque) ResetBytesRead(uint64) {
 }
 
-// cleanup stuff over here for reusability
+// Reset clears all state in the vectorIndexOpaque for reuse.
 func (vo *vectorIndexOpaque) Reset() error {
 	clear(vo.fieldAddrs)
 	clear(vo.fieldVectorIndex)

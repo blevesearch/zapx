@@ -68,10 +68,9 @@ func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint
 	}
 }
 
-func (i *invertedTextIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
+func (i *invertedTextIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) error {
 	invIndexOpaque := i.getInvertedIndexOpaque(opaque)
-	_, err = invIndexOpaque.writeDicts(w)
-	return 0, err
+	return invIndexOpaque.writeDicts(w)
 }
 
 func (i *invertedTextIndexSection) AddrForField(opaque map[int]resetable, fieldID int) int {
@@ -438,12 +437,13 @@ func (i *invertedIndexOpaque) BytesRead() uint64 {
 
 func (i *invertedIndexOpaque) ResetBytesRead(uint64) {}
 
-func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uint64, err error) {
+func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) error {
 	if io.results == nil || len(io.results) == 0 {
-		return nil, nil
+		return nil
 	}
 
-	dictOffsets = make([]uint64, len(io.FieldsInv))
+	dictOffsets := make([]uint64, len(io.FieldsInv))
+	var err error
 
 	fdvOffsetsStart := make([]uint64, len(io.FieldsInv))
 	fdvOffsetsEnd := make([]uint64, len(io.FieldsInv))
@@ -461,7 +461,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 	if io.builder == nil {
 		io.builder, err = vellum.New(&io.builderBuf, nil)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
@@ -494,7 +494,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 			}
 			chunkSize, err := getChunkSize(io.chunkMode, cardinality, uint64(len(io.results)))
 			if err != nil {
-				return nil, err
+				return err
 			}
 			tfEncoder.SetChunkSize(chunkSize, uint64(len(io.results)-1))
 			locEncoder.SetChunkSize(chunkSize, uint64(len(io.results)-1))
@@ -516,7 +516,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 						encodeFreqHasLocs(freqNorm.freq, freqNorm.numLocs > 0))
 				}
 				if err != nil {
-					return nil, err
+					return err
 				}
 
 				if freqNorm.numLocs > 0 {
@@ -529,19 +529,19 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 
 					err = locEncoder.Add(docNum, uint64(numBytesLocs))
 					if err != nil {
-						return nil, err
+						return err
 					}
 					for _, loc := range locs[locOffset : locOffset+freqNorm.numLocs] {
 						err = locEncoder.Add(docNum,
 							uint64(loc.fieldID), loc.pos, loc.start, loc.end,
 							uint64(len(loc.arrayposs)))
 						if err != nil {
-							return nil, err
+							return err
 						}
 
 						err = locEncoder.Add(docNum, loc.arrayposs...)
 						if err != nil {
-							return nil, err
+							return err
 						}
 					}
 					locOffset += freqNorm.numLocs
@@ -562,13 +562,13 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 			postingsOffset, err :=
 				writePostings(postingsBS, tfEncoder, locEncoder, nil, w, buf)
 			if err != nil {
-				return nil, err
+				return err
 			}
 
 			if postingsOffset > uint64(0) {
 				err = io.builder.Insert([]byte(term), postingsOffset)
 				if err != nil {
-					return nil, err
+					return err
 				}
 			}
 
@@ -578,7 +578,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 
 		err = io.builder.Close()
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// record where this dictionary starts
@@ -590,7 +590,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 		n := binary.PutUvarint(buf, uint64(len(vellumData)))
 		_, err = w.Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		io.incrementBytesWritten(uint64(len(vellumData)))
@@ -598,7 +598,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 		// write this vellum to disk
 		_, err = w.Write(vellumData)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// reset vellum for reuse
@@ -606,14 +606,14 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 
 		err = io.builder.Reset(&io.builderBuf)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// write the field doc values
 		// NOTE: doc values continue to use legacy chunk mode
 		chunkSize, err := getChunkSize(LegacyChunkMode, 0, 0)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		fdvEncoder := newChunkedContentCoder(chunkSize, uint64(len(io.results)-1), w, false)
@@ -629,13 +629,13 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 				if len(docTerms) > 0 {
 					err = fdvEncoder.Add(uint64(docNum), docTerms)
 					if err != nil {
-						return nil, err
+						return err
 					}
 				}
 			}
 			err = fdvEncoder.Close()
 			if err != nil {
-				return nil, err
+				return err
 			}
 
 			io.incrementBytesWritten(fdvEncoder.getBytesWritten())
@@ -644,7 +644,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 
 			_, err = fdvEncoder.Write()
 			if err != nil {
-				return nil, err
+				return err
 			}
 
 			fdvOffsetsEnd[fieldID] = uint64(w.Count())
@@ -659,25 +659,25 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 		n = binary.PutUvarint(buf, fdvOffsetsStart[fieldID])
 		_, err = w.Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		n = binary.PutUvarint(buf, fdvOffsetsEnd[fieldID])
 		_, err = w.Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		n = binary.PutUvarint(buf, dictOffsets[fieldID])
 		_, err = w.Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		io.fieldAddrs[fieldID] = fieldStart
 	}
 
-	return dictOffsets, nil
+	return nil
 }
 
 func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum uint32) {

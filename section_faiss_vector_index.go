@@ -57,10 +57,9 @@ func (v *faissVectorIndexSection) Process(opaque map[int]resetable, docNum uint3
 	}
 }
 
-func (v *faissVectorIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
+func (v *faissVectorIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) error {
 	vo := v.getvectorIndexOpaque(opaque)
-	vo.writeVectorIndexes(w)
-	return 0, nil
+	return vo.writeVectorIndexes(w)
 }
 
 func (v *faissVectorIndexSection) AddrForField(opaque map[int]resetable, fieldID int) int {

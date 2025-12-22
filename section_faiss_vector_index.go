@@ -62,7 +62,6 @@ func (v *faissVectorIndexSection) Process(opaque map[int]resetable, docNum uint3
 	if fieldID == math.MaxUint16 {
 		return
 	}
-
 	if vf, ok := field.(index.VectorField); ok {
 		vo := v.getVectorIndexOpaque(opaque)
 		vo.process(vf, fieldID, docNum)
@@ -94,7 +93,6 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 	drops []*roaring.Bitmap, fieldsInv []string,
 	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
 	vo := v.getVectorIndexOpaque(opaque)
-
 	// the segments with valid vector sections in them
 	// preallocating the space over here, if there are too many fields
 	// in the segment this will help by avoiding multiple allocation
@@ -193,7 +191,6 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -311,8 +308,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		return nil
 	}
 	// merging of indexes with reconstruction method.
-	// the indexes[i].vecIds has only the valid vecs of this vector
-	// index present in it, so we'd be reconstructing only those.
+	// the vecIds in each index contain only the valid vectors,
+	// so we reconstruct only those.
 	indexData := make([]float32, 0, indexDataCap)
 	// reusable buffer for reconstruction
 	recons := make([]float32, 0, reconsCap)
@@ -437,7 +434,6 @@ func (v *vectorIndexOpaque) grabBuf(size int) []byte {
 // Determines the number of centroids to use for an IVF index.
 func determineCentroids(nvecs int) int {
 	var nlist int
-
 	switch {
 	case nvecs >= 200000:
 		nlist = int(4 * math.Sqrt(float64(nvecs)))
@@ -462,7 +458,6 @@ func determineIndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, in
 			return "Flat", IndexTypeFlat
 		}
 	}
-
 	switch {
 	case nvecs >= 10000:
 		return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF
@@ -484,8 +479,6 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 	//        e. vectorID -> docID mapping
 	tempBuf := vo.grabBuf(binary.MaxVarintLen64)
 	for fieldID, content := range vo.fieldVectorIndex {
-		// calculate the capacity of the vecs and ids slices
-		// to avoid multiple allocations.
 		// number of vectors to be indexed for this field
 		nvecs := len(content.vectors)
 		// dimension of each vector
@@ -638,7 +631,7 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 			}
 			vo.fieldVectorIndex[fieldID] = content
 		}
-		// add an entry to the index content's vectors, supplying both the
+		// add an entry to the index content's vectors, supplying both
 		// the vector and the docNum for this vector within the segment
 		content.vectors = append(content.vectors, &vectorEntry{
 			vector: vector,
@@ -717,11 +710,8 @@ func (vo *vectorIndexOpaque) Reset() error {
 	clear(vo.fieldAddrs)
 	clear(vo.fieldVectorIndex)
 	vo.tmp0 = vo.tmp0[:0]
-
 	vo.fieldsOptions = nil
-
 	atomic.StoreUint64(&vo.bytesWritten, 0)
-
 	return nil
 }
 

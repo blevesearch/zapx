@@ -588,7 +588,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 		if err != nil {
 			return err
 		}
-		// write the index bytes and its length
+		// write the length of the serialized vector index bytes
 		n = binary.PutUvarint(tempBuf, uint64(len(indexBytes)))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {

@@ -22,8 +22,8 @@ import (
 	"fmt"
 	"strconv"
 
+	index "github.com/blevesearch/bleve_index_api"
 	"github.com/blevesearch/go-faiss"
-	zap "github.com/blevesearch/zapx/v16"
 	"github.com/spf13/cobra"
 )
 
@@ -39,128 +39,88 @@ var vectorCmd = &cobra.Command{
 	3. given a vector ID, get all the local docNums its present in.
 	4. reconstruct vector given the vectorID.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		data := segment.Data()
+		if len(args) < 2 {
+			return fmt.Errorf("must specify field")
+		}
 		pos := segment.SectionsIndexOffset()
-
 		if pos == 0 {
 			// this is the case only for older file formats
 			return fmt.Errorf("file format not supported")
 		}
-
-		if len(args) < 2 {
-			return fmt.Errorf("must specify field")
+		// get the vector section address for the specified field
+		pos, err := segment.VectorAddr(args[1])
+		if err != nil {
+			return fmt.Errorf("error determining address: %v", err)
 		}
+		data := segment.Data()
+		// read the vector optimization option type
+		vecOpt, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+		pos += uint64(n)
+		// read the number of vectors indexed
+		numVecs, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+		pos += uint64(n)
+		// read the length of the vector to docID map (unused for now)
+		_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+		pos += uint64(n)
+		// read the vector to docID map
+		vecToDocID := make([]uint64, numVecs)
+		for vecID := 0; vecID < int(numVecs); vecID++ {
+			docID, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+			pos += uint64(n)
+			vecToDocID[vecID] = docID
+		}
+		// read the type of the vector index (unused for now)
+		_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+		pos += uint64(n)
+		// read the length of the serialized faiss index
+		indexSize, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+		pos += uint64(n)
+		// read the serialized faiss index bytes
+		indexBytes := data[pos : pos+indexSize]
+		pos += indexSize
+		// construct the faiss index from the buffer
+		vecIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
+		if err != nil {
+			return fmt.Errorf("error reading faiss index from buffer: %v", err)
+		}
+		metricType := vecIndex.MetricType()
+		dims := vecIndex.D()
+		optimizationType := index.VectorIndexOptimizationsReverseLookup[int(vecOpt)]
 
-		// read the number of fields
-		numFields, sz := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
-		pos += uint64(sz)
-
-		var fieldID uint64
-		var fieldInv []string
-
-		for fieldID < numFields {
-			addr := binary.BigEndian.Uint64(data[pos : pos+8])
-			fieldSectionMap := make(map[uint16]uint64)
-
-			fieldInv, err := loadFieldData(data, addr, fieldID, fieldSectionMap, fieldInv)
+		switch len(args) {
+		case 2:
+			metrics := map[int]string{
+				faiss.MetricL2:           index.EuclideanDistance,
+				faiss.MetricInnerProduct: index.InnerProduct,
+			}
+			fmt.Printf("decoded vector section content for field `%v`:\n", args[1])
+			fmt.Printf("  number of vectors: %v\n", numVecs)
+			fmt.Printf("  size of the serialized vector index: %v\n", indexSize)
+			fmt.Printf("  dimensionality of vectors in the index: %v\n", dims)
+			fmt.Printf("  similarity metric used: %v\n", metrics[metricType])
+			fmt.Printf("  index optimized for: %v\n", optimizationType)
+		case 3:
+			if args[2] == "list" {
+				fmt.Printf("listing the vector IDs in the index\n")
+				for vecID, doc := range vecToDocID {
+					fmt.Printf("vector with vecID: %v present in doc: %v\n", vecID, doc)
+				}
+			}
+		case 4:
+			vecID, err := strconv.Atoi(args[3])
 			if err != nil {
-				return fmt.Errorf("error while parsing the field data %v", err)
+				return fmt.Errorf("error parsing vecID: %v", err)
 			}
-			if fieldInv[len(fieldInv)-1] == args[1] {
-				vectorSectionOffset, ok := fieldSectionMap[uint16(zap.SectionFaissVectorIndex)]
-				if !ok {
-					return fmt.Errorf("the specified field doesn't have a vector section in it.")
-				}
-				numVecs, indexSize, vecDocIDMap, index, err := decodeSection(data, vectorSectionOffset)
-				if err != nil {
-					return fmt.Errorf("error while decoding the vector section for field %v, err: %v", args[1], err)
-				}
-
-				switch len(args) {
-				case 2:
-					metrics := map[int]string{
-						faiss.MetricInnerProduct: "inner product",
-						faiss.MetricL2:           "l2 distance",
-					}
-					fmt.Printf("decoded vector section content for field `%v`:\n", args[1])
-					fmt.Printf("  number of vectors: %v\n", numVecs)
-					fmt.Printf("  size of the serialized vector index: %v\n", indexSize)
-					fmt.Printf("  dimensionality of vectors in the index: %v\n", index.D())
-					fmt.Printf("  similarity metric used: %v\n", metrics[index.MetricType()])
-				case 3:
-					if args[2] == "list" {
-						fmt.Printf("listing the vector IDs in the index\n")
-						for vecID, doc := range vecDocIDMap {
-							fmt.Printf("vector with vecID: %v present in doc: %v\n", vecID, doc)
-						}
-					}
-				case 4:
-					if vecID, err := strconv.Atoi(args[3]); err == nil {
-						vec, err := index.Reconstruct(int64(vecID))
-						if err != nil {
-							return fmt.Errorf("error while reconstructing vector with ID %v, err: %v", vecID, err)
-						}
-						fmt.Printf("the reconstructed vector with ID %v is %v\n", vecID, vec)
-					}
-				default:
-					return fmt.Errorf("not enough args")
-
-				}
+			vec, err := vecIndex.Reconstruct(int64(vecID))
+			if err != nil {
+				return fmt.Errorf("error while reconstructing vector with ID %v, err: %v", vecID, err)
 			}
-
-			fieldID++
-			pos += 8
+			fmt.Printf("the reconstructed vector with ID %v is %v\n", vecID, vec)
+		default:
+			return fmt.Errorf("not enough args")
 		}
 		return nil
 	},
-}
-
-func decodeSection(data []byte, start uint64) (int, int, map[int64]uint64, *faiss.IndexImpl, error) {
-	pos := int(start)
-	vecDocIDMap := make(map[int64]uint64)
-
-	// the below loop loads the following:
-	// 1. doc values(first 2 iterations) - adhering to the sections format. never
-	// valid values for vector section
-	// 2. index optimization type.
-	for i := 0; i < 3; i++ {
-		_, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
-		pos += n
-	}
-
-	// read the number vectors indexed for this field and load the vector to docID mapping.
-	numVecs, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
-	pos += n
-
-	// read the length of the vector to docID map (unused for now)
-	_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
-	pos += n
-
-	for i := 0; i < int(numVecs); i++ {
-		vecID, n := binary.Varint(data[pos : pos+binary.MaxVarintLen64])
-		pos += n
-
-		docID, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
-		pos += n
-		vecDocIDMap[vecID] = docID
-	}
-
-	// read the type of the vector index (unused for now)
-	_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
-	pos += n
-
-	// read the index bytes
-	indexSize, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
-	pos += n
-	indexBytes := data[pos : pos+int(indexSize)]
-	pos += int(indexSize)
-
-	vecIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
-	if err != nil {
-		return 0, 0, nil, nil, err
-	}
-
-	return int(numVecs), int(indexSize), vecDocIDMap, vecIndex, nil
 }
 
 func init() {

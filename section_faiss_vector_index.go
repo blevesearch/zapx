@@ -187,7 +187,7 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 	fieldStart := w.Count()
 	// marking the fact that for vector index, doc values isn't valid by
-	// storing fieldNotUniverted values.
+	// storing fieldNotUninverted values.
 	n := binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
 	_, err := w.Write(tempBuf[:n])
 	if err != nil {
@@ -499,7 +499,6 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 		if err != nil {
 			return err
 		}
-		defer faissIndex.Close()
 		// flatten the vectors into a single slice of size numVectors * dims
 		vecs := make([]float32, 0, nvecs*dims)
 		for _, vecInfo := range content.vectors {
@@ -512,6 +511,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 			// from 0 to N-1.
 			err = faissIndex.SetDirectMap(1)
 			if err != nil {
+				faissIndex.Close()
 				return err
 			}
 			// calculate nprobe using a heuristic.
@@ -521,6 +521,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 			// train the index with the vectors
 			err = faissIndex.Train(vecs)
 			if err != nil {
+				faissIndex.Close()
 				return err
 			}
 		}
@@ -528,8 +529,17 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 		// from 0 to N-1
 		err = faissIndex.Add(vecs)
 		if err != nil {
+			faissIndex.Close()
 			return err
 		}
+		// serialize the built index into a byte slice to be written out
+		indexBytes, err := faiss.WriteIndexIntoBuffer(faissIndex)
+		if err != nil {
+			faissIndex.Close()
+			return err
+		}
+		// close the index after serialization to free resources
+		faissIndex.Close()
 		// record the fieldStart value for this section.
 		fieldStart := w.Count()
 		// writing out two offset values to indicate that the current field's
@@ -572,11 +582,6 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 				return err
 			}
 		}
-		// serialize the built index into a byte slice
-		buf, err := faiss.WriteIndexIntoBuffer(faissIndex)
-		if err != nil {
-			return err
-		}
 		// write the type of the vector index (unused for now)
 		n = binary.PutUvarint(tempBuf, 0)
 		_, err = w.Write(tempBuf[:n])
@@ -584,13 +589,13 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 			return err
 		}
 		// write the index bytes and its length
-		n = binary.PutUvarint(tempBuf, uint64(len(buf)))
+		n = binary.PutUvarint(tempBuf, uint64(len(indexBytes)))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return err
 		}
 		// write the vector index data
-		_, err = w.Write(buf)
+		_, err = w.Write(indexBytes)
 		if err != nil {
 			return err
 		}

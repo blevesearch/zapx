@@ -235,7 +235,7 @@ func (s *interim) convert() (uint64, uint64, error) {
 	// we can persist the various sections at this point.
 	// the rule of thumb here is that each section must persist field wise.
 	for _, x := range segmentSections {
-		_, err = x.Persist(s.opaque, s.w)
+		err = x.Persist(s.opaque, s.w)
 		if err != nil {
 			return 0, 0, err
 		}

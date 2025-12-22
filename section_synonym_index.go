@@ -286,20 +286,21 @@ func (so *synonymIndexOpaque) grabBuf(size int) []byte {
 	return buf[:size]
 }
 
-func (so *synonymIndexOpaque) writeThesauri(w *CountHashWriter) (thesOffsets []uint64, err error) {
+func (so *synonymIndexOpaque) writeThesauri(w *CountHashWriter) error {
 
-	if so.results == nil || len(so.results) == 0 {
-		return nil, nil
+	if len(so.results) == 0 {
+		return nil
 	}
 
-	thesOffsets = make([]uint64, len(so.ThesaurusInv))
+	thesOffsets := make([]uint64, len(so.ThesaurusInv))
+	var err error
 
 	buf := so.grabBuf(binary.MaxVarintLen64)
 
 	if so.builder == nil {
 		so.builder, err = vellum.New(&so.builderBuf, nil)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
@@ -310,20 +311,20 @@ func (so *synonymIndexOpaque) writeThesauri(w *CountHashWriter) (thesOffsets []u
 			postingsBS := so.Synonyms[pid]
 			postingsOffset, err := writeSynonyms(postingsBS, w, buf)
 			if err != nil {
-				return nil, err
+				return err
 			}
 
 			if postingsOffset > uint64(0) {
 				err = so.builder.Insert([]byte(term), postingsOffset)
 				if err != nil {
-					return nil, err
+					return err
 				}
 			}
 		}
 
 		err = so.builder.Close()
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		thesOffsets[thesaurusID] = uint64(w.Count())
@@ -334,13 +335,13 @@ func (so *synonymIndexOpaque) writeThesauri(w *CountHashWriter) (thesOffsets []u
 		n := binary.PutUvarint(buf, uint64(len(vellumData)))
 		_, err = w.Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// write this vellum to disk
 		_, err = w.Write(vellumData)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// reset vellum for reuse
@@ -348,13 +349,13 @@ func (so *synonymIndexOpaque) writeThesauri(w *CountHashWriter) (thesOffsets []u
 
 		err = so.builder.Reset(&so.builderBuf)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// write out the synTermMap for this thesaurus
 		err := writeSynTermMap(so.SynonymIDtoTerm[thesaurusID], w, buf)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		thesaurusStart := w.Count()
@@ -362,23 +363,23 @@ func (so *synonymIndexOpaque) writeThesauri(w *CountHashWriter) (thesOffsets []u
 		n = binary.PutUvarint(buf, fieldNotUninverted)
 		_, err = w.Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		n = binary.PutUvarint(buf, fieldNotUninverted)
 		_, err = w.Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		n = binary.PutUvarint(buf, thesOffsets[thesaurusID])
 		_, err = w.Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return err
 		}
 		so.thesaurusAddrs[thesaurusID] = thesaurusStart
 	}
-	return thesOffsets, nil
+	return nil
 }
 
 // -----------------------------------------------------------------------------
@@ -424,10 +425,9 @@ func (s *synonymIndexSection) Process(opaque map[int]resetable, docNum uint32, f
 // Persist serializes and writes the thesauri processed to the writer, along
 // with the synonym postings lists, and the synonym term map. Implements the
 // Persist API for the synonym index section.
-func (s *synonymIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
-	synIndexOpaque := s.getSynonymIndexOpaque(opaque)
-	_, err = synIndexOpaque.writeThesauri(w)
-	return 0, err
+func (s *synonymIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) error {
+	so := s.getSynonymIndexOpaque(opaque)
+	return so.writeThesauri(w)
 }
 
 // AddrForField returns the file offset of the thesaurus for the given fieldID,
@@ -435,15 +435,15 @@ func (s *synonymIndexSection) Persist(opaque map[int]resetable, w *CountHashWrit
 // and returns the corresponding thesaurus offset from the thesaurusAddrs map.
 // Implements the AddrForField API for the synonym index section.
 func (s *synonymIndexSection) AddrForField(opaque map[int]resetable, fieldID int) int {
-	synIndexOpaque := s.getSynonymIndexOpaque(opaque)
-	if synIndexOpaque == nil || synIndexOpaque.FieldIDtoThesaurusID == nil {
+	so := s.getSynonymIndexOpaque(opaque)
+	if so == nil || so.FieldIDtoThesaurusID == nil {
 		return 0
 	}
-	tid, exists := synIndexOpaque.FieldIDtoThesaurusID[uint16(fieldID)]
+	tid, exists := so.FieldIDtoThesaurusID[uint16(fieldID)]
 	if !exists {
 		return 0
 	}
-	return synIndexOpaque.thesaurusAddrs[tid]
+	return so.thesaurusAddrs[tid]
 }
 
 // Merge merges the thesauri, synonym postings lists and synonym term maps from

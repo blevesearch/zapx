@@ -426,8 +426,8 @@ func (s *synonymIndexSection) Process(opaque map[int]resetable, docNum uint32, f
 // with the synonym postings lists, and the synonym term map. Implements the
 // Persist API for the synonym index section.
 func (s *synonymIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) error {
-	synIndexOpaque := s.getSynonymIndexOpaque(opaque)
-	return synIndexOpaque.writeThesauri(w)
+	so := s.getSynonymIndexOpaque(opaque)
+	return so.writeThesauri(w)
 }
 
 // AddrForField returns the file offset of the thesaurus for the given fieldID,
@@ -435,15 +435,15 @@ func (s *synonymIndexSection) Persist(opaque map[int]resetable, w *CountHashWrit
 // and returns the corresponding thesaurus offset from the thesaurusAddrs map.
 // Implements the AddrForField API for the synonym index section.
 func (s *synonymIndexSection) AddrForField(opaque map[int]resetable, fieldID int) int {
-	synIndexOpaque := s.getSynonymIndexOpaque(opaque)
-	if synIndexOpaque == nil || synIndexOpaque.FieldIDtoThesaurusID == nil {
+	so := s.getSynonymIndexOpaque(opaque)
+	if so == nil || so.FieldIDtoThesaurusID == nil {
 		return 0
 	}
-	tid, exists := synIndexOpaque.FieldIDtoThesaurusID[uint16(fieldID)]
+	tid, exists := so.FieldIDtoThesaurusID[uint16(fieldID)]
 	if !exists {
 		return 0
 	}
-	return synIndexOpaque.thesaurusAddrs[tid]
+	return so.thesaurusAddrs[tid]
 }
 
 // Merge merges the thesauri, synonym postings lists and synonym term maps from

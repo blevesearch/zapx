@@ -29,8 +29,6 @@ import (
 	seg "github.com/blevesearch/scorch_segment_api/v2"
 )
 
-const defaultFaissOMPThreads = 1
-
 func init() {
 	registerSegmentSection(SectionFaissVectorIndex, &faissVectorIndexSection{})
 	invertedTextIndexSectionExclusionChecks = append(invertedTextIndexSectionExclusionChecks, func(field index.Field) bool {
@@ -39,6 +37,23 @@ func init() {
 	})
 	faiss.SetOMPThreads(defaultFaissOMPThreads)
 }
+
+const (
+	// Set the default number of OMP threads to be used by FAISS
+	// to 1 since openMP does not support goroutine based threading well.
+	defaultFaissOMPThreads = 1
+	// Divide the estimated nprobe with this value to optimize
+	// for latency.
+	nprobeLatencyOptimization = 2
+)
+
+// Vector index types supported currently
+const (
+	// Flat index type, exact search
+	IndexTypeFlat = iota
+	// IVF index type, approximate search
+	IndexTypeIVF
+)
 
 type faissVectorIndexSection struct {
 }
@@ -188,12 +203,12 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter
 	fieldStart := w.Count()
 	// marking the fact that for vector index, doc values isn't valid by
 	// storing fieldNotUninverted values.
-	n := binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
+	n := binary.PutUvarint(tempBuf, fieldNotUninverted)
 	_, err := w.Write(tempBuf[:n])
 	if err != nil {
 		return err
 	}
-	n = binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
+	n = binary.PutUvarint(tempBuf, fieldNotUninverted)
 	_, err = w.Write(tempBuf[:n])
 	if err != nil {
 		return err
@@ -230,10 +245,6 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter
 	v.fieldAddrs[uint16(fieldID)] = fieldStart
 	return nil
 }
-
-// Divide the estimated nprobe with this value to optimize
-// for latency.
-const nprobeLatencyOptimization = 2
 
 // Calculates the nprobe count, given nlist(number of centroids) based on
 // the metric the index is optimized for.
@@ -309,13 +320,11 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	// used to determine the index type to be created.
 	nvecs := 0
 	var err error
-	for i := 0; i < len(vecIndexes); i++ {
+	for _, currVecIndex := range vecIndexes {
 		if isClosed(closeCh) {
 			freeReconstructedIndexes(vecIndexes)
 			return seg.ErrClosed
 		}
-		// current vector index being processed
-		currVecIndex := vecIndexes[i]
 		currNumVecs := len(currVecIndex.vecIds)
 		currFaissIndex := currVecIndex.faissIndex
 		// reconstruct the vectors only if present, it could be that
@@ -416,14 +425,13 @@ func freeReconstructedIndexes(indexes []*vecIndexInfo) {
 	}
 }
 
-// todo: is it possible to merge this resuable stuff with the interim's tmp0?
 func (v *vectorIndexOpaque) grabBuf(size int) []byte {
 	buf := v.tmp0
 	if cap(buf) < size {
 		buf = make([]byte, size)
 		v.tmp0 = buf
 	}
-	return buf[0:size]
+	return buf[:size]
 }
 
 // Determines the number of centroids to use for an IVF index.
@@ -442,11 +450,6 @@ func determineCentroids(nvecs int) int {
 	}
 	return nlist
 }
-
-const (
-	IndexTypeFlat = iota
-	IndexTypeIVF
-)
 
 // Returns a description string for the index and quantizer type
 // and an index type.
@@ -544,12 +547,12 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 		fieldStart := w.Count()
 		// writing out two offset values to indicate that the current field's
 		// vector section doesn't have valid doc value content within it.
-		n := binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
+		n := binary.PutUvarint(tempBuf, fieldNotUninverted)
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return err
 		}
-		n = binary.PutUvarint(tempBuf, uint64(fieldNotUninverted))
+		n = binary.PutUvarint(tempBuf, fieldNotUninverted)
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return err
@@ -685,16 +688,13 @@ type vectorEntry struct {
 
 type vectorIndexOpaque struct {
 	bytesWritten uint64
-
 	// maps the field to the address of its vector section
 	fieldAddrs map[uint16]int
-
 	// maps the fieldID of a vector field to its vector index content
 	fieldVectorIndex map[uint16]*vectorIndexContent
-
 	// field indexing options
 	fieldsOptions map[string]index.FieldIndexingOptions
-
+	// reusable buffer
 	tmp0 []byte
 }
 

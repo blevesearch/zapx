@@ -28,7 +28,7 @@ const Version uint32 = 16
 
 const Type string = "zap"
 
-const fieldNotUninverted = math.MaxUint64
+const fieldNotUninverted uint64 = math.MaxUint64
 
 func (sb *SegmentBase) Persist(path string) error {
 	return PersistSegmentBase(sb, path)

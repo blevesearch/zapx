@@ -319,7 +319,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	// total number of vectors in the vector index after merge
 	// used to determine the index type to be created.
 	nvecs := 0
-	var err error
 	for _, currVecIndex := range vecIndexes {
 		if isClosed(closeCh) {
 			freeReconstructedIndexes(vecIndexes)
@@ -332,6 +331,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		if currNumVecs > 0 && currFaissIndex != nil {
 			neededReconsLen := currNumVecs * dims
 			recons = recons[:neededReconsLen]
+			var err error
 			recons, err = currFaissIndex.ReconstructBatch(currVecIndex.vecIds, recons)
 			if err != nil {
 				freeReconstructedIndexes(vecIndexes)
@@ -491,7 +491,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 		// dimension of each vector
 		dims := content.dimension
 		// Set the faiss metric type (default is Euclidean Distance or l2_norm)
-		var metric = faiss.MetricL2
+		metric := faiss.MetricL2
 		if content.metric == index.InnerProduct || content.metric == index.CosineSimilarity {
 			// use the same FAISS metric for inner product and cosine similarity
 			metric = faiss.MetricInnerProduct
@@ -624,12 +624,11 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 	// multiple vectors associated with it. In this case we process all the
 	// vectors associated with the field as separate vectors.
 	numVectors := len(vec) / dim
-	var content *vectorIndexContent
-	var ok bool
 	for i := 0; i < numVectors; i++ {
 		vector := vec[i*dim : (i+1)*dim]
 		// check if we have content for this fieldID already
-		if content, ok = vo.fieldVectorIndex[fieldID]; !ok {
+		content, ok := vo.fieldVectorIndex[fieldID]
+		if !ok {
 			// create an entry for this fieldID as this is the first time we
 			// are seeing this field
 			content = &vectorIndexContent{
@@ -714,7 +713,7 @@ func (vo *vectorIndexOpaque) ResetBytesRead(uint64) {
 }
 
 // cleanup stuff over here for reusability
-func (vo *vectorIndexOpaque) Reset() (err error) {
+func (vo *vectorIndexOpaque) Reset() error {
 	clear(vo.fieldAddrs)
 	clear(vo.fieldVectorIndex)
 	vo.tmp0 = vo.tmp0[:0]

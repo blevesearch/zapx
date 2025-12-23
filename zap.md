@@ -164,7 +164,7 @@ In case of inverted text index, the dictionary is encoded in [Vellum](https://gi
 
 ## Vector Index Section
 
-In a vector index, each vector is assigned a unique, monotonically increasing ID ranging from `0` to `N-1`, where `N` is the total number of vectors in the index. This ID is used internally by the [Faiss](https://github.com/blevesearch/faiss) index. Each vector ID maps to a document ID within the segment, and this mapping is stored as an array of size N.
+In a vector index, each vector is assigned a unique, monotonically increasing ID ranging from `0` to `N-1`, where `N` is the total number of vectors in the index. This ID is used internally by the [Faiss](https://github.com/blevesearch/faiss) index. Each vector ID maps to a document ID within the segment, and this mapping is stored as an array of size `N`.
 
         |================================================================+- Inverted Text Index Section
         |                                                                |
@@ -175,9 +175,9 @@ In a vector index, each vector is assigned a unique, monotonically increasing ID
     |   |   +~~~~~~~~~~+~~~~~~~~+~~~~~+~~~~~~+~~~~~~+                    |
     |   |                                                                |
     |   |   +~~~~~~~~~~~~~+                                              |
-    |   |   |   DocID_0   |                                              |
-    |   |   +~~~~~~~~~~~~~+                                              |
     |   |   |   DocID_1   |                                              |
+    |   |   +~~~~~~~~~~~~~+                                              |
+    |   |   |   DocID_2   |                                              |
     |   |   +~~~~~~~~~~~~~+                                              |
     |   |   |     ...     |                                              |
     |   |   +~~~~~~~~~~~~~+                                              |
@@ -192,9 +192,9 @@ In a vector index, each vector is assigned a unique, monotonically increasing ID
     |   |   |  FAISS LEN  |                                              |
     |   |   +~~~~~~~~~~~~~+                                              |
     |   |                                                                |
-    |   |   +---------------------------+...+------------------------+   |
-    |   |   |                  SERIALIZED FAISS INDEX                |   |
-    |   |   +---------------------------+...+------------------------+   |
+    |   |   +---------------------------+...+----------------------+     |
+    |   |   |                SERIALIZED FAISS INDEX                |     |
+    |   |   +---------------------------+...+----------------------+     |
     |   |                                                                |
     |   |================================================================+- Synonym Index Section
     |   |                                                                |

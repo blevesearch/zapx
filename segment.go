@@ -738,7 +738,7 @@ func (s *Segment) ThesaurusAddr(name string) (uint64, error) {
 }
 
 // VectorAddr is a helper function to compute the file offset where the
-// vector index is stored with the specified name.
+// vector index is stored for the specified field.
 func (s *Segment) VectorAddr(name string) (uint64, error) {
 	fieldIDPlus1, ok := s.fieldsMap[name]
 	if !ok {

@@ -57,7 +57,7 @@ func TestChunkedContentCoder(t *testing.T) {
 
 	for _, test := range tests {
 		var actual bytes.Buffer
-		cic := newChunkedContentCoder(test.chunkSize, test.maxDocNum, &actual, false)
+		cic := newChunkedContentCoder(test.chunkSize, test.maxDocNum, &actual, false, false)
 		for i, docNum := range test.docNums {
 			err := cic.Add(docNum, test.vals[i])
 			if err != nil {
@@ -91,9 +91,9 @@ func TestChunkedContentCoders(t *testing.T) {
 
 	var actual1, actual2 bytes.Buffer
 	// chunkedContentCoder that writes out at the end
-	cic1 := newChunkedContentCoder(chunkSize, maxDocNum, &actual1, false)
+	cic1 := newChunkedContentCoder(chunkSize, maxDocNum, &actual1, false, false)
 	// chunkedContentCoder that writes out in chunks
-	cic2 := newChunkedContentCoder(chunkSize, maxDocNum, &actual2, true)
+	cic2 := newChunkedContentCoder(chunkSize, maxDocNum, &actual2, true, false)
 
 	for i, docNum := range docNums {
 		err := cic1.Add(docNum, vals[i])

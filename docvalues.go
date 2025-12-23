@@ -180,6 +180,12 @@ func (di *docValueReader) loadDvChunk(chunkNumber uint64, s *SegmentBase) error 
 	destChunkDataLoc += start
 	curChunkEnd += end
 
+	if di.indexOptions.SkipChunking() {
+		di.curChunkData = s.mem[destChunkDataLoc:curChunkEnd]
+		di.curChunkNum = chunkNumber
+		di.uncompressed = di.uncompressed[:0]
+		return nil
+	}
 	// read the number of docs reside in the chunk
 	numDocs, read := binary.Uvarint(s.mem[destChunkDataLoc : destChunkDataLoc+binary.MaxVarintLen64])
 	if read <= 0 {
@@ -215,7 +221,7 @@ func (di *docValueReader) iterateAllDocValues(s *SegmentBase, visitor docNumTerm
 		if err != nil {
 			return err
 		}
-		if di.curChunkData == nil || len(di.curChunkHeader) == 0 {
+		if di.curChunkData == nil || (len(di.curChunkHeader) == 0 && !di.indexOptions.SkipChunking()) {
 			continue
 		}
 
@@ -230,6 +236,14 @@ func (di *docValueReader) iterateAllDocValues(s *SegmentBase, visitor docNumTerm
 			}
 		}
 		di.uncompressed = uncompressed
+
+		if di.indexOptions.SkipChunking() {
+			err = visitor(uint64(i+1), uncompressed)
+			if err != nil {
+				return err
+			}
+			continue
+		}
 
 		start := uint64(0)
 		for _, entry := range di.curChunkHeader {
@@ -247,10 +261,17 @@ func (di *docValueReader) iterateAllDocValues(s *SegmentBase, visitor docNumTerm
 
 func (di *docValueReader) visitDocValues(docNum uint64,
 	visitor index.DocValueVisitor) error {
-	// binary search the term locations for the docNum
-	start, end := di.getDocValueLocs(docNum)
-	if start == math.MaxUint64 || end == math.MaxUint64 || start == end {
-		return nil
+
+	var start, end uint64
+	if di.indexOptions.SkipChunking() {
+		start = 0
+		end = uint64(len(di.curChunkData))
+	} else {
+		// binary search the term locations for the docNum
+		start, end = di.getDocValueLocs(docNum)
+		if start == math.MaxUint64 || end == math.MaxUint64 || start == end {
+			return nil
+		}
 	}
 
 	var uncompressed []byte
@@ -274,7 +295,7 @@ func (di *docValueReader) visitDocValues(docNum uint64,
 	// pick the terms for the given docNum
 	uncompressed = uncompressed[start:end]
 	for {
-		i := bytes.Index(uncompressed, termSeparatorSplitSlice)
+		i := bytes.IndexByte(uncompressed, termSeparator)
 		if i < 0 {
 			break
 		}

@@ -123,17 +123,21 @@ func (c *chunkedContentCoder) getBytesWritten() uint64 {
 func (c *chunkedContentCoder) flushContents() error {
 	// flush the contents, with meta information at first
 	buf := make([]byte, binary.MaxVarintLen64)
-	n := binary.PutUvarint(buf, uint64(len(c.chunkMeta)))
-	_, err := c.chunkMetaBuf.Write(buf[:n])
-	if err != nil {
-		return err
+	if c.chunkSize != 1 {
+		n := binary.PutUvarint(buf, uint64(len(c.chunkMeta)))
+		_, err := c.chunkMetaBuf.Write(buf[:n])
+		if err != nil {
+			return err
+		}
 	}
 
 	// write out the metaData slice
 	for _, meta := range c.chunkMeta {
-		_, err := writeUvarints(&c.chunkMetaBuf, meta.DocNum, meta.DocDvOffset)
-		if err != nil {
-			return err
+		if c.chunkSize != 1 {
+			_, err := writeUvarints(&c.chunkMetaBuf, meta.DocNum, meta.DocDvOffset)
+			if err != nil {
+				return err
+			}
 		}
 	}
 

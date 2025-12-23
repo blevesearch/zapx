@@ -238,7 +238,7 @@ func (di *docValueReader) iterateAllDocValues(s *SegmentBase, visitor docNumTerm
 		di.uncompressed = uncompressed
 
 		if di.indexOptions.SkipChunking() {
-			err = visitor(uint64(i+1), uncompressed)
+			err = visitor(uint64(i), uncompressed)
 			if err != nil {
 				return err
 			}

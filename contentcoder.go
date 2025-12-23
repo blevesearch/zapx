@@ -47,6 +47,7 @@ type chunkedContentCoder struct {
 
 	w                io.Writer
 	progressiveWrite bool
+	skipEncode       bool
 
 	chunkMeta    []MetaData
 	chunkMetaBuf bytes.Buffer
@@ -63,7 +64,7 @@ type MetaData struct {
 // newChunkedContentCoder returns a new chunk content coder which
 // packs data into chunks based on the provided chunkSize
 func newChunkedContentCoder(chunkSize uint64, maxDocNum uint64,
-	w io.Writer, progressiveWrite bool,
+	w io.Writer, progressiveWrite bool, skipEncode bool,
 ) *chunkedContentCoder {
 	total := maxDocNum/chunkSize + 1
 	rv := &chunkedContentCoder{
@@ -72,6 +73,7 @@ func newChunkedContentCoder(chunkSize uint64, maxDocNum uint64,
 		chunkMeta:        make([]MetaData, 0, total),
 		w:                w,
 		progressiveWrite: progressiveWrite,
+		skipEncode:       skipEncode,
 	}
 
 	return rv
@@ -139,7 +141,11 @@ func (c *chunkedContentCoder) flushContents() error {
 	metaData := c.chunkMetaBuf.Bytes()
 	c.final = append(c.final, c.chunkMetaBuf.Bytes()...)
 	// write the compressed data to the final data
-	c.compressed = snappy.Encode(c.compressed[:cap(c.compressed)], c.chunkBuf.Bytes())
+	if c.skipEncode {
+		c.compressed = c.chunkBuf.Bytes()
+	} else {
+		c.compressed = snappy.Encode(c.compressed[:cap(c.compressed)], c.chunkBuf.Bytes())
+	}
 	c.incrementBytesWritten(uint64(len(c.compressed)))
 	c.final = append(c.final, c.compressed...)
 

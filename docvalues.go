@@ -68,6 +68,7 @@ func (d *docVisitState) ResetBytesRead(val uint64) {
 
 type docValueReader struct {
 	field          string
+	indexOptions   index.FieldIndexingOptions
 	curChunkNum    uint64
 	chunkOffsets   []uint64
 	dvDataLoc      uint64
@@ -92,6 +93,7 @@ func (di *docValueReader) cloneInto(rv *docValueReader) *docValueReader {
 	}
 
 	rv.field = di.field
+	rv.indexOptions = di.indexOptions
 	rv.curChunkNum = math.MaxUint64
 	rv.chunkOffsets = di.chunkOffsets // immutable, so it's sharable
 	rv.dvDataLoc = di.dvDataLoc
@@ -134,6 +136,7 @@ func (sb *SegmentBase) loadFieldDocValueReader(field string,
 	fdvIter := &docValueReader{
 		curChunkNum:  math.MaxUint64,
 		field:        field,
+		indexOptions: sb.fieldsOptions[field],
 		chunkOffsets: make([]uint64, int(numChunks)),
 	}
 
@@ -216,16 +219,20 @@ func (di *docValueReader) iterateAllDocValues(s *SegmentBase, visitor docNumTerm
 			continue
 		}
 
-		// uncompress the already loaded data
-		uncompressed, err := snappy.Decode(di.uncompressed[:cap(di.uncompressed)], di.curChunkData)
-		if err != nil {
-			return err
+		if di.indexOptions.SkipSnappy() {
+			di.uncompressed = di.curChunkData
+		} else {
+			// uncompress the already loaded data
+			uncompressed, err := snappy.Decode(di.uncompressed[:cap(di.uncompressed)], di.curChunkData)
+			if err != nil {
+				return err
+			}
+			di.uncompressed = uncompressed
 		}
-		di.uncompressed = uncompressed
 
 		start := uint64(0)
 		for _, entry := range di.curChunkHeader {
-			err = visitor(entry.DocNum, uncompressed[start:entry.DocDvOffset])
+			err = visitor(entry.DocNum, di.uncompressed[start:entry.DocDvOffset])
 			if err != nil {
 				return err
 			}
@@ -251,12 +258,16 @@ func (di *docValueReader) visitDocValues(docNum uint64,
 	if len(di.uncompressed) > 0 {
 		uncompressed = di.uncompressed
 	} else {
-		// uncompress the already loaded data
-		uncompressed, err = snappy.Decode(di.uncompressed[:cap(di.uncompressed)], di.curChunkData)
-		if err != nil {
-			return err
+		if di.indexOptions.SkipSnappy() {
+			di.uncompressed = di.curChunkData
+		} else {
+			// uncompress the already loaded data
+			uncompressed, err = snappy.Decode(di.uncompressed[:cap(di.uncompressed)], di.curChunkData)
+			if err != nil {
+				return err
+			}
+			di.uncompressed = uncompressed
 		}
-		di.uncompressed = uncompressed
 	}
 
 	// pick the terms for the given docNum
@@ -321,12 +332,19 @@ func (sb *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
 	if err != nil {
 		return nil, err
 	}
-	docInChunk := localDocNum / chunkFactor
 	var dvr *docValueReader
+	var docInChunk uint64
 	for _, field := range fields {
 		if fieldIDPlus1, ok = sb.fieldsMap[field]; !ok {
 			continue
 		}
+
+		if sb.fieldsOptions[field].SkipChunking() {
+			docInChunk = localDocNum
+		} else {
+			docInChunk = localDocNum / chunkFactor
+		}
+
 		fieldID := fieldIDPlus1 - 1
 		if dvr, ok = dvs.dvrs[fieldID]; ok && dvr != nil {
 			// check if the chunk is already loaded

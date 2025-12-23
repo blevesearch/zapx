@@ -219,20 +219,21 @@ func (di *docValueReader) iterateAllDocValues(s *SegmentBase, visitor docNumTerm
 			continue
 		}
 
+		var uncompressed []byte
 		if di.indexOptions.SkipSnappy() {
-			di.uncompressed = di.curChunkData
+			uncompressed = di.curChunkData
 		} else {
 			// uncompress the already loaded data
-			uncompressed, err := snappy.Decode(di.uncompressed[:cap(di.uncompressed)], di.curChunkData)
+			uncompressed, err = snappy.Decode(di.uncompressed[:cap(di.uncompressed)], di.curChunkData)
 			if err != nil {
 				return err
 			}
-			di.uncompressed = uncompressed
 		}
+		di.uncompressed = uncompressed
 
 		start := uint64(0)
 		for _, entry := range di.curChunkHeader {
-			err = visitor(entry.DocNum, di.uncompressed[start:entry.DocDvOffset])
+			err = visitor(entry.DocNum, uncompressed[start:entry.DocDvOffset])
 			if err != nil {
 				return err
 			}
@@ -259,16 +260,16 @@ func (di *docValueReader) visitDocValues(docNum uint64,
 		uncompressed = di.uncompressed
 	} else {
 		if di.indexOptions.SkipSnappy() {
-			di.uncompressed = di.curChunkData
+			uncompressed = di.curChunkData
 		} else {
 			// uncompress the already loaded data
 			uncompressed, err = snappy.Decode(di.uncompressed[:cap(di.uncompressed)], di.curChunkData)
 			if err != nil {
 				return err
 			}
-			di.uncompressed = uncompressed
 		}
 	}
+	di.uncompressed = uncompressed
 
 	// pick the terms for the given docNum
 	uncompressed = uncompressed[start:end]

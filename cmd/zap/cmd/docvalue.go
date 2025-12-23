@@ -169,12 +169,11 @@ func dumpDocValueResults(data []byte, args []string, field string, id int, field
 	}
 
 	var termSeparator byte = 0xff
-	var termSeparatorSplitSlice = []byte{termSeparator}
 
 	// pick the terms for the given docNum
 	uncompressed = uncompressed[start:end]
 	for {
-		i := bytes.Index(uncompressed, termSeparatorSplitSlice)
+		i := bytes.IndexByte(uncompressed, termSeparator)
 		if i < 0 {
 			break
 		}

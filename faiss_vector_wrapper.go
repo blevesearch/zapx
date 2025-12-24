@@ -70,7 +70,7 @@ func (v *vectorIndexWrapper) Search(qVector []float32, k int64,
 		return rv, nil
 	}
 	// check if number of docs or number of vectors is zero
-	if v.mapping.numVectors() == 0 || v.mapping.numDocuments() == 0 {
+	if v.mapping == nil || v.mapping.numVectors() == 0 || v.mapping.numDocuments() == 0 {
 		// no vectors or no documents indexed, so return empty postings list
 		return rv, nil
 	}
@@ -113,6 +113,11 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	}
 	// Check and proceed only if non-zero documents eligible per the filter query.
 	if len(eligibleDocIDs) == 0 {
+		return rv, nil
+	}
+	// check if number of docs or number of vectors is zero
+	if v.mapping == nil || v.mapping.numVectors() == 0 || v.mapping.numDocuments() == 0 {
+		// no vectors or no documents indexed, so return empty postings list
 		return rv, nil
 	}
 	// vector IDs corresponding to the local doc numbers to be

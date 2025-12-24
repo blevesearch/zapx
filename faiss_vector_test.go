@@ -520,7 +520,7 @@ func TestVectorSegment(t *testing.T) {
 	hitDocIDs := []uint64{2, 6, 8, 9}
 	hitVecs := [][]float32{data[0], data[4], data[6][0:3], data[7][0:3]}
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
-		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", false, nil)
+		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -626,7 +626,7 @@ func TestPersistedVectorSegment(t *testing.T) {
 	hitDocIDs := []uint64{2, 6, 8, 9}
 	hitVecs := [][]float32{data[0], data[4], data[6][0:3], data[7][0:3]}
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
-		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", false, nil)
+		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", nil)
 		if err != nil {
 			t.Fatal(err)
 		}

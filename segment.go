@@ -104,7 +104,7 @@ type SegmentBase struct {
 	numDocs             uint64
 	storedIndexOffset   uint64
 	sectionsIndexOffset uint64
-	fieldDvReaders      [][]*docValueReader // naive chunk cache per field; section->field->reader
+	fieldDvReaders      [][]*docValueReader // naive chunk cache per field; section->fieldID->reader
 	fieldDvNames        []string            // field names cached in fieldDvReaders
 	size                uint64
 

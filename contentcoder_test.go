@@ -33,10 +33,25 @@ func TestChunkedContentCoder(t *testing.T) {
 			docNums:   []uint64{0},
 			vals:      [][]byte{[]byte("bleve")},
 			// 1 chunk, chunk-0 length 11(b), value
-			expected: []byte{0x1, 0x0, 0x5, 0x5, 0x10, 0x62, 0x6c, 0x65, 0x76, 0x65,
-				0xa,
-				0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
-				0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1},
+			expected: []byte{
+				0x5, 0x10, 0x62, 0x6c, 0x65, 0x76, 0x65, // compressed value - "bleve"
+				0x7,                                    // chunk offset length - 7 bytes
+				0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, // length of offset entries - 1 entry
+				0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, // number of chuncks - 1 chunk
+			},
+		},
+		{
+			maxDocNum: 0,
+			chunkSize: 2,
+			docNums:   []uint64{0},
+			vals:      [][]byte{[]byte("bleve")},
+			// 1 chunk, chunk-0 length 11(b), value
+			expected: []byte{
+				0x1, 0x0, 0x5, 0x5, 0x10, 0x62, 0x6c, 0x65, 0x76, 0x65, // meta + compressed value - "bleve"
+				0xa,                                    // chunk offset length - 10 bytes
+				0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, // length of offset entries - 1 entry
+				0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, // number of chuncks - 1 chunk
+			},
 		},
 		{
 			maxDocNum: 1,
@@ -47,11 +62,32 @@ func TestChunkedContentCoder(t *testing.T) {
 				[]byte("scorch"),
 			},
 
-			expected: []byte{0x1, 0x0, 0x6, 0x6, 0x14, 0x75, 0x70, 0x73, 0x69, 0x64,
-				0x65, 0x1, 0x1, 0x6, 0x6, 0x14, 0x73, 0x63, 0x6f, 0x72, 0x63, 0x68,
-				0xb, 0x16,
-				0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2,
-				0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2},
+			expected: []byte{
+				0x6, 0x14, 0x75, 0x70, 0x73, 0x69, 0x64, 0x65, // compressed value - "upside"
+				0x6, 0x14, 0x73, 0x63, 0x6f, 0x72, 0x63, 0x68, // compressed value - "scorch"
+				0x8, 0x10, // chunk offset lengths - 8 and 16 bytes
+				0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2, // length of offset entries - 2 entries
+				0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2, // number of chuncks - 2 chunks
+			},
+		},
+		{
+			maxDocNum: 1,
+			chunkSize: 2,
+			docNums:   []uint64{0, 1},
+			vals: [][]byte{
+				[]byte("upside"),
+				[]byte("scorch"),
+			},
+
+			expected: []byte{
+				0x2,      // meta - 2 documents in chunk
+				0x0, 0x6, // meta - docNum 0, offset 6
+				0x1, 0xc, // meta - docNum 1, offset 12
+				0xc, 0x2c, 0x75, 0x70, 0x73, 0x69, 0x64, 0x65, 0x73, 0x63, 0x6f, 0x72, 0x63, 0x68, // compressed value - "upsidescorch"
+				0x13,                                   // chunk offset length - 19 bytes
+				0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, // length of offset entries - 1 entry
+				0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, // number of chuncks - 1 chunk
+			},
 		},
 	}
 
@@ -77,47 +113,103 @@ func TestChunkedContentCoder(t *testing.T) {
 }
 
 func TestChunkedContentCoders(t *testing.T) {
-	maxDocNum := uint64(5)
-	chunkSize := uint64(1)
-	docNums := []uint64{0, 1, 2, 3, 4, 5}
-	vals := [][]byte{
-		[]byte("scorch"),
-		[]byte("does"),
-		[]byte("better"),
-		[]byte("than"),
-		[]byte("upside"),
-		[]byte("down"),
+
+	tests := []struct {
+		maxDocNum  uint64
+		chunkSize  uint64
+		skipSnappy bool
+		docNums    []uint64
+		vals       [][]byte
+	}{
+		{
+			maxDocNum:  5,
+			chunkSize:  1,
+			skipSnappy: false,
+			docNums:    []uint64{0, 1, 2, 3, 4, 5},
+			vals: [][]byte{
+				[]byte("scorch"),
+				[]byte("does"),
+				[]byte("better"),
+				[]byte("than"),
+				[]byte("upside"),
+				[]byte("down"),
+			},
+		},
+		{
+			maxDocNum:  5,
+			chunkSize:  2,
+			skipSnappy: false,
+			docNums:    []uint64{0, 1, 2, 3, 4, 5},
+			vals: [][]byte{
+				[]byte("scorch"),
+				[]byte("does"),
+				[]byte("better"),
+				[]byte("than"),
+				[]byte("upside"),
+				[]byte("down"),
+			},
+		},
+		{
+			maxDocNum:  5,
+			chunkSize:  1,
+			skipSnappy: true,
+			docNums:    []uint64{0, 1, 2, 3, 4, 5},
+			vals: [][]byte{
+				[]byte("scorch"),
+				[]byte("does"),
+				[]byte("better"),
+				[]byte("than"),
+				[]byte("upside"),
+				[]byte("down"),
+			},
+		},
+		{
+			maxDocNum:  5,
+			chunkSize:  2,
+			skipSnappy: true,
+			docNums:    []uint64{0, 1, 2, 3, 4, 5},
+			vals: [][]byte{
+				[]byte("scorch"),
+				[]byte("does"),
+				[]byte("better"),
+				[]byte("than"),
+				[]byte("upside"),
+				[]byte("down"),
+			},
+		},
 	}
 
-	var actual1, actual2 bytes.Buffer
-	// chunkedContentCoder that writes out at the end
-	cic1 := newChunkedContentCoder(chunkSize, maxDocNum, &actual1, false, false)
-	// chunkedContentCoder that writes out in chunks
-	cic2 := newChunkedContentCoder(chunkSize, maxDocNum, &actual2, true, false)
+	for _, test := range tests {
+		var actual1, actual2 bytes.Buffer
+		// chunkedContentCoder that writes out at the end
+		cic1 := newChunkedContentCoder(test.chunkSize, test.maxDocNum, &actual1, false, false)
+		// chunkedContentCoder that writes out in chunks
+		cic2 := newChunkedContentCoder(test.chunkSize, test.maxDocNum, &actual2, true, false)
 
-	for i, docNum := range docNums {
-		err := cic1.Add(docNum, vals[i])
-		if err != nil {
-			t.Fatalf("error adding to intcoder: %v", err)
+		for i, docNum := range test.docNums {
+			err := cic1.Add(docNum, test.vals[i])
+			if err != nil {
+				t.Fatalf("error adding to intcoder: %v", err)
+			}
+			err = cic2.Add(docNum, test.vals[i])
+			if err != nil {
+				t.Fatalf("error adding to intcoder: %v", err)
+			}
 		}
-		err = cic2.Add(docNum, vals[i])
+		_ = cic1.Close()
+		_ = cic2.Close()
+
+		_, err := cic1.Write()
 		if err != nil {
-			t.Fatalf("error adding to intcoder: %v", err)
+			t.Fatalf("error writing: %v", err)
 		}
-	}
-	_ = cic1.Close()
-	_ = cic2.Close()
+		_, err = cic2.Write()
+		if err != nil {
+			t.Fatalf("error writing: %v", err)
+		}
 
-	_, err := cic1.Write()
-	if err != nil {
-		t.Fatalf("error writing: %v", err)
-	}
-	_, err = cic2.Write()
-	if err != nil {
-		t.Fatalf("error writing: %v", err)
-	}
-
-	if !bytes.Equal(actual1.Bytes(), actual2.Bytes()) {
-		t.Errorf("%s != %s", actual1.String(), actual2.String())
+		if !bytes.Equal(actual1.Bytes(), actual2.Bytes()) {
+			t.Errorf("%s != %s", actual1.String(), actual2.String())
+		}
 	}
 }

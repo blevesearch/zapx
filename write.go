@@ -79,7 +79,6 @@ func persistFieldsSection(fieldsInv []string, fieldsOptions map[string]index.Fie
 		}
 
 		// write out the number of field-specific indexes
-		// FIXME hard-coding to 2, and not attempting to support sparseness well
 		_, err = writeUvarints(w, uint64(len(segmentSections)))
 		if err != nil {
 			return 0, err

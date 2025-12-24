@@ -364,7 +364,9 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclud
 			// NOTE: the selector being freed does NOT free the inner bitmap, as we control
 			// its lifecycle in GO, to reuse the bitmap across iterations, if needed, for
 			// multi-vector document retrieval.
-			defer sel.Delete()
+			if sel != nil {
+				defer sel.Delete()
+			}
 			return v.vecIndex.SearchWithoutIDs(qVector, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
@@ -414,7 +416,9 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include *
 			// NOTE: the selector being freed does NOT free the inner bitmap, as we control
 			// its lifecycle in GO, to reuse the bitmap across iterations, if needed, for
 			// multi-vector document retrieval.
-			defer sel.Delete()
+			if sel != nil {
+				defer sel.Delete()
+			}
 			return v.vecIndex.SearchWithIDs(qVector, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
@@ -465,7 +469,9 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(eligibleCentroidIDs []in
 			// NOTE: the selector being freed does NOT free the inner bitmap, as we control
 			// its lifecycle in GO, to reuse the bitmap across iterations, if needed, for
 			// multi-vector document retrieval.
-			defer sel.Delete()
+			if sel != nil {
+				defer sel.Delete()
+			}
 			return v.vecIndex.SearchClustersFromIVFIndex(eligibleCentroidIDs, centroidDis, centroidsToProbe,
 				qVector, k, sel, params)
 		},

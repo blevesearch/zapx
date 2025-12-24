@@ -72,9 +72,9 @@ type docValueReader struct {
 	curChunkNum    uint64
 	chunkOffsets   []uint64
 	dvDataLoc      uint64
-	curChunkHeader []MetaData
-	curChunkData   []byte // compressed data cache
-	uncompressed   []byte // temp buf for snappy decompression
+	curChunkHeader []MetaData // Only populated when chunking is enabled
+	curChunkData   []byte     // compressed data cache
+	uncompressed   []byte     // temp buf for snappy decompression
 
 	bytesRead uint64
 }
@@ -180,12 +180,14 @@ func (di *docValueReader) loadDvChunk(chunkNumber uint64, s *SegmentBase) error 
 	destChunkDataLoc += start
 	curChunkEnd += end
 
+	// if skip chunking is enabled, each chunk has 1 document's docValues
 	if di.indexOptions.SkipChunking() {
 		di.curChunkData = s.mem[destChunkDataLoc:curChunkEnd]
 		di.curChunkNum = chunkNumber
 		di.uncompressed = di.uncompressed[:0]
 		return nil
 	}
+
 	// read the number of docs reside in the chunk
 	numDocs, read := binary.Uvarint(s.mem[destChunkDataLoc : destChunkDataLoc+binary.MaxVarintLen64])
 	if read <= 0 {
@@ -221,6 +223,7 @@ func (di *docValueReader) iterateAllDocValues(s *SegmentBase, visitor docNumTerm
 		if err != nil {
 			return err
 		}
+
 		if di.curChunkData == nil || (len(di.curChunkHeader) == 0 && !di.indexOptions.SkipChunking()) {
 			continue
 		}
@@ -237,6 +240,8 @@ func (di *docValueReader) iterateAllDocValues(s *SegmentBase, visitor docNumTerm
 		}
 		di.uncompressed = uncompressed
 
+		// if chunking is skipped, then all docValues
+		// for the chunk belong to a single docNum
 		if di.indexOptions.SkipChunking() {
 			err = visitor(uint64(i), uncompressed)
 			if err != nil {
@@ -264,6 +269,7 @@ func (di *docValueReader) visitDocValues(docNum uint64,
 
 	var start, end uint64
 	if di.indexOptions.SkipChunking() {
+		// docNum directly maps to the chunk number
 		start = 0
 		end = uint64(len(di.curChunkData))
 	} else {
@@ -289,8 +295,8 @@ func (di *docValueReader) visitDocValues(docNum uint64,
 				return err
 			}
 		}
+		di.uncompressed = uncompressed
 	}
-	di.uncompressed = uncompressed
 
 	// pick the terms for the given docNum
 	uncompressed = uncompressed[start:end]
@@ -368,8 +374,7 @@ func (sb *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
 			docInChunk = localDocNum / chunkFactor
 		}
 
-		fieldID := fieldIDPlus1 - 1
-		dvr = dvs.dvrs[fieldID]
+		dvr = dvs.dvrs[fieldIDPlus1-1]
 		if dvr != nil {
 			// check if the chunk is already loaded
 			if docInChunk != dvr.curChunkNumber() {

@@ -38,14 +38,21 @@ func newVectorIndexCache() *vectorIndexCache {
 }
 
 type vectorIndexCache struct {
-	closeCh chan struct{}
-	m       sync.RWMutex
-	cache   map[uint16]*cacheEntry
+	isClosed bool
+	closeCh  chan struct{}
+	m        sync.RWMutex
+	cache    map[uint16]*cacheEntry
 }
 
 // Clear clears the entire vector index cache.
 func (vc *vectorIndexCache) Clear() {
 	vc.m.Lock()
+	// if already closed, no-op
+	if vc.isClosed {
+		vc.m.Unlock()
+		return
+	}
+	vc.isClosed = true
 	close(vc.closeCh)
 
 	// forcing a close on all indexes to avoid memory leaks.
@@ -282,7 +289,9 @@ func (ce *cacheEntry) load(except *roaring.Bitmap) (*faiss.IndexImpl, *idMapping
 
 func (ce *cacheEntry) close() {
 	go func() {
-		ce.index.Close()
+		if ce.index != nil {
+			ce.index.Close()
+		}
 		ce.index = nil
 		ce.mapping = nil
 	}()
@@ -291,8 +300,8 @@ func (ce *cacheEntry) close() {
 // -----------------------------------------------------------------------------
 
 func getExcludedVectors(idMap *idMapping, except *roaring.Bitmap) (exclude *bitmap) {
-	numVecs := idMap.numVectors()
-	if except != nil && !except.IsEmpty() {
+	if except != nil && !except.IsEmpty() && idMap != nil {
+		numVecs := idMap.numVectors()
 		idMap.iterateVectors(func(vecID uint32, docID uint32) {
 			if except.Contains(docID) {
 				if exclude == nil {

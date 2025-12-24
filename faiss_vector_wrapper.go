@@ -118,32 +118,32 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// vector IDs corresponding to the local doc numbers to be
 	// considered for the search
 	// create a bitmap for the vector IDs to include in the search
-	include := newBitmap(v.mapping.numVectors())
+	includeBM := newBitmap(v.mapping.numVectors())
 	for _, id := range eligibleDocIDs {
 		vecIDs, exists := v.mapping.vecsForDoc(uint32(id))
 		if !exists {
 			continue
 		}
 		for _, vecID := range vecIDs {
-			include.set(vecID)
+			includeBM.set(vecID)
 		}
 	}
 	// In case a doc has invalid vector fields but valid non-vector fields,
 	// filter hit IDs may be ineligible for the kNN since the document does
 	// not have any/valid vectors.
-	if include.cardinality() == 0 {
+	if includeBM.cardinality() == 0 {
 		return rv, nil
 	}
 	// if we have included all vectors, then we can do a normal search
 	// with full selectivity (no filtering)
-	if include.cardinality() == v.mapping.numVectors() {
+	if includeBM.cardinality() == v.mapping.numVectors() {
 		return v.Search(qVector, k, params)
 	}
 	// If the index is not an IVF index, then the search can be
 	// performed directly, using the Flat index.
 	if !v.vecIndex.IsIVFIndex() {
 		// perform search with included IDs in the bitmap
-		rs, err := v.searchWithIDs(qVector, k, include, params)
+		rs, err := v.searchWithIDs(qVector, k, includeBM, params)
 		if err != nil {
 			return nil, err
 		}
@@ -151,50 +151,77 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		addIDsToPostingsList(rv, rs)
 		return rv, nil
 	}
+	// Getting the IVF index parameters, nprobe and nlist, set at index time.
+	nprobe, nlist := v.vecIndex.IVFParams()
+	// Create a FAISS selector based on the include bitmap.
+	includeSelector, err := getBitmapSelector(includeBM, false)
+	if err != nil {
+		return nil, err
+	}
+	// Ensure the selector is deleted after use, this does NOT free the inner includeBM bitmap.
+	// We control its lifecycle in GO.
+	defer includeSelector.Delete()
 	// Determining which clusters, identified by centroid ID,
 	// have at least one eligible vector and hence, ought to be
 	// probed.
-	clusterVectorCounts, err := v.vecIndex.ObtainClusterVectorCountsFromIVFIndex(include.slice())
+	clusterVectorCounts, err := v.vecIndex.ObtainClusterVectorCountsFromIVFIndex(includeSelector, int(nlist))
 	if err != nil {
 		return nil, err
 	}
-	// Ordering the retrieved centroid IDs by increasing order
-	// of distance i.e. decreasing order of proximity to query vector.
-	centroidIDs := make([]int64, 0, len(clusterVectorCounts))
-	for centroidID := range clusterVectorCounts {
-		centroidIDs = append(centroidIDs, centroidID)
+	// Create a bitmap for the eligible centroids to be considered for probing.
+	centroidBM := newBitmap(uint32(nlist))
+	for centroidID, vectorCount := range clusterVectorCounts {
+		// Only centroids with at least one eligible vector are considered.
+		if vectorCount > 0 {
+			centroidBM.set(uint32(centroidID))
+		}
 	}
-	closestCentroidIDs, centroidDistances, err :=
-		v.vecIndex.ObtainClustersWithDistancesFromIVFIndex(qVector, centroidIDs)
+	centroidCount := centroidBM.cardinality()
+	if centroidCount == 0 {
+		// No centroids have any eligible vectors, so return empty postings list.
+		return rv, nil
+	}
+	// create a FAISS selector based on the centroid bitmap
+	centroidSelector, err := getBitmapSelector(centroidBM, false)
 	if err != nil {
 		return nil, err
 	}
-	// Getting the nprobe value set at index time.
-	nprobe := int(v.vecIndex.GetNProbe())
+	defer centroidSelector.Delete()
+	// Search the coarse quantizer to order the centroids based on proximity
+	// to the query vector.
+	eligibleCentroidIDs, centroidDistances, err :=
+		v.vecIndex.ObtainClustersWithDistancesFromIVFIndex(qVector, centroidSelector, int64(centroidCount))
+	if err != nil {
+		return nil, err
+	}
 	// Determining the minimum number of centroids to be probed
 	// to ensure that at least 'k' vectors are collected while
 	// examining at least 'nprobe' centroids.
 	// centroidsToProbe range: [nprobe, number of eligible centroids]
 	var eligibleVecsTillNow int64
-	centroidsToProbe := len(closestCentroidIDs)
-	for i, centroidID := range closestCentroidIDs {
+	centroidsToProbe := len(eligibleCentroidIDs)
+	for i, centroidID := range eligibleCentroidIDs {
 		eligibleVecsTillNow += clusterVectorCounts[centroidID]
 		// Stop once we've examined at least 'nprobe' centroids and
 		// collected at least 'k' vectors.
-		if eligibleVecsTillNow >= k && i+1 >= nprobe {
+		if eligibleVecsTillNow >= k && i+1 >= int(nprobe) {
 			centroidsToProbe = i + 1
 			break
 		}
 	}
-	// Search the clusters specified by 'closestCentroidIDs' for
-	// vectors whose IDs are present in 'vectorIDsToInclude'
+	// Search the clusters specified by 'eligibleCentroidIDs' for
+	// vectors whose IDs are present in the includeBM bitmap.
+	// This is done while probing only 'centroidsToProbe' clusters.
+	// unless overridden dynamically, either by the search parameters
+	// or by the deduplication logic in searchClustersFromIVFIndex.
 	rs, err := v.searchClustersFromIVFIndex(
-		include, closestCentroidIDs, centroidsToProbe,
-		k, qVector, centroidDistances, params)
+		eligibleCentroidIDs, centroidDistances, centroidsToProbe,
+		qVector, k, includeBM, params)
 	if err != nil {
 		return nil, err
 	}
-	v.addIDsToPostingsList(rv, rs)
+	// populate the postings list from the result set
+	addIDsToPostingsList(rv, rs)
 	return rv, nil
 }
 func (v *vectorIndexWrapper) Close() {
@@ -413,55 +440,66 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include *
 }
 
 // searchClustersFromIVFIndex performs a search on the IVF vector index to retrieve the top K documents
-// while either including or excluding the vector IDs specified in the ids slice, depending on the include flag.
+// while including only the vectors present in the includeBM bitmap.
 // It takes into account the eligible centroid IDs and ensures that at least centroidsToProbe are probed.
 // If after a few iterations we haven't found enough documents, it dynamically increases the number of
 // clusters searched (up to the number of eligible centroids) to ensure we can find k unique documents.
-func (v *vectorIndexWrapper) searchClustersFromIVFIndex(sel *vectorSelector, eligibleCentroidIDs []int64,
-	centroidsToProbe int, k int64, x, centroidDis []float32, params json.RawMessage) (
+func (v *vectorIndexWrapper) searchClustersFromIVFIndex(eligibleCentroidIDs []int64, centroidDis []float32, centroidsToProbe int,
+	qVector []float32, k int64, include *bitmap, params json.RawMessage) (
 	resultSet, error) {
-	// if the number of iterations > 1, we will be modifying the include slice
-	// to exclude vector ids already seen, so we use this set to track the
-	// include set for the next iteration, this is reused across iterations
-	// and allocated only once, when numIter == 1
 	var totalEligibleCentroids = len(eligibleCentroidIDs)
 	return v.docSearch(k, v.sb.numDocs,
 		func() ([]float32, []int64, error) {
-			// build the selector based on whatever ids is as of now and the
-			// include/exclude flag
-			selector, err := v.getSelector(sel.bytes())
+			// build the FAISS selector based on the include bitmap.
+			// NOTE: The bitmap selector is just a wrapper over the include bitmap
+			// which is shared across the CGO layer.
+			sel, err := getBitmapSelector(include, false)
 			if err != nil {
 				return nil, nil, err
 			}
-			// once the main search is done we must free the selector
-			defer selector.Delete()
-			return v.vecIndex.SearchClustersFromIVFIndex(selector, eligibleCentroidIDs,
-				centroidsToProbe, k, x, centroidDis, params)
+			// NOTE: the selector being freed does NOT free the inner bitmap, as we control
+			// its lifecycle in GO, to reuse the bitmap across iterations, if needed, for
+			// multi-vector document retrieval.
+			defer sel.Delete()
+			return v.vecIndex.SearchClustersFromIVFIndex(eligibleCentroidIDs, centroidDis, centroidsToProbe,
+				qVector, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
 			// we must clone the existing ids slice before modifying it to avoid
 			// modifying the original slice passed in by the caller
 			if numIter == 1 {
-				// clone the existing sel slice
-				sel = sel.clone()
+				if include == nil {
+					// should not happen, but just a safeguard
+					include = newBitmap(v.mapping.numVectors())
+				} else {
+					// clone the existing include bitmap
+					include = include.clone()
+				}
 			}
 			// if we have iterated atleast nprobeIncreaseThreshold times
 			// and still have not found enough unique docIDs, we increase
 			// the number of centroids to probe for the next iteration
 			// to try and find more vectors/documents
-			if numIter >= nprobeIncreaseThreshold && centroidsToProbe < len(eligibleCentroidIDs) {
+			if numIter >= nprobeIncreaseThreshold && centroidsToProbe < totalEligibleCentroids {
 				// Calculate how much to increase: increase by 50% of the remaining centroids to probe,
 				// but at least by 1 to ensure progress.
 				increaseAmount := max((totalEligibleCentroids-centroidsToProbe)/2, 1)
 				// Update centroidsToProbe, ensuring it does not exceed the total eligible centroids
-				centroidsToProbe = min(centroidsToProbe+increaseAmount, len(eligibleCentroidIDs))
+				centroidsToProbe = min(centroidsToProbe+increaseAmount, totalEligibleCentroids)
 			}
 			// removing the vector ids retrieved in this iteration
-			// from the include set and rebuild the ids slice from the set
-			sel.clearMany(labels)
+			// from the include set
+			for _, vecID := range labels {
+				// should not happen, but just a safeguard, as we catch -1
+				// in the main loop
+				if vecID == -1 {
+					continue
+				}
+				include.clear(uint32(vecID))
+			}
 			// only continue searching if we still have vector ids to include
-			return sel.active() != 0
+			return include.cardinality() != 0
 		})
 }
 

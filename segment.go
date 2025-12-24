@@ -100,7 +100,7 @@ type SegmentBase struct {
 	fieldsMap           map[string]uint16                     // fieldName -> fieldID+1
 	fieldsOptions       map[string]index.FieldIndexingOptions // fieldName -> fieldOptions
 	fieldsInv           []string                              // fieldID -> fieldName
-	fieldsSectionsMap   []map[uint16]uint64                   // fieldID -> section -> address
+	fieldsSectionsMap   [][]uint64                            // fieldID -> section -> address
 	numDocs             uint64
 	storedIndexOffset   uint64
 	sectionsIndexOffset uint64
@@ -325,9 +325,7 @@ func (sb *SegmentBase) loadFields() error {
 		addr := binary.BigEndian.Uint64(sb.mem[pos : pos+8])
 		sb.incrementBytesRead(8)
 
-		fieldSectionMap := make(map[uint16]uint64)
-
-		err := sb.loadField(uint16(fieldID), addr, fieldSectionMap)
+		fieldSectionMap, err := sb.loadField(uint16(fieldID), addr)
 		if err != nil {
 			return err
 		}
@@ -341,11 +339,11 @@ func (sb *SegmentBase) loadFields() error {
 	return nil
 }
 
-func (sb *SegmentBase) loadField(fieldID uint16, pos uint64,
-	fieldSectionMap map[uint16]uint64) error {
+// loadField loads the field metadata for the given fieldID at the given position
+func (sb *SegmentBase) loadField(fieldID uint16, pos uint64) ([]uint64, error) {
 	if pos == 0 {
 		// there is no indexing structure present for this field/section
-		return nil
+		return nil, nil
 	}
 
 	fieldStartPos := pos // to track the number of bytes read
@@ -360,11 +358,15 @@ func (sb *SegmentBase) loadField(fieldID uint16, pos uint64,
 	pos += uint64(sz)
 
 	sb.fieldsInv = append(sb.fieldsInv, fieldName)
-	sb.fieldsMap[fieldName] = uint16(fieldID + 1)
+	sb.fieldsMap[fieldName] = fieldID + 1
 	sb.fieldsOptions[fieldName] = index.FieldIndexingOptions(fieldOptions)
 
 	fieldNumSections, sz := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(sz)
+	// create an address mapping array for each of the segment sections
+	// if the field has a valid section index, then the address will be non-zero
+	// else it will be zero.
+	fieldSectionMap := make([]uint64, len(segmentSections))
 
 	for sectionIdx := uint64(0); sectionIdx < fieldNumSections; sectionIdx++ {
 		// read section id
@@ -377,7 +379,7 @@ func (sb *SegmentBase) loadField(fieldID uint16, pos uint64,
 
 	// account the bytes read while parsing the sections field index.
 	sb.incrementBytesRead((pos - uint64(fieldStartPos)) + fieldNameLen)
-	return nil
+	return fieldSectionMap, nil
 }
 
 // Dictionary returns the term dictionary for the specified field

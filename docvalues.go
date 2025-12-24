@@ -37,7 +37,7 @@ func init() {
 type docNumTermsVisitor func(docNum uint64, terms []byte) error
 
 type docVisitState struct {
-	dvrs    map[uint16]*docValueReader
+	dvrs    []*docValueReader
 	segment *SegmentBase
 
 	bytesRead uint64
@@ -334,15 +334,16 @@ func (sb *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
 	}
 
 	var fieldIDPlus1 uint16
+	var dvIter *docValueReader
 	if dvs.dvrs == nil {
-		dvs.dvrs = make(map[uint16]*docValueReader, len(fields))
+		dvs.dvrs = make([]*docValueReader, len(sb.fieldsInv))
 		for _, field := range fields {
 			if fieldIDPlus1, ok = sb.fieldsMap[field]; !ok {
 				continue
 			}
 			fieldID := fieldIDPlus1 - 1
-			if dvIter, exists := sb.fieldDvReaders[SectionInvertedTextIndex][fieldID]; exists &&
-				dvIter != nil {
+			dvIter = sb.fieldDvReaders[SectionInvertedTextIndex][fieldID]
+			if dvIter != nil {
 				dvs.dvrs[fieldID] = dvIter.cloneInto(dvs.dvrs[fieldID])
 			}
 		}
@@ -368,7 +369,8 @@ func (sb *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
 		}
 
 		fieldID := fieldIDPlus1 - 1
-		if dvr, ok = dvs.dvrs[fieldID]; ok && dvr != nil {
+		dvr = dvs.dvrs[fieldID]
+		if dvr != nil {
 			// check if the chunk is already loaded
 			if docInChunk != dvr.curChunkNumber() {
 				err := dvr.loadDvChunk(docInChunk, sb)

@@ -59,6 +59,11 @@ const (
 	SectionInvertedTextIndex = iota
 	SectionFaissVectorIndex
 	SectionSynonymIndex
+
+	// Add new sections above this line.
+	// SectionCount automatically reflects the total number of sections
+	// and is used to track how many sections can be registered.
+	SectionCount
 )
 
 // -----------------------------------------------------------------------------

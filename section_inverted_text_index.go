@@ -319,6 +319,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 
 		fdvReadersAvailable := false
 		var dvIterClone *docValueReader
+		var dvIter *docValueReader
 		for segmentI, segment := range segmentsInFocus {
 			// check for the closure in meantime
 			if isClosed(closeCh) {
@@ -329,8 +330,8 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 				continue
 			}
 			fieldIDPlus1 := uint16(segment.fieldsMap[fieldName])
-			if dvIter, exists := segment.fieldDvReaders[SectionInvertedTextIndex][fieldIDPlus1-1]; exists &&
-				dvIter != nil {
+			dvIter = segment.fieldDvReaders[SectionInvertedTextIndex][fieldIDPlus1-1]
+			if dvIter != nil {
 				fdvReadersAvailable = true
 				dvIterClone = dvIter.cloneInto(dvIterClone)
 				err = dvIterClone.iterateAllDocValues(segment, func(docNum uint64, terms []byte) error {

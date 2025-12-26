@@ -30,11 +30,6 @@ func init() {
 	reflectStaticSizeMetaData = int(reflect.TypeOf(md).Size())
 }
 
-var (
-	termSeparator           byte = 0xff
-	termSeparatorSplitSlice      = []byte{termSeparator}
-)
-
 type chunkedContentCoder struct {
 	bytesWritten uint64 // moved to top to correct alignment issues on ARM, 386 and 32-bit MIPS.
 

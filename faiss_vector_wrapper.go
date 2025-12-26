@@ -51,33 +51,21 @@ type vectorIndexWrapper struct {
 	sb *SegmentBase
 }
 
-func (v *vectorIndexWrapper) Search(qVector []float32, k int64,
-	params json.RawMessage) (
-	segment.VecPostingsList, error) {
-	// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
-	// 2. both the values can be represented using roaring bitmaps.
-	// 3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
-	// 4. VecPostings would just have the docNum and the score. Every call of Next()
-	//    and just returns the next VecPostings. The caller would do a vp.Number()
-	//    and the Score() to get the corresponding values
-	rv := &VecPostingsList{
-		except:   nil,
-		postings: roaring64.New(),
-	}
+func (v *vectorIndexWrapper) Search(qVector []float32, k int64, params json.RawMessage) (segment.VecPostingsList, error) {
 	// check if vector index is present and dimensionality matches
 	if v.vecIndex == nil || v.vecIndex.D() != len(qVector) {
 		// vector index not found or dimensionality mismatched
-		return rv, nil
+		return emptyVecPostingsList, nil
 	}
 	// check if number of docs or number of vectors is zero
 	if v.mapping == nil || v.mapping.numVectors() == 0 || v.mapping.numDocuments() == 0 {
 		// no vectors or no documents indexed, so return empty postings list
-		return rv, nil
+		return emptyVecPostingsList, nil
 	}
 	// check if all the vectors are excluded
 	if v.exclude != nil && v.exclude.cardinality() == v.mapping.numVectors() {
 		// all vectors excluded, so return empty postings list
-		return rv, nil
+		return emptyVecPostingsList, nil
 	}
 	// search the vector index now
 	rs, err := v.searchWithoutIDs(qVector, k, v.exclude, params)
@@ -85,46 +73,44 @@ func (v *vectorIndexWrapper) Search(qVector []float32, k int64,
 		return nil, err
 	}
 	// populate the postings list from the result set
-	addIDsToPostingsList(rv, rs)
-	return rv, nil
+	return getPostingsList(rs), nil
 }
 
 func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
-	eligibleDocIDs []uint64, params json.RawMessage) (
+	eligibleList index.EligibleDocumentList, params json.RawMessage) (
 	segment.VecPostingsList, error) {
-	// If every element in the index is eligible (full selectivity),
-	// then this can basically be considered unfiltered kNN.
-	if len(eligibleDocIDs) == int(v.sb.numDocs) {
-		return v.Search(qVector, k, params)
+	// if no eligible documents, return empty postings list
+	if eligibleList == nil || eligibleList.Count() == 0 {
+		return emptyVecPostingsList, nil
 	}
-	// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
-	// 2. both the values can be represented using roaring bitmaps.
-	// 3. the Iterator (of type PostingsIterator) returned would operate in terms of VecPostings.
-	// 4. VecPostings would just have the docNum and the score. Every call of Next()
-	//    and just returns the next VecPostings. The caller would do a vp.Number()
-	//    and the Score() to get the corresponding values
-	rv := &VecPostingsList{
-		except:   nil,
-		postings: roaring64.New(),
-	}
+	// if vector index is not present or dimensionality mismatched, return empty postings list
 	if v.vecIndex == nil || v.vecIndex.D() != len(qVector) {
 		// vector index not found or dimensionality mismatched
-		return rv, nil
-	}
-	// Check and proceed only if non-zero documents eligible per the filter query.
-	if len(eligibleDocIDs) == 0 {
-		return rv, nil
+		return emptyVecPostingsList, nil
 	}
 	// check if number of docs or number of vectors is zero
 	if v.mapping == nil || v.mapping.numVectors() == 0 || v.mapping.numDocuments() == 0 {
 		// no vectors or no documents indexed, so return empty postings list
-		return rv, nil
+		return emptyVecPostingsList, nil
 	}
+	// if all documents are eligible, do a normal search
+	if eligibleList.Count() == int(v.mapping.numDocuments()) {
+		return v.Search(qVector, k, params)
+	}
+	// get the eligible document iterator
+	eligibleIterator := eligibleList.Iterator()
 	// vector IDs corresponding to the local doc numbers to be
 	// considered for the search
 	// create a bitmap for the vector IDs to include in the search
 	includeBM := newBitmap(v.mapping.numVectors())
-	for _, id := range eligibleDocIDs {
+	for {
+		// get the next eligible document ID
+		id, ok := eligibleIterator.Next()
+		if !ok {
+			// exhausted all eligible document IDs
+			break
+		}
+		// get the vector IDs for this document ID
 		vecIDs, exists := v.mapping.vecsForDoc(uint32(id))
 		if !exists {
 			continue
@@ -135,9 +121,9 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	}
 	// In case a doc has invalid vector fields but valid non-vector fields,
 	// filter hit IDs may be ineligible for the kNN since the document does
-	// not have any/valid vectors.
+	// not have any/valid vectors. Also can happen if no documents have vectors
 	if includeBM.cardinality() == 0 {
-		return rv, nil
+		return emptyVecPostingsList, nil
 	}
 	// if we have included all vectors, then we can do a normal search
 	// with full selectivity (no filtering)
@@ -153,8 +139,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 			return nil, err
 		}
 		// populate the postings list from the result set
-		addIDsToPostingsList(rv, rs)
-		return rv, nil
+		return getPostingsList(rs), nil
 	}
 	// Getting the IVF index parameters, nprobe and nlist, set at index time.
 	nprobe, nlist := v.vecIndex.IVFParams()
@@ -184,7 +169,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	centroidCount := centroidBM.cardinality()
 	if centroidCount == 0 {
 		// No centroids have any eligible vectors, so return empty postings list.
-		return rv, nil
+		return emptyVecPostingsList, nil
 	}
 	// create a FAISS selector based on the centroid bitmap
 	centroidSelector, err := getBitmapSelector(centroidBM, false)
@@ -241,8 +226,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		return nil, err
 	}
 	// populate the postings list from the result set
-	addIDsToPostingsList(rv, rs)
-	return rv, nil
+	return getPostingsList(rs), nil
 }
 func (v *vectorIndexWrapper) Close() {
 	// skipping the closing because the index is cached and it's being
@@ -565,16 +549,26 @@ func getBitmapSelector(bm *bitmap, exclude bool) (selector faiss.Selector, err e
 	return selector, nil
 }
 
-// Utility function to add the corresponding docID and scores for each unique
-// docID retrieved from the vector index search to the newly created vecPostingsList
-func addIDsToPostingsList(pl *VecPostingsList, rs resultSet) {
+// Utility function to create a vector postings list from the corresponding docID and scores for each
+// unique docID retrieved from the vector index
+func getPostingsList(rs resultSet) segment.VecPostingsList {
+	// 1. returned postings list (of type PostingsList) has two types of information - docNum and its score.
+	// 2. both the values can be represented using roaring bitmaps.
+	// 3. the Iterator (of type VecPostingsIterator) returned would operate in terms of VecPostings.
+	// 4. VecPostings would just have the docNum and the score. Every call of Next()
+	//    and just returns the next VecPostings. The caller would do a vp.Number()
+	//    and the Score() to get the corresponding values
+	rv := &VecPostingsList{
+		postings: roaring64.New(),
+	}
 	rs.iterate(func(docID uint32, score float32) {
 		// transform the docID and score to vector code format
 		code := getVectorCode(docID, score)
 		// add to postings list, this ensures ordered storage
 		// based on the docID since it occupies the upper 32 bits
-		pl.postings.Add(code)
+		rv.postings.Add(code)
 	})
+	return rv
 }
 
 // ------------------------------------------------------------------------------

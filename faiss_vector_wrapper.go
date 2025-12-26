@@ -169,7 +169,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// Determining which clusters, identified by centroid ID,
 	// have at least one eligible vector and hence, ought to be
 	// probed.
-	clusterVectorCounts, err := v.vecIndex.ObtainClusterVectorCountsFromIVFIndex(includeSelector, int(nlist))
+	clusterVectorCounts, err := v.vecIndex.ObtainClusterVectorCountsFromIVFIndex(includeSelector, nlist)
 	if err != nil {
 		return nil, err
 	}
@@ -204,13 +204,28 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// examining at least 'nprobe' centroids.
 	// centroidsToProbe range: [nprobe, number of eligible centroids]
 	var eligibleVecsTillNow int64
+	var eligibleCentroidsTillNow int
 	centroidsToProbe := len(eligibleCentroidIDs)
 	for i, centroidID := range eligibleCentroidIDs {
+		// if we get a -1 somehow here, it means no more centroids
+		// need to reslice the eligibleCentroidIDs and distances
+		// accordingly, just a safeguard check as this does not
+		// really happen. FAISS can pad with -1s if there are not enough
+		// eligible centroids, but we have already counted the cardinality so
+		// we should not see -1s here.
+		if centroidID == -1 {
+			centroidsToProbe = i
+			// reslice to only valid centroids
+			eligibleCentroidIDs = eligibleCentroidIDs[:centroidsToProbe]
+			centroidDistances = centroidDistances[:centroidsToProbe]
+			break
+		}
 		eligibleVecsTillNow += clusterVectorCounts[centroidID]
+		eligibleCentroidsTillNow = i + 1
 		// Stop once we've examined at least 'nprobe' centroids and
 		// collected at least 'k' vectors.
-		if eligibleVecsTillNow >= k && i+1 >= int(nprobe) {
-			centroidsToProbe = i + 1
+		if eligibleVecsTillNow >= k && eligibleCentroidsTillNow >= nprobe {
+			centroidsToProbe = eligibleCentroidsTillNow
 			break
 		}
 	}

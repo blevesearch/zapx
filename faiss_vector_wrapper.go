@@ -836,13 +836,6 @@ func (m *idMapping) numDocuments() uint32 {
 	return m.numDocs
 }
 
-// iterate over all vector ID to document ID mappings
-func (m *idMapping) iterateVectors(f func(vecID uint32, docID uint32)) {
-	for vecID, docID := range m.vecToDoc {
-		f(uint32(vecID), docID)
-	}
-}
-
 // retrieve the document ID for a given vector ID
 func (m *idMapping) docForVec(vecID uint32) (uint32, bool) {
 	if vecID >= m.numVecs {

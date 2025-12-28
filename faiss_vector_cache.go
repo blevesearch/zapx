@@ -302,14 +302,32 @@ func (ce *cacheEntry) close() {
 func getExcludedVectors(idMap *idMapping, except *roaring.Bitmap) (exclude *bitmap) {
 	if except != nil && !except.IsEmpty() && idMap != nil {
 		numVecs := idMap.numVectors()
-		idMap.iterateVectors(func(vecID uint32, docID uint32) {
-			if except.Contains(docID) {
+		// if there are no vectors, nothing to exclude
+		if numVecs == 0 {
+			return exclude
+		}
+		// iterate over the docs present in the except bitmap to
+		// construct the vector exclude bitmap. we can guarantee that
+		// this except bitmap is immutable and derived from the segment
+		// snapshot, but the vector exclude bitmap is part of the
+		// SegmentBase's cache, because of which it is necessary to create
+		// a new vector exclude bitmap per cache load operation
+		// get an iterator over the except bitmap
+		exceptItr := except.Iterator()
+		// as we iterate over the except docIDs, get the vector IDs
+		// for those docIDs and set them in our exclude bitmap
+		for exceptItr.HasNext() {
+			docID := exceptItr.Next()
+			vecs, ok := idMap.vecsForDoc(docID)
+			if ok && len(vecs) > 0 {
 				if exclude == nil {
 					exclude = newBitmap(numVecs)
 				}
-				exclude.set(vecID)
+				for _, vecID := range vecs {
+					exclude.set(vecID)
+				}
 			}
-		})
+		}
 	}
 	return exclude
 }

@@ -394,7 +394,7 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclud
 			// with exclude bitmap updated, we can proceed to the next iteration
 			// fast check if the exclude bitmap has all vectors excluded, in which case
 			// we can stop searching further
-			return exclude.cardinality() == v.mapping.numVectors()
+			return exclude.cardinality() != v.mapping.numVectors()
 		})
 }
 

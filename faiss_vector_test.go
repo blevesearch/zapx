@@ -338,8 +338,6 @@ func getSectionContentOffsets(sb *SegmentBase, offset uint64) (
 
 	vecDocIDsMappingOffset = pos
 	for i := 0; i < int(numVecs); i++ {
-		_, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += uint64(n)
 		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
 	}
@@ -385,13 +383,8 @@ func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
 		return nil, err
 	}
 
-	ids := make([]int64, len(dataset))
-	for i := 0; i < len(dataset); i++ {
-		ids[i] = int64(i)
-	}
-
 	if isIVF {
-		err = idx.SetDirectMap(2)
+		err = idx.SetDirectMap(1)
 		if err != nil {
 			return nil, err
 		}
@@ -402,7 +395,7 @@ func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
 		}
 	}
 
-	idx.AddWithIDs(vecs, ids)
+	idx.Add(vecs)
 
 	return idx, nil
 }
@@ -475,7 +468,7 @@ func TestVectorSegment(t *testing.T) {
 	}
 
 	data := stubVecData
-	vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3, "IDMap2,Flat", false)
+	vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3, "Flat", false)
 	if err != nil {
 		t.Fatalf("error creating vector index %v", err)
 	}

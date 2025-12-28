@@ -116,6 +116,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 			continue
 		}
 		for _, vecID := range vecIDs {
+			// add all vector IDs for this document to the inclusion bitmap
 			includeBM.set(vecID)
 		}
 	}
@@ -793,7 +794,7 @@ func (b *bitmap) clone() *bitmap {
 
 // idMapping maintains a bidirectional mapping between vector IDs and document IDs.
 // It allows efficient retrieval of document IDs for given vector IDs and vice versa.
-// The mapping assumes that vector IDs and document IDs ordered sequentially starting from 0
+// The mapping assumes that vector IDs and document IDs are ordered sequentially starting from 0
 // up to numVecs-1 and numDocs-1 respectively.
 type idMapping struct {
 	vecToDoc []uint32   //  vector ID -> document ID (size = numVecs)

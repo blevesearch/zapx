@@ -132,7 +132,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			pos += n
 			_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
-			// the index optimization type represented as an int
+			// read the vector index optimization type represented as an int
 			indexOptimizationTypeInt, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 			// read the number of vectors

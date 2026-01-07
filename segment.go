@@ -366,7 +366,7 @@ func (sb *SegmentBase) loadField(fieldID uint16, pos uint64) ([]uint64, error) {
 	// create an address mapping array for each of the segment sections
 	// if the field has a valid section index, then the address will be non-zero
 	// else it will be zero.
-	fieldSectionMap := make([]uint64, SectionCount)
+	fieldSectionMap := make([]uint64, NumSections)
 	for sectionIdx := uint64(0); sectionIdx < fieldNumSections; sectionIdx++ {
 		// read section id
 		fieldSectionType := binary.BigEndian.Uint16(sb.mem[pos : pos+2])

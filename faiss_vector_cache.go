@@ -38,10 +38,10 @@ func newVectorIndexCache() *vectorIndexCache {
 }
 
 type vectorIndexCache struct {
-	isClosed bool
 	closeCh  chan struct{}
 	m        sync.RWMutex
 	cache    map[uint16]*cacheEntry
+	isClosed bool
 }
 
 // Clear clears the entire vector index cache.
@@ -68,6 +68,11 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uin
 	index *faiss.IndexImpl, mapping *idMapping, exclude *bitmap, err error) {
 	// first try to read from the cache with a read lock
 	vc.m.RLock()
+	if vc.isClosed {
+		// if cache is closed, no-op
+		vc.m.RUnlock()
+		return nil, nil, nil, nil
+	}
 	entry, ok := vc.cache[fieldID]
 	if ok {
 		vc.m.RUnlock()
@@ -77,6 +82,10 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uin
 	// cache miss, rebuild the cache entry under a write lock
 	vc.m.Lock()
 	defer vc.m.Unlock()
+	if vc.isClosed {
+		// if cache is closed, no-op
+		return nil, nil, nil, nil
+	}
 	// check again if we have the entry now
 	entry, ok = vc.cache[fieldID]
 	if ok {

@@ -19,6 +19,7 @@ package zap
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"slices"
 
@@ -94,7 +95,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		return emptyVecPostingsList, nil
 	}
 	// if all documents are eligible, do a normal search
-	if eligibleList.Count() == int(v.mapping.numDocuments()) {
+	if eligibleList.Count() == uint64(v.mapping.numDocuments()) {
 		return v.Search(qVector, k, params)
 	}
 	// get the eligible document iterator
@@ -145,7 +146,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// Getting the IVF index parameters, nprobe and nlist, set at index time.
 	nprobe, nlist := v.vecIndex.IVFParams()
 	// Create a FAISS selector based on the include bitmap.
-	includeSelector, err := getBitmapSelector(includeBM, false)
+	includeSelector, err := getIncludeSelector(includeBM)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +174,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		return emptyVecPostingsList, nil
 	}
 	// create a FAISS selector based on the centroid bitmap
-	centroidSelector, err := getBitmapSelector(centroidBM, false)
+	centroidSelector, err := getIncludeSelector(centroidBM)
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +358,7 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclud
 			// case we can pass a nil selector to FAISS.
 			// NOTE: The bitmap selector is just a wrapper over the exclude bitmap
 			// which is shared across the CGO layer.
-			sel, err := getBitmapSelector(exclude, true)
+			sel, err := getExcludeSelector(exclude)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -409,7 +410,7 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include *
 			// build the FAISS selector based on the include bitmap.
 			// NOTE: The bitmap selector is just a wrapper over the include bitmap
 			// which is shared across the CGO layer.
-			sel, err := getBitmapSelector(include, false)
+			sel, err := getIncludeSelector(include)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -462,7 +463,7 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(eligibleCentroidIDs []in
 			// build the FAISS selector based on the include bitmap.
 			// NOTE: The bitmap selector is just a wrapper over the include bitmap
 			// which is shared across the CGO layer.
-			sel, err := getBitmapSelector(include, false)
+			sel, err := getIncludeSelector(include)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -525,27 +526,32 @@ func (v *vectorIndexWrapper) getDocIDForVectorID(vecID int64) (uint32, bool) {
 // Utility functions not tied to vector index wrapper
 // ------------------------------------------------------------------------------
 
-// Utility function to get a faiss.BitmapSelector based on the include/exclude flag
-// and the bitmap provided. If include is true, it returns an inclusion selector,
-// else it returns an exclusion selector. The caller must ensure to free the selector
-// by calling selector.Delete() when done using it.
-func getBitmapSelector(bm *bitmap, exclude bool) (selector faiss.Selector, err error) {
+// Utility function to get a faiss.BitmapSelector to include the IDs specified in the bitmap
+// The caller must ensure to free the selector by calling selector.Delete() when done using it.
+func getIncludeSelector(bm *bitmap) (selector faiss.Selector, err error) {
 	if bm == nil || bm.cardinality() == 0 {
-		// no bitmap provided, so return nil selector
+		// no bitmap provided, so return an error as we expect at least one ID to include
+		return nil, fmt.Errorf("include bitmap is nil or empty")
+	}
+	// create a bitmap inclusion selector
+	selector, err = faiss.NewIDSelectorBitmap(bm.bytes())
+	if err != nil {
+		return nil, err
+	}
+	return selector, nil
+}
+
+// Utility function to get a faiss.BitmapSelector to exclude the IDs specified in the bitmap
+// The caller must ensure to free the selector by calling selector.Delete() when done using it.
+func getExcludeSelector(bm *bitmap) (selector faiss.Selector, err error) {
+	if bm == nil || bm.cardinality() == 0 {
+		// no bitmap provided, so return nil selector indicating no exclusions
 		return nil, nil
 	}
-	if exclude {
-		// create a bitmap exclusion selector
-		selector, err = faiss.NewIDSelectorBitmapNot(bm.bytes())
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		// create a bitmap inclusion selector
-		selector, err = faiss.NewIDSelectorBitmap(bm.bytes())
-		if err != nil {
-			return nil, err
-		}
+	// create a bitmap exclusion selector
+	selector, err = faiss.NewIDSelectorBitmapNot(bm.bytes())
+	if err != nil {
+		return nil, err
 	}
 	return selector, nil
 }

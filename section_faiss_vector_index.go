@@ -182,7 +182,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		if err != nil {
 			return err
 		}
-		err = vo.mergeAndWriteVectorIndexes(vecSegs, indexes, w, closeCh)
+		err = vo.mergeAndWriteVectorIndexes(vecSegs, indexes, fieldName, w, closeCh)
 		if err != nil {
 			return err
 		}
@@ -295,7 +295,7 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 // todo: naive implementation. need to keep in mind the perf implications and improve on this.
 // perhaps, parallelized merging can help speed things up over here.
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
-	vecIndexes []*vecIndexInfo, w *CountHashWriter, closeCh chan struct{}) error {
+	vecIndexes []*vecIndexInfo, fieldName string, w *CountHashWriter, closeCh chan struct{}) error {
 
 	// safe to assume that all the indexes are of the same config values, given
 	// that they are extracted from the field mapping info.
@@ -345,6 +345,9 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	if !validMerge {
 		return nil
 	}
+
+	// assign gpu value from the field options
+	gpu := v.fieldsOptions[fieldName].UseGPU()
 
 	finalVecIDs := make([]int64, 0, finalVecIDCap)
 	// merging of indexes with reconstruction method.
@@ -402,17 +405,13 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	if err != nil {
 		return err
 	}
-	defer faissIndex.Close()
+	defer func() {
+		if faissIndex != nil {
+			faissIndex.Close()
+		}
+	}()
 
 	if indexClass == IndexTypeIVF {
-		// the direct map maintained in the IVF index is essential for the
-		// reconstruction of vectors based on vector IDs in the future merges.
-		// the AddWithIDs API also needs a direct map to be set before using.
-		err = faissIndex.SetDirectMap(2)
-		if err != nil {
-			return err
-		}
-
 		nprobe := calculateNprobe(nlist, indexOptimizedFor)
 		faissIndex.SetNProbe(nprobe)
 
@@ -420,7 +419,19 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		// the data space of indexData such that during the search time, we probe
 		// only a subset of vectors -> non-exhaustive search. could be a time
 		// consuming step when the indexData is large.
-		err = faissIndex.Train(indexData)
+		// Best effort attempt to use GPU for training if configured
+		// May fall back to CPU training if GPU training fails due
+		// to any reason such as insufficient memory, or unavailability
+		// of GPUs, etc.
+		faissIndex, err = TrainIndex(faissIndex, indexData, dims, gpu)
+		if err != nil {
+			return err
+		}
+
+		// the direct map maintained in the IVF index is essential for the
+		// reconstruction of vectors based on vector IDs in the future merges.
+		// the AddWithIDs API also needs a direct map to be set before using.
+		err = faissIndex.SetDirectMap(2)
 		if err != nil {
 			return err
 		}
@@ -510,7 +521,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 	for fieldID, content := range vo.vecFieldMap {
 		// calculate the capacity of the vecs and ids slices
 		// to avoid multiple allocations.
-		vecs := make([]float32, 0, len(content.vecs)*int(content.dim))
+		dims := int(content.dim)
+		vecs := make([]float32, 0, len(content.vecs)*dims)
 		ids := make([]int64, 0, len(content.vecs))
 		for hash, vecInfo := range content.vecs {
 			vecs = append(vecs, vecInfo.vec...)
@@ -523,6 +535,10 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 			// use the same FAISS metric for inner product and cosine similarity
 			metric = faiss.MetricInnerProduct
 		}
+		// read vector index options:
+		// was this field configured
+		// to use GPU for training?
+		gpu := vo.fieldsOptions[content.name].UseGPU()
 
 		nvecs := len(ids)
 		nlist := determineCentroids(nvecs)
@@ -533,18 +549,25 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 			return err
 		}
 
-		defer faissIndex.Close()
+		defer func() {
+			if faissIndex != nil {
+				faissIndex.Close()
+			}
+		}()
 
 		if indexClass == IndexTypeIVF {
-			err = faissIndex.SetDirectMap(2)
+			nprobe := calculateNprobe(nlist, content.indexOptimizedFor)
+			faissIndex.SetNProbe(nprobe)
+			// Best effort attempt to use GPU for training if configured
+			// May fall back to CPU training if GPU training fails due
+			// to any reason such as insufficient memory, or unavailability
+			// of GPUs, etc.
+			faissIndex, err = TrainIndex(faissIndex, vecs, dims, gpu)
 			if err != nil {
 				return err
 			}
 
-			nprobe := calculateNprobe(nlist, content.indexOptimizedFor)
-			faissIndex.SetNProbe(nprobe)
-
-			err = faissIndex.Train(vecs)
+			err = faissIndex.SetDirectMap(2)
 			if err != nil {
 				return err
 			}
@@ -657,6 +680,7 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 	}
 
 	//process field
+	name := field.Name()
 	vec := field.Vector()
 	dim := field.Dims()
 	metric := field.Similarity()
@@ -688,6 +712,7 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 				dim:               uint16(dim),
 				metric:            metric,
 				indexOptimizedFor: indexOptimizedFor,
+				name:              name,
 			}
 		} else {
 			vo.vecFieldMap[fieldID].vecs[subVecHash] = &vecInfo{
@@ -738,6 +763,7 @@ func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) reseta
 }
 
 type indexContent struct {
+	name              string
 	vecs              map[int64]*vecInfo
 	dim               uint16
 	metric            string

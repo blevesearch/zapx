@@ -540,7 +540,7 @@ func (v *vectorIndexWrapper) getDocIDForVectorID(vecID int64) (uint32, bool) {
 // Utility function to get a faiss.BitmapSelector to include the IDs specified in the bitmap
 // The caller must ensure to free the selector by calling selector.Delete() when done using it.
 func getIncludeSelector(bm *bitmap) (selector faiss.Selector, err error) {
-	if bm == nil || bm.isEmpty() {
+	if bm == nil {
 		// no bitmap provided, so return an error as we expect at least one ID to include
 		return nil, fmt.Errorf("include bitmap is nil or empty")
 	}
@@ -555,7 +555,7 @@ func getIncludeSelector(bm *bitmap) (selector faiss.Selector, err error) {
 // Utility function to get a faiss.BitmapSelector to exclude the IDs specified in the bitmap
 // The caller must ensure to free the selector by calling selector.Delete() when done using it.
 func getExcludeSelector(bm *bitmap) (selector faiss.Selector, err error) {
-	if bm == nil || bm.isEmpty() {
+	if bm == nil {
 		// no bitmap provided, so return nil selector indicating no exclusions
 		return nil, nil
 	}

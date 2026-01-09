@@ -105,6 +105,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// considered for the search
 	// create a bitmap for the vector IDs to include in the search
 	includeBM := newBitmap(v.mapping.numVectors())
+	includeCardinality := 0
 	for {
 		// get the next eligible document ID
 		id, ok := eligibleIterator.Next()
@@ -117,6 +118,11 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		if !exists {
 			continue
 		}
+		// since a vector can never belong to multiple documents, we calculate
+		// the cardinality by simply adding the number of vectors for each document
+		// we include, without worrying about duplicates and avoiding a potential
+		// costly population count on the bitmap at the end
+		includeCardinality += len(vecIDs)
 		for _, vecID := range vecIDs {
 			// add all vector IDs for this document to the inclusion bitmap
 			includeBM.set(vecID)
@@ -125,7 +131,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// In case a doc has invalid vector fields but valid non-vector fields,
 	// filter hit IDs may be ineligible for the kNN since the document does
 	// not have any/valid vectors. Also can happen if no documents have vectors
-	numSelected := includeBM.cardinality()
+	numSelected := uint32(includeCardinality)
 	if numSelected == 0 {
 		return emptyVecPostingsList, nil
 	}
@@ -164,13 +170,16 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	}
 	// Create a bitmap for the eligible centroids to be considered for probing.
 	centroidBM := newBitmap(uint32(nlist))
+	centroidCount := 0
 	for centroidID, vectorCount := range clusterVectorCounts {
 		// Only centroids with at least one eligible vector are considered.
 		if vectorCount > 0 {
+			// since we are adding only unique centroid IDs, this is simply an increment
+			// and we can avoid a population count at the end
+			centroidCount++
 			centroidBM.set(uint32(centroidID))
 		}
 	}
-	centroidCount := centroidBM.cardinality()
 	if centroidCount == 0 {
 		// No centroids have any eligible vectors, so return empty postings list.
 		return emptyVecPostingsList, nil

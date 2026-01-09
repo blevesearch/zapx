@@ -164,25 +164,25 @@ In case of inverted text index, the dictionary is encoded in [Vellum](https://gi
 
 ## Vector Index Section
 
-In a vector index, each vector in a document is given a unique Id. This vector Id is to be used within the [Faiss](https://github.com/blevesearch/faiss) index. The mapping between the document Id and the vector Id is stored along with a serialized vector index. Doc Values are not applicable to this section.
+In a vector index, each vector is assigned a unique, monotonically increasing ID ranging from `0` to `N-1`, where `N` is the total number of vectors in the index. This ID is used internally by the [Faiss](https://github.com/blevesearch/faiss) index. Each vector ID maps to a document ID within the segment, and this mapping is stored as an array of size `N`.
 
         |================================================================+- Inverted Text Index Section
         |                                                                |
         |================================================================+- Vector Index Section
         |                                                                |
-        |   +~~~~~~~~~~+~~~~~~~+~~~~~+~~~~~~+~~~~~~+                     |
-    +-------> DV Start | DVEnd | VIO | NVEC |  ML  |                     |
-    |   |   +~~~~~~~~~~+~~~~~~~+~~~~~+~~~~~~+~~~~~~+                     |
+        |   +~~~~~~~~~~+~~~~~~~~+~~~~~+~~~~~~+~~~~~~+                    |
+    +-------> DV Start | DV End | VIO | NVEC |  ML  |                    |
+    |   |   +~~~~~~~~~~+~~~~~~~~+~~~~~+~~~~~~+~~~~~~+                    |
     |   |                                                                |
-    |   |   +~~~~~~~~~~~~+~~~~~~~~~~~~+                                  |
-    |   |   | VectorID_0 |   DocID_0  |                                  |
-    |   |   +~~~~~~~~~~~~+~~~~~~~~~~~~+                                  |
-    |   |   | VectorID_1 |   DocID_1  |                                  |
-    |   |   +~~~~~~~~~~~~+~~~~~~~~~~~~+                                  |
-    |   |   |    ...     |    ...     |                                  |
-    |   |   +~~~~~~~~~~~~+~~~~~~~~~~~~+                                  |
-    |   |   | VectorID_N |   DocID_N  |                                  |
-    |   |   +~~~~~~~~~~~~+~~~~~~~~~~~~+                                  |
+    |   |   +~~~~~~~~~~~~~+                                              |
+    |   |   |   DocID_1   |                                              |
+    |   |   +~~~~~~~~~~~~~+                                              |
+    |   |   |   DocID_2   |                                              |
+    |   |   +~~~~~~~~~~~~~+                                              |
+    |   |   |     ...     |                                              |
+    |   |   +~~~~~~~~~~~~~+                                              |
+    |   |   |   DocID_N   |                                              |
+    |   |   +~~~~~~~~~~~~~+                                              |
     |   |                                                                |
     |   |   +~~~~~~~~~~~~~+                                              |
     |   |   |  INDEX TYPE |                                              |
@@ -192,9 +192,9 @@ In a vector index, each vector in a document is given a unique Id. This vector I
     |   |   |  FAISS LEN  |                                              |
     |   |   +~~~~~~~~~~~~~+                                              |
     |   |                                                                |
-    |   |   +---------------------------+...+------------------------+   |
-    |   |   |                  SERIALIZED FAISS INDEX                |   |
-    |   |   +---------------------------+...+------------------------+   |
+    |   |   +---------------------------+...+----------------------+     |
+    |   |   |                SERIALIZED FAISS INDEX                |     |
+    |   |   +---------------------------+...+----------------------+     |
     |   |                                                                |
     |   |================================================================+- Synonym Index Section
     |   |                                                                |
@@ -209,7 +209,7 @@ In a vector index, each vector in a document is given a unique Id. This vector I
          VI   - Vector Index
          VIO  - Vector Index Optimized for
          NVEC - Number of vectors
-         ML   - Length of the vector Id to document Id map
+         ML   - Length of the vector to document ID map
          INDEX TYPE - Type of the vector index
          FAISS LEN - Length of serialized FAISS index
 

@@ -719,6 +719,25 @@ func (s *Segment) DictAddr(field string) (uint64, error) {
 	return dictLoc, nil
 }
 
+// VectorAddr is a helper function to compute the file offset where the
+// vector index is stored for the specified field.
+func (s *Segment) VectorAddr(name string) (uint64, error) {
+	fieldIDPlus1, ok := s.fieldsMap[name]
+	if !ok {
+		return 0, fmt.Errorf("no such field '%s'", name)
+	}
+	vectorStart := s.fieldsSectionsMap[fieldIDPlus1-1][SectionFaissVectorIndex]
+	if vectorStart == 0 {
+		return 0, fmt.Errorf("no vector index for field '%s'", name)
+	}
+	for i := 0; i < 2; i++ {
+		_, n := binary.Uvarint(s.mem[vectorStart : vectorStart+binary.MaxVarintLen64])
+		vectorStart += uint64(n)
+	}
+	vectorLoc, _ := binary.Uvarint(s.mem[vectorStart : vectorStart+binary.MaxVarintLen64])
+	return vectorLoc, nil
+}
+
 // ThesaurusAddr is a helper function to compute the file offset where the
 // thesaurus is stored with the specified name.
 func (s *Segment) ThesaurusAddr(name string) (uint64, error) {

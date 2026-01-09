@@ -40,7 +40,7 @@ var vectorCmd = &cobra.Command{
 	4. reconstruct vector given the vectorID.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		data := segment.Data()
-		pos := segment.FieldsIndexOffset()
+		pos := segment.SectionsIndexOffset()
 
 		if pos == 0 {
 			// this is the case only for older file formats
@@ -131,6 +131,11 @@ func decodeSection(data []byte, start uint64) (int, int, map[int64]uint64, *fais
 	// read the number vectors indexed for this field and load the vector to docID mapping.
 	numVecs, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += n
+
+	// read the length of the vector to docID map (unused for now)
+	_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
 	for i := 0; i < int(numVecs); i++ {
 		vecID, n := binary.Varint(data[pos : pos+binary.MaxVarintLen64])
 		pos += n
@@ -139,6 +144,10 @@ func decodeSection(data []byte, start uint64) (int, int, map[int64]uint64, *fais
 		pos += n
 		vecDocIDMap[vecID] = docID
 	}
+
+	// read the type of the vector index (unused for now)
+	_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+	pos += n
 
 	// read the index bytes
 	indexSize, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])

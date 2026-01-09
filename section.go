@@ -28,7 +28,7 @@ type section interface {
 	Process(opaque map[int]resetable, docNum uint32, f index.Field, fieldID uint16)
 
 	// flush the processed data in the opaque to the writer.
-	Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error)
+	Persist(opaque map[int]resetable, w *CountHashWriter) error
 
 	// this API is used to fetch the file offset of the field for this section.
 	// this is used during search time to parse the section, and fetch results
@@ -59,6 +59,11 @@ const (
 	SectionInvertedTextIndex = iota
 	SectionFaissVectorIndex
 	SectionSynonymIndex
+
+	// Add new sections above this line.
+	// NumSections automatically reflects the total number of sections
+	// and is used to track how many sections can be registered.
+	NumSections
 )
 
 // -----------------------------------------------------------------------------

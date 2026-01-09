@@ -40,12 +40,18 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (*faiss.IndexImpl, error
 		pos += n
 	}
 
-	nvecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
-	if nvecs > 0 {
-		fmt.Println("nvecs > 0", nvecs, field)
-		return nil, fmt.Errorf("centroid index is supposed to be a template index")
+	// if nvecs > 0 {
+	// 	fmt.Println("nvecs > 0", nvecs, field)
+	// 	return nil, fmt.Errorf("centroid index is supposed to be a template index")
+	// }
+	for i := 0; i < int(numVecs); i++ {
+		_, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += n
+		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += n
 	}
 	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
@@ -57,9 +63,9 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (*faiss.IndexImpl, error
 		return nil, err
 	}
 
-	fmt.Println("faissIndex", faissIndex != nil)
-	fmt.Println("faissIndex.IsIVFIndex()", faissIndex.IsIVFIndex())
-	fmt.Println("faissIndex.Ntotal()", faissIndex.Ntotal())
-	fmt.Println("faissIndex.D()", faissIndex.D())
+	fmt.Println("centroid index", faissIndex != nil)
+	fmt.Println("centroid index.IsIVFIndex()", faissIndex.IsIVFIndex())
+	fmt.Println("centroid index.Ntotal()", faissIndex.Ntotal())
+	fmt.Println("centroid index.D()", faissIndex.D())
 	return faissIndex, nil
 }

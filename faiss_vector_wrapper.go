@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/bits"
 	"slices"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
@@ -124,12 +125,13 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// In case a doc has invalid vector fields but valid non-vector fields,
 	// filter hit IDs may be ineligible for the kNN since the document does
 	// not have any/valid vectors. Also can happen if no documents have vectors
-	if includeBM.cardinality() == 0 {
+	numSelected := includeBM.cardinality()
+	if numSelected == 0 {
 		return emptyVecPostingsList, nil
 	}
 	// if we have included all vectors, then we can do a normal search
 	// with full selectivity (no filtering)
-	if includeBM.cardinality() == v.mapping.numVectors() {
+	if numSelected == v.mapping.numVectors() {
 		return v.Search(qVector, k, params)
 	}
 	// If the index is not an IVF index, then the search can be
@@ -445,7 +447,7 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include *
 				include.clear(uint32(vecID))
 			}
 			// only continue searching if we still have vector ids to include
-			return include.cardinality() != 0
+			return !include.isEmpty()
 		})
 }
 
@@ -511,7 +513,7 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(eligibleCentroidIDs []in
 				include.clear(uint32(vecID))
 			}
 			// only continue searching if we still have vector ids to include
-			return include.cardinality() != 0
+			return !include.isEmpty()
 		})
 }
 
@@ -529,7 +531,7 @@ func (v *vectorIndexWrapper) getDocIDForVectorID(vecID int64) (uint32, bool) {
 // Utility function to get a faiss.BitmapSelector to include the IDs specified in the bitmap
 // The caller must ensure to free the selector by calling selector.Delete() when done using it.
 func getIncludeSelector(bm *bitmap) (selector faiss.Selector, err error) {
-	if bm == nil || bm.cardinality() == 0 {
+	if bm == nil || bm.isEmpty() {
 		// no bitmap provided, so return an error as we expect at least one ID to include
 		return nil, fmt.Errorf("include bitmap is nil or empty")
 	}
@@ -544,7 +546,7 @@ func getIncludeSelector(bm *bitmap) (selector faiss.Selector, err error) {
 // Utility function to get a faiss.BitmapSelector to exclude the IDs specified in the bitmap
 // The caller must ensure to free the selector by calling selector.Delete() when done using it.
 func getExcludeSelector(bm *bitmap) (selector faiss.Selector, err error) {
-	if bm == nil || bm.cardinality() == 0 {
+	if bm == nil || bm.isEmpty() {
 		// no bitmap provided, so return nil selector indicating no exclusions
 		return nil, nil
 	}
@@ -715,18 +717,16 @@ func (rs *resultSetSlice) size() int64 {
 
 // bitmap is a simple, fixed-size bitmap.
 type bitmap struct {
-	bits  []byte
-	size  uint32
-	count uint32
+	bits []byte
+	size uint32
 }
 
 // newBitmap creates a new bitmap with the given number of bits
 func newBitmap(numBits uint32) *bitmap {
 	bitsetSize := (numBits + 7) / 8
 	return &bitmap{
-		bits:  make([]byte, bitsetSize),
-		size:  numBits,
-		count: 0,
+		bits: make([]byte, bitsetSize),
+		size: numBits,
 	}
 }
 
@@ -738,15 +738,8 @@ func (b *bitmap) set(pos uint32) {
 	// set the bit in the byte slice, and increment count
 	// the byte index is pos / 8, which is equivalent to pos >> 3
 	// the bit index within that byte is pos % 8, which is equivalent to pos & 7
-	byteIndex := pos >> 3
-	bitIndex := pos & 7
-	// first check if the bit is already set to avoid double counting
-	if (b.bits[byteIndex]>>(bitIndex))&1 != 0 {
-		// bit already set, no-op
-		return
-	}
-	b.bits[byteIndex] |= 1 << bitIndex
-	b.count++
+	// and is from the LSB side
+	b.bits[pos>>3] |= 1 << (pos & 7)
 }
 
 // clear the bit at the given position
@@ -757,14 +750,8 @@ func (b *bitmap) clear(pos uint32) {
 	// clear the bit in the byte slice, and decrement count
 	// the byte index is pos / 8, which is equivalent to pos >> 3
 	// the bit index within that byte is pos % 8, which is equivalent to pos & 7
-	byteIndex := pos >> 3
-	bitIndex := pos & 7
-	// first check if the bit is already cleared to avoid negative counting
-	if (b.bits[byteIndex]>>(bitIndex))&1 != 0 {
-		// bit is set we need to clear it
-		b.bits[byteIndex] &^= 1 << bitIndex
-		b.count--
-	}
+	// and is from the LSB side
+	b.bits[pos>>3] &^= 1 << (pos & 7)
 }
 
 // test if the bit at the given position is set
@@ -782,7 +769,23 @@ func (b *bitmap) bytes() []byte {
 
 // returns the number of bits currently set
 func (b *bitmap) cardinality() uint32 {
-	return b.count
+	var count int
+	for _, byteVal := range b.bits {
+		// count the number of set bits in the byte
+		count += bits.OnesCount8(byteVal)
+	}
+	return uint32(count)
+}
+
+// isEmpty checks if the bitmap has no bits set
+// or if the cardinality (population count) is zero
+func (b *bitmap) isEmpty() bool {
+	for _, byteVal := range b.bits {
+		if byteVal != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // creates a clone of the bitmap
@@ -790,7 +793,6 @@ func (b *bitmap) clone() *bitmap {
 	newB := &bitmap{}
 	newB.bits = slices.Clone(b.bits)
 	newB.size = b.size
-	newB.count = b.count
 	return newB
 }
 

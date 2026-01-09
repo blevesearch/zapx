@@ -35,8 +35,8 @@ var vectorCmd = &cobra.Command{
 	Long: `The vector command let's you parse a vector section of the specified field and various details about the same.
 	1. check whether a vector section exists for the field.
 	2. if so, fetch the number of vectors, size of the serialized vector index,
-		vector index's config - type, dims, similarity metric.
-	3. given a vector ID, get all the local docNums its present in.
+		vector index's config - type, dims, similarity metric, optimization type.
+	3. list all vectorIDs in the index, and the corresponding document IDs.
 	4. reconstruct vector given the vectorID.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) < 2 {

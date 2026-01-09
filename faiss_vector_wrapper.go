@@ -735,10 +735,10 @@ func (b *bitmap) set(pos uint32) {
 	if pos >= b.size {
 		return
 	}
-	// set the bit in the byte slice, and increment count
+	// set the bit in the byte slice
 	// the byte index is pos / 8, which is equivalent to pos >> 3
 	// the bit index within that byte is pos % 8, which is equivalent to pos & 7
-	// and is from the LSB side
+	// and is from the LSB side of the byte
 	b.bits[pos>>3] |= 1 << (pos & 7)
 }
 
@@ -747,10 +747,10 @@ func (b *bitmap) clear(pos uint32) {
 	if pos >= b.size {
 		return
 	}
-	// clear the bit in the byte slice, and decrement count
+	// clear the bit in the byte slice
 	// the byte index is pos / 8, which is equivalent to pos >> 3
 	// the bit index within that byte is pos % 8, which is equivalent to pos & 7
-	// and is from the LSB side
+	// and is from the LSB side of the byte
 	b.bits[pos>>3] &^= 1 << (pos & 7)
 }
 

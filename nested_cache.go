@@ -20,6 +20,11 @@ func newNestedIndexCache() *nestedIndexCache {
 	return &nestedIndexCache{}
 }
 
+// Clear clears the nested index cache, removing the cached edge list
+func (nc *nestedIndexCache) Clear() {
+	nc.cache = nil
+}
+
 func (nc *nestedIndexCache) initialize(numDocs uint64, edgeListOffset uint64, mem []byte) error {
 	// pos stores the current read position
 	pos := edgeListOffset
@@ -62,10 +67,6 @@ type nestedCacheEntry struct {
 	el EdgeList
 }
 
-// Clear clears the nested index cache, removing the cached edge list
-func (nc *nestedIndexCache) Clear() {
-	nc.cache = nil
-}
 func (nc *nestedIndexCache) ancestry(docNum uint64, prealloc []index.AncestorID) []index.AncestorID {
 	cache := nc.cache
 	// add self as first ancestor
@@ -95,7 +96,7 @@ func (nc *nestedIndexCache) edgeList() EdgeList {
 
 func (nc *nestedIndexCache) countNested() uint64 {
 	cache := nc.cache
-	if cache == nil {
+	if cache == nil || cache.el == nil {
 		return 0
 	}
 	return cache.el.Count()
@@ -110,7 +111,7 @@ func (nc *nestedIndexCache) countRoot(bm *roaring.Bitmap) uint64 {
 	}
 	totalDocs = bm.GetCardinality()
 	cache := nc.cache
-	if cache == nil {
+	if cache == nil || cache.el == nil {
 		// if cache is nil, no nested docs, so all docs are root docs
 		// so just return the cardinality of the bitmap
 		return totalDocs

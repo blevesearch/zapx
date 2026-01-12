@@ -63,26 +63,25 @@ var invertedTextIndexSectionExclusionChecks = make([]func(field index.Field) boo
 
 func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint32, field index.Field, fieldID uint16) {
 	if !isFieldExcludedFromInvertedTextIndexSection(field) {
-		invIndexOpaque := i.getInvertedIndexOpaque(opaque)
-		invIndexOpaque.process(field, fieldID, docNum)
+		io := i.getInvertedIndexOpaque(opaque)
+		io.process(field, fieldID, docNum)
 	}
 }
 
-func (i *invertedTextIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
-	invIndexOpaque := i.getInvertedIndexOpaque(opaque)
-	_, err = invIndexOpaque.writeDicts(w)
-	return 0, err
+func (i *invertedTextIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) error {
+	io := i.getInvertedIndexOpaque(opaque)
+	return io.writeDicts(w)
 }
 
 func (i *invertedTextIndexSection) AddrForField(opaque map[int]resetable, fieldID int) int {
-	invIndexOpaque := i.getInvertedIndexOpaque(opaque)
-	return invIndexOpaque.fieldAddrs[fieldID]
+	io := i.getInvertedIndexOpaque(opaque)
+	return io.fieldAddrs[fieldID]
 }
 
 func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
 	fieldsInv []string, fieldsMap map[string]uint16, fieldsOptions map[string]index.FieldIndexingOptions,
 	fieldsSame bool, newDocNumsIn [][]uint64, newSegDocCount uint64, chunkMode uint32, w *CountHashWriter,
-	closeCh chan struct{}) (map[int]int, uint64, error) {
+	closeCh chan struct{}) (map[int]int, error) {
 	var bufMaxVarintLen64 []byte = make([]byte, binary.MaxVarintLen64)
 	var bufLoc []uint64
 
@@ -103,7 +102,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 	var vellumBuf bytes.Buffer
 	newVellum, err := vellum.New(&vellumBuf, nil)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 
 	newRoaring := roaring.NewBitmap()
@@ -123,7 +122,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		for segmentI, segment := range segments {
 			// check for the closure in meantime
 			if isClosed(closeCh) {
-				return nil, 0, seg.ErrClosed
+				return nil, seg.ErrClosed
 			}
 			// early exit if the field's index option is false
 			if !fieldsOptions[fieldName].IsIndexed() {
@@ -132,12 +131,12 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 
 			dict, err2 := segment.dictionary(fieldName)
 			if err2 != nil {
-				return nil, 0, err2
+				return nil, err2
 			}
 			if dict != nil && dict.fst != nil {
 				itr, err2 := dict.fst.Iterator(nil, nil)
 				if err2 != nil && err2 != vellum.ErrIteratorDone {
-					return nil, 0, err2
+					return nil, err2
 				}
 				if itr != nil {
 					newDocNums = append(newDocNums, newDocNumsIn[segmentI])
@@ -209,14 +208,14 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			if !bytes.Equal(prevTerm, term) {
 				// check for the closure in meantime
 				if isClosed(closeCh) {
-					return nil, 0, seg.ErrClosed
+					return nil, seg.ErrClosed
 				}
 
 				// if the term changed, write out the info collected
 				// for the previous term
 				err = finishTerm(prevTerm)
 				if err != nil {
-					return nil, 0, err
+					return nil, err
 				}
 			}
 			if !bytes.Equal(prevTerm, term) || prevTerm == nil {
@@ -226,14 +225,14 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 				for i, idx := range lowItrIdxs {
 					pl, err := dicts[idx].postingsListFromOffset(lowItrVals[i], drops[idx], nil)
 					if err != nil {
-						return nil, 0, err
+						return nil, err
 					}
 					newCard += pl.Count()
 				}
 				// compute correct chunk size with this
 				chunkSize, err := getChunkSize(chunkMode, newCard, newSegDocCount)
 				if err != nil {
-					return nil, 0, err
+					return nil, err
 				}
 				// update encoders chunk
 				tfEncoder.SetChunkSize(chunkSize, newSegDocCount-1)
@@ -243,7 +242,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			postings, err = dicts[itrI].postingsListFromOffset(
 				postingsOffset, drops[itrI], postings)
 			if err != nil {
-				return nil, 0, err
+				return nil, err
 			}
 
 			postItr = postings.iterator(true, true, true, postItr)
@@ -260,7 +259,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 					tfEncoder, locEncoder, bufLoc)
 			}
 			if err != nil {
-				return nil, 0, err
+				return nil, err
 			}
 
 			prevTerm = prevTerm[:0] // copy to prevTerm in case Next() reuses term mem
@@ -269,24 +268,24 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			err = enumerator.Next()
 		}
 		if err != vellum.ErrIteratorDone {
-			return nil, 0, err
+			return nil, err
 		}
 		// close the enumerator to free the underlying iterators
 		err = enumerator.Close()
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 
 		err = finishTerm(prevTerm)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 
 		dictOffset := uint64(w.Count())
 
 		err = newVellum.Close()
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		vellumData := vellumBuf.Bytes()
 
@@ -294,13 +293,13 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		n := binary.PutUvarint(bufMaxVarintLen64, uint64(len(vellumData)))
 		_, err = w.Write(bufMaxVarintLen64[:n])
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 
 		// write this vellum to disk
 		_, err = w.Write(vellumData)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 
 		dictOffsets[fieldID] = dictOffset
@@ -311,7 +310,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		// NOTE: doc values continue to use legacy chunk mode
 		chunkSize, err := getChunkSize(LegacyChunkMode, 0, 0)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		fdvEncoder := newChunkedContentCoder(chunkSize, newSegDocCount-1, w, true)
 
@@ -320,7 +319,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		for segmentI, segment := range segmentsInFocus {
 			// check for the closure in meantime
 			if isClosed(closeCh) {
-				return nil, 0, seg.ErrClosed
+				return nil, seg.ErrClosed
 			}
 			// early exit if docvalues are not wanted for this field
 			if !fieldsOptions[fieldName].IncludeDocValues() {
@@ -342,7 +341,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 					return nil
 				})
 				if err != nil {
-					return nil, 0, err
+					return nil, err
 				}
 			}
 		}
@@ -350,13 +349,13 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		if fdvReadersAvailable {
 			err = fdvEncoder.Close()
 			if err != nil {
-				return nil, 0, err
+				return nil, err
 			}
 
 			// persist the doc value details for this field
 			_, err = fdvEncoder.Write()
 			if err != nil {
-				return nil, 0, err
+				return nil, err
 			}
 
 			// get the field doc value offset (end)
@@ -371,19 +370,19 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		n = binary.PutUvarint(bufMaxVarintLen64, fieldDvLocsStart[fieldID])
 		_, err = w.Write(bufMaxVarintLen64[:n])
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 
 		n = binary.PutUvarint(bufMaxVarintLen64, fieldDvLocsEnd[fieldID])
 		_, err = w.Write(bufMaxVarintLen64[:n])
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 
 		n = binary.PutUvarint(bufMaxVarintLen64, dictOffsets[fieldID])
 		_, err = w.Write(bufMaxVarintLen64[:n])
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 
 		fieldAddrs[fieldID] = fieldStart
@@ -392,20 +391,17 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		vellumBuf.Reset()
 		err = newVellum.Reset(&vellumBuf)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 	}
-
-	fieldDvLocsOffset := uint64(w.Count())
-
-	return fieldAddrs, fieldDvLocsOffset, nil
+	return fieldAddrs, nil
 }
 
 func (i *invertedTextIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
 	drops []*roaring.Bitmap, fieldsInv []string, newDocNumsIn [][]uint64,
 	w *CountHashWriter, closeCh chan struct{}) error {
 	io := i.getInvertedIndexOpaque(opaque)
-	fieldAddrs, _, err := mergeAndPersistInvertedSection(segments, drops, fieldsInv,
+	fieldAddrs, err := mergeAndPersistInvertedSection(segments, drops, fieldsInv,
 		io.FieldsMap, io.FieldsOptions, io.fieldsSame, newDocNumsIn, io.numDocs, io.chunkMode, w, closeCh)
 	if err != nil {
 		return err
@@ -438,12 +434,13 @@ func (i *invertedIndexOpaque) BytesRead() uint64 {
 
 func (i *invertedIndexOpaque) ResetBytesRead(uint64) {}
 
-func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uint64, err error) {
-	if io.results == nil || len(io.results) == 0 {
-		return nil, nil
+func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) error {
+	if len(io.results) == 0 {
+		return nil
 	}
 
-	dictOffsets = make([]uint64, len(io.FieldsInv))
+	dictOffsets := make([]uint64, len(io.FieldsInv))
+	var err error
 
 	fdvOffsetsStart := make([]uint64, len(io.FieldsInv))
 	fdvOffsetsEnd := make([]uint64, len(io.FieldsInv))
@@ -461,7 +458,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 	if io.builder == nil {
 		io.builder, err = vellum.New(&io.builderBuf, nil)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
@@ -494,7 +491,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 			}
 			chunkSize, err := getChunkSize(io.chunkMode, cardinality, uint64(len(io.results)))
 			if err != nil {
-				return nil, err
+				return err
 			}
 			tfEncoder.SetChunkSize(chunkSize, uint64(len(io.results)-1))
 			locEncoder.SetChunkSize(chunkSize, uint64(len(io.results)-1))
@@ -516,7 +513,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 						encodeFreqHasLocs(freqNorm.freq, freqNorm.numLocs > 0))
 				}
 				if err != nil {
-					return nil, err
+					return err
 				}
 
 				if freqNorm.numLocs > 0 {
@@ -529,19 +526,19 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 
 					err = locEncoder.Add(docNum, uint64(numBytesLocs))
 					if err != nil {
-						return nil, err
+						return err
 					}
 					for _, loc := range locs[locOffset : locOffset+freqNorm.numLocs] {
 						err = locEncoder.Add(docNum,
 							uint64(loc.fieldID), loc.pos, loc.start, loc.end,
 							uint64(len(loc.arrayposs)))
 						if err != nil {
-							return nil, err
+							return err
 						}
 
 						err = locEncoder.Add(docNum, loc.arrayposs...)
 						if err != nil {
-							return nil, err
+							return err
 						}
 					}
 					locOffset += freqNorm.numLocs
@@ -562,13 +559,13 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 			postingsOffset, err :=
 				writePostings(postingsBS, tfEncoder, locEncoder, nil, w, buf)
 			if err != nil {
-				return nil, err
+				return err
 			}
 
 			if postingsOffset > uint64(0) {
 				err = io.builder.Insert([]byte(term), postingsOffset)
 				if err != nil {
-					return nil, err
+					return err
 				}
 			}
 
@@ -578,7 +575,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 
 		err = io.builder.Close()
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// record where this dictionary starts
@@ -590,7 +587,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 		n := binary.PutUvarint(buf, uint64(len(vellumData)))
 		_, err = w.Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		io.incrementBytesWritten(uint64(len(vellumData)))
@@ -598,7 +595,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 		// write this vellum to disk
 		_, err = w.Write(vellumData)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// reset vellum for reuse
@@ -606,14 +603,14 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 
 		err = io.builder.Reset(&io.builderBuf)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// write the field doc values
 		// NOTE: doc values continue to use legacy chunk mode
 		chunkSize, err := getChunkSize(LegacyChunkMode, 0, 0)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		fdvEncoder := newChunkedContentCoder(chunkSize, uint64(len(io.results)-1), w, false)
@@ -629,13 +626,13 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 				if len(docTerms) > 0 {
 					err = fdvEncoder.Add(uint64(docNum), docTerms)
 					if err != nil {
-						return nil, err
+						return err
 					}
 				}
 			}
 			err = fdvEncoder.Close()
 			if err != nil {
-				return nil, err
+				return err
 			}
 
 			io.incrementBytesWritten(fdvEncoder.getBytesWritten())
@@ -644,7 +641,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 
 			_, err = fdvEncoder.Write()
 			if err != nil {
-				return nil, err
+				return err
 			}
 
 			fdvOffsetsEnd[fieldID] = uint64(w.Count())
@@ -659,25 +656,25 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) (dictOffsets []uin
 		n = binary.PutUvarint(buf, fdvOffsetsStart[fieldID])
 		_, err = w.Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		n = binary.PutUvarint(buf, fdvOffsetsEnd[fieldID])
 		_, err = w.Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		n = binary.PutUvarint(buf, dictOffsets[fieldID])
 		_, err = w.Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		io.fieldAddrs[fieldID] = fieldStart
 	}
 
-	return dictOffsets, nil
+	return nil
 }
 
 func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum uint32) {

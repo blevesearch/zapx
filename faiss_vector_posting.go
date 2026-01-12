@@ -274,42 +274,37 @@ func (vpItr *VecPostingsIterator) BytesWritten() uint64 {
 // (2) search limited to a subset of documents within an attached vector index
 // (3) close attached vector index
 // (4) get the size of the attached vector index
-func (sb *SegmentBase) InterpretVectorIndex(field string, requiresFiltering bool,
-	except *roaring.Bitmap) (
-	segment.VectorIndex, error) {
-
+func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap) (segment.VectorIndex, error) {
 	rv := &vectorIndexWrapper{sb: sb}
 	fieldIDPlus1 := sb.fieldsMap[field]
 	if fieldIDPlus1 <= 0 {
 		return rv, nil
 	}
-	rv.fieldIDPlus1 = fieldIDPlus1
-
-	vectorSection := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionFaissVectorIndex]
+	// adjust to get the actual fieldID
+	fieldID := fieldIDPlus1 - 1
+	rv.fieldID = fieldID
+	// get the position of the vector section for the field
+	pos := sb.fieldsSectionsMap[fieldID][SectionFaissVectorIndex]
 	// check if the field has a vector section in the segment.
-	if vectorSection <= 0 {
+	if pos <= 0 {
 		return rv, nil
 	}
-
-	pos := int(vectorSection)
-
 	// the below loop loads the following:
 	// 1. doc values(first 2 iterations) - adhering to the sections format. never
 	// valid values for vector section
 	// 2. index optimization type.
 	for i := 0; i < 3; i++ {
 		_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += n
+		pos += uint64(n)
 	}
-
+	// create the vector index wrapper by loading (or creating) the vector index
+	// and the vector to docID mapping
 	var err error
-	rv.vecIndex, rv.vecDocIDMap, rv.docVecIDMap, rv.vectorIDsToExclude, err =
-		sb.vecIndexCache.loadOrCreate(fieldIDPlus1, sb.mem[pos:], requiresFiltering,
-			except)
+	rv.vecIndex, rv.mapping, rv.exclude, err = sb.vecIndexCache.loadOrCreate(fieldID, sb.mem[pos:], uint32(sb.numDocs), except)
 	if err != nil {
 		return nil, err
 	}
-
+	// get the size of the vector index
 	if rv.vecIndex != nil {
 		rv.vecIndexSize = rv.vecIndex.Size()
 	}

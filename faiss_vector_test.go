@@ -6,7 +6,6 @@ package zap
 import (
 	"encoding/binary"
 	"math"
-	"math/rand"
 	"os"
 	"testing"
 
@@ -339,8 +338,6 @@ func getSectionContentOffsets(sb *SegmentBase, offset uint64) (
 
 	vecDocIDsMappingOffset = pos
 	for i := 0; i < int(numVecs); i++ {
-		_, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += uint64(n)
 		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
 	}
@@ -386,13 +383,8 @@ func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
 		return nil, err
 	}
 
-	ids := make([]int64, len(dataset))
-	for i := 0; i < len(dataset); i++ {
-		ids[i] = int64(i)
-	}
-
 	if isIVF {
-		err = idx.SetDirectMap(2)
+		err = idx.SetDirectMap(1)
 		if err != nil {
 			return nil, err
 		}
@@ -403,7 +395,7 @@ func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
 		}
 	}
 
-	idx.AddWithIDs(vecs, ids)
+	idx.Add(vecs)
 
 	return idx, nil
 }
@@ -476,7 +468,7 @@ func TestVectorSegment(t *testing.T) {
 	}
 
 	data := stubVecData
-	vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3, "IDMap2,Flat", false)
+	vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3, "Flat", false)
 	if err != nil {
 		t.Fatalf("error creating vector index %v", err)
 	}
@@ -521,7 +513,7 @@ func TestVectorSegment(t *testing.T) {
 	hitDocIDs := []uint64{2, 6, 8, 9}
 	hitVecs := [][]float32{data[0], data[4], data[6][0:3], data[7][0:3]}
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
-		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", false, nil)
+		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -565,23 +557,6 @@ func TestVectorSegment(t *testing.T) {
 			hitCounter++
 		}
 		vecIndex.Close()
-	}
-}
-
-// Test to check if 2 identical vectors return unique hashes.
-func TestHashCode(t *testing.T) {
-	var v1 []float32
-	for i := 0; i < 10; i++ {
-		v1 = append(v1, rand.Float32())
-	}
-
-	h1 := hashCode(v1)
-
-	h2 := hashCode(v1)
-
-	if h1 == h2 {
-		t.Fatal("expected unique hashes for the same vector each time the " +
-			"hash is computed")
 	}
 }
 
@@ -644,7 +619,7 @@ func TestPersistedVectorSegment(t *testing.T) {
 	hitDocIDs := []uint64{2, 6, 8, 9}
 	hitVecs := [][]float32{data[0], data[4], data[6][0:3], data[7][0:3]}
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
-		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", false, nil)
+		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", nil)
 		if err != nil {
 			t.Fatal(err)
 		}

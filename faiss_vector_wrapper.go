@@ -50,6 +50,11 @@ type vectorIndexWrapper struct {
 	fieldID      uint16
 	vecIndexSize uint64
 
+	// nestedMode indicates if the vector index is operating in nested document mode.
+	// if so we have a reusable ancestry slice to help with docID lookups
+	nestedMode bool
+	ancestry   []index.AncestorID
+
 	sb *SegmentBase
 }
 
@@ -532,7 +537,7 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(eligibleCentroidIDs []in
 // the nested docID, by consulting the edge list. This ensures that kNN searches
 // return unique root documents when nested documents are involved.
 func (v *vectorIndexWrapper) getDocIDForVectorID(vecID int64) (uint32, bool) {
-	docID, exists := v.vecDocIDMap[vecID]
+	docID, exists := v.mapping.docForVec(uint32(vecID))
 	if !v.nestedMode || !exists {
 		// either not in nested mode, or docID does not exist
 		//for the vectorID, so just return the docID as is
@@ -546,7 +551,7 @@ func (v *vectorIndexWrapper) getDocIDForVectorID(vecID int64) (uint32, bool) {
 		return docID, exists
 	}
 	// return the root docID, which is the last element in the ancestry slice
-	// in case the docID is intself a root doc, the ancestry slice would have
+	// in case the docID is a root doc, the ancestry slice would have
 	// just one element, which is the docID itself
 	return uint32(v.ancestry[len(v.ancestry)-1]), true
 }

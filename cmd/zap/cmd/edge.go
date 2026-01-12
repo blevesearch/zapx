@@ -31,6 +31,10 @@ var edgeListCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("error getting edge list: %v", err)
 		}
+		if edgeListAddr == 0 {
+			fmt.Println("no edge list present")
+			return nil
+		}
 		data := segment.Data()
 		// read edge list
 		// pos stores the current read position

@@ -184,6 +184,10 @@ func (s *interim) convert() (uint64, uint64, error) {
 	}
 
 	s.getOrDefineField("_id") // _id field is fieldID 0
+	// special case _id field options: the _id is the canonical document identifier and
+	// must always be both indexed and stored so that it can be used for lookups/queries
+	// and retrieved back from the stored fields, regardless of user-specified field options.
+	s.FieldsOptions["_id"] = index.IndexField | index.StoreField
 
 	var fName string
 	for _, result := range s.results {

@@ -23,6 +23,10 @@ func newNestedIndexCache() *nestedIndexCache {
 func (nc *nestedIndexCache) initialize(numDocs uint64, edgeListOffset uint64, mem []byte) error {
 	// pos stores the current read position
 	pos := edgeListOffset
+	if pos == 0 {
+		// no edge list
+		return nil
+	}
 	// read number of edges in the edge list
 	numEdges, read := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	if read <= 0 {

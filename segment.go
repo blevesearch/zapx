@@ -654,7 +654,7 @@ func (s *Segment) Close() (err error) {
 }
 
 func (s *Segment) closeActual() (err error) {
-	// clear contents from the vector and synonym index cache before un-mmapping
+	// clear contents from all caches before un-mmapping
 	s.invIndexCache.Clear()
 	s.vecIndexCache.Clear()
 	s.synIndexCache.Clear()

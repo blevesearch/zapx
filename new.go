@@ -482,13 +482,17 @@ func numUvarintBytes(x uint64) (n int) {
 	return n + 1
 }
 
-// flattenNestedDocuments returns a preorder list of the given documents and all their nested documents,
-// along with a map mapping each flattened index to its parent index (excluding root docs entirely).
-// The edge list is represented as a map[child]parent, where both child and parent are flattened document indices.
-// Root documents (those without a parent) are not included in the edge list, as they have no parent.
-// The order of documents in the returned slice is such that parents always appear before their children.
-// A reusable edgeList can be provided to avoid allocations across multiple calls.
-func flattenNestedDocuments(docs []index.Document, edgeList map[uint64]uint64) ([]index.Document, map[uint64]uint64) {
+// flattenNestedDocuments returns a preorder list of the given documents and
+// all their nested documents, along with a map mapping each flattened index
+// to its parent index (excluding root docs entirely).
+// The edge list is represented as a map[child]parent, where both child and
+// parent are flattened document indices.
+// Root documents (those without a parent) are not included in the edge list,
+// as they have no parent. The order of documents in the returned slice is
+// such that parents always appear before their children. A reusable edgeList
+// can be provided to avoid allocations across multiple calls.
+func flattenNestedDocuments(docs []index.Document, edgeList map[uint64]uint64) (
+	[]index.Document, map[uint64]uint64) {
 	totalCount := 0
 	for _, doc := range docs {
 		totalCount += countNestedDocuments(doc)

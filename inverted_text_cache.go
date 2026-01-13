@@ -34,7 +34,6 @@ type invertedIndexCache struct {
 	cache map[uint16]*invertedCacheEntry
 }
 
-// Clear clears the synonym cache which would mean that the termID to term map would no longer be available.
 func (sc *invertedIndexCache) Clear() {
 	sc.m.Lock()
 	sc.cache = nil

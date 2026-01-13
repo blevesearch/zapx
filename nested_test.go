@@ -1125,3 +1125,227 @@ func TestNestedSegmentMixedMerge(t *testing.T) {
 		t.Fatalf("error removing dir2: %v", err)
 	}
 }
+
+func TestNestedSegmentEdgeListMap(t *testing.T) {
+	// Test edgeListMap implementation by creating a segment where
+	// nested/total ratio < 8/30 (~0.267) to trigger map-based edge list
+	// We need many root docs with few nested docs
+
+	// Create 10 root docs, only 1 with a single nested child
+	// Ratio = 1/11 ≈ 0.09 < 0.267, so edgeListMap should be used
+	testDocs := []*testNestedDoc{
+		{id: "root1", fields: map[string]string{"name": "Root1"}},
+		{id: "root2", fields: map[string]string{"name": "Root2"}},
+		{id: "root3", fields: map[string]string{"name": "Root3"}},
+		{id: "root4", fields: map[string]string{"name": "Root4"}},
+		{id: "root5", fields: map[string]string{"name": "Root5"}},
+		{id: "root6", fields: map[string]string{"name": "Root6"}},
+		{id: "root7", fields: map[string]string{"name": "Root7"}},
+		{id: "root8", fields: map[string]string{"name": "Root8"}},
+		{id: "root9", fields: map[string]string{"name": "Root9"}},
+		{
+			id:     "root10",
+			fields: map[string]string{"name": "Root10"},
+			children: []*testNestedDoc{
+				{id: "child1", fields: map[string]string{"name": "Child1"}},
+			},
+		},
+	}
+
+	seg, dir, err := buildNestedSegment(testDocs)
+	if err != nil {
+		t.Fatalf("error building segment: %v", err)
+	}
+	defer func() {
+		if cerr := seg.Close(); cerr != nil {
+			t.Fatalf("error closing segment: %v", cerr)
+		}
+		if rerr := os.RemoveAll(dir); rerr != nil {
+			t.Fatalf("error removing dir: %v", rerr)
+		}
+	}()
+
+	sb := seg.(*Segment)
+
+	// Total: 11 docs (10 roots + 1 nested)
+	if sb.Count() != 11 {
+		t.Fatalf("expected 11 docs, got %d", sb.Count())
+	}
+
+	// Nested: 1
+	if sb.countNested() != 1 {
+		t.Fatalf("expected 1 nested doc, got %d", sb.countNested())
+	}
+
+	// Edge list should exist
+	el := sb.EdgeList()
+	if el == nil {
+		t.Fatal("expected non-nil edge list")
+	}
+
+	// Verify edge count
+	if el.Count() != 1 {
+		t.Fatalf("expected 1 edge, got %d", el.Count())
+	}
+
+	// Test Parent lookup - child1 is doc 10, parent is root10 which is doc 9
+	parent, ok := el.Parent(10)
+	if !ok {
+		t.Fatal("expected parent for child1")
+	}
+	if parent != 9 {
+		t.Fatalf("expected parent 9, got %d", parent)
+	}
+
+	// Verify root has no parent
+	if _, ok := el.Parent(0); ok {
+		t.Error("root should have no parent")
+	}
+
+	// Test iteration
+	foundEdges := make(map[uint64]uint64)
+	el.Iterate(func(child uint64, parent uint64) bool {
+		foundEdges[child] = parent
+		return true
+	})
+	if len(foundEdges) != 1 {
+		t.Fatalf("expected 1 edge from iteration, got %d", len(foundEdges))
+	}
+	if foundEdges[10] != 9 {
+		t.Errorf("expected edge 10->9, got 10->%d", foundEdges[10])
+	}
+
+	// Test ancestry
+	ancestry := sb.Ancestors(10, nil)
+	if len(ancestry) != 2 {
+		t.Fatalf("expected 2 ancestors, got %d", len(ancestry))
+	}
+	if uint64(ancestry[0]) != 10 || uint64(ancestry[1]) != 9 {
+		t.Errorf("unexpected ancestry: %v", ancestry)
+	}
+
+	// Test CountRoot
+	rootCount := sb.CountRoot(nil)
+	if rootCount != 10 {
+		t.Fatalf("expected 10 root docs, got %d", rootCount)
+	}
+
+	// Test CountRoot with deletes
+	deleted := roaring.New()
+	deleted.Add(0) // delete root1
+	deleted.Add(9) // delete root10
+	rootCountWithDeletes := sb.CountRoot(deleted)
+	if rootCountWithDeletes != 8 { // 10 - 2 deleted roots
+		t.Fatalf("expected 8 root docs after delete, got %d", rootCountWithDeletes)
+	}
+}
+
+func TestEdgeList(t *testing.T) {
+	t.Run("edgeListMap", func(t *testing.T) {
+		el := newEdgeListMap(3)
+		el.AddEdge(1, 0)
+		el.AddEdge(2, 0)
+		el.AddEdge(3, 1)
+
+		if el.Count() != 3 {
+			t.Fatalf("expected count 3, got %d", el.Count())
+		}
+
+		// Test Parent
+		parent, ok := el.Parent(1)
+		if !ok || parent != 0 {
+			t.Errorf("expected parent 0 for child 1, got %d, ok=%v", parent, ok)
+		}
+		parent, ok = el.Parent(3)
+		if !ok || parent != 1 {
+			t.Errorf("expected parent 1 for child 3, got %d, ok=%v", parent, ok)
+		}
+		_, ok = el.Parent(0)
+		if ok {
+			t.Error("expected no parent for root")
+		}
+		_, ok = el.Parent(99)
+		if ok {
+			t.Error("expected no parent for non-existent doc")
+		}
+
+		// Test Iterate
+		found := make(map[uint64]uint64)
+		el.Iterate(func(child uint64, parent uint64) bool {
+			found[child] = parent
+			return true
+		})
+		if len(found) != 3 {
+			t.Fatalf("expected 3 edges, got %d", len(found))
+		}
+	})
+
+	// Test edgeListSlice
+	t.Run("edgeListSlice", func(t *testing.T) {
+		el := newEdgeListSlice(10, 3)
+		el.AddEdge(1, 0)
+		el.AddEdge(2, 0)
+		el.AddEdge(3, 1)
+
+		if el.Count() != 3 {
+			t.Fatalf("expected count 3, got %d", el.Count())
+		}
+
+		// Test Parent
+		parent, ok := el.Parent(1)
+		if !ok || parent != 0 {
+			t.Errorf("expected parent 0 for child 1, got %d, ok=%v", parent, ok)
+		}
+		parent, ok = el.Parent(3)
+		if !ok || parent != 1 {
+			t.Errorf("expected parent 1 for child 3, got %d, ok=%v", parent, ok)
+		}
+		_, ok = el.Parent(0)
+		if ok {
+			t.Error("expected no parent for root")
+		}
+		// Out of bounds
+		_, ok = el.Parent(99)
+		if ok {
+			t.Error("expected no parent for out of bounds doc")
+		}
+
+		// Test Iterate
+		found := make(map[uint64]uint64)
+		el.Iterate(func(child uint64, parent uint64) bool {
+			found[child] = parent
+			return true
+		})
+		if len(found) != 3 {
+			t.Fatalf("expected 3 edges, got %d", len(found))
+		}
+
+		// Test AddEdge out of bounds (should be silently ignored)
+		el.AddEdge(100, 0) // out of bounds, should not panic
+	})
+
+	// Test NewEdgeList threshold selection
+	t.Run("NewEdgeList", func(t *testing.T) {
+		// Ratio < 8/30 should use map
+		el := NewEdgeList(100, 10) // ratio = 0.1 < 0.267
+		if _, ok := el.(*edgeListMap); !ok {
+			t.Error("expected edgeListMap for low ratio")
+		}
+
+		// Ratio >= 8/30 should use slice
+		el = NewEdgeList(100, 50) // ratio = 0.5 > 0.267
+		if _, ok := el.(*edgeListSlice); !ok {
+			t.Error("expected edgeListSlice for high ratio")
+		}
+
+		// Zero cases
+		el = NewEdgeList(0, 0)
+		if el != nil {
+			t.Error("expected nil for 0 docs")
+		}
+		el = NewEdgeList(10, 0)
+		if el != nil {
+			t.Error("expected nil for 0 edges")
+		}
+	})
+}

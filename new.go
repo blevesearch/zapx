@@ -498,6 +498,11 @@ func flattenNestedDocuments(docs []index.Document, edgeList map[uint64]uint64) (
 		totalCount += countNestedDocuments(doc)
 	}
 
+	if totalCount == len(docs) {
+		// no nested documents, return early
+		return docs, nil
+	}
+
 	flattened := make([]index.Document, 0, totalCount)
 	if edgeList == nil {
 		edgeList = make(map[uint64]uint64, totalCount-len(docs))

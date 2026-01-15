@@ -2,6 +2,7 @@ on:
   push:
     branches:
     - master
+    - v16.x
     - v15.x
     - v14.x
     - v13.x

@@ -116,7 +116,8 @@ func (so *synonymIndexOpaque) Reset() (err error) {
 	// cleanup stuff over here
 	so.results = nil
 	so.init = false
-	so.ThesaurusMap = nil
+	so.FieldsMap = nil
+	clear(so.ThesaurusMap)
 	so.ThesaurusInv = so.ThesaurusInv[:0]
 	for i := range so.Thesauri {
 		so.Thesauri[i] = nil
@@ -134,9 +135,10 @@ func (so *synonymIndexOpaque) Reset() (err error) {
 	if so.builder != nil {
 		err = so.builder.Reset(&so.builderBuf)
 	}
-	so.FieldIDtoThesaurusID = nil
+	clear(so.FieldIDtoThesaurusID)
 	so.SynonymTermToID = so.SynonymTermToID[:0]
 	so.SynonymIDtoTerm = so.SynonymIDtoTerm[:0]
+	clear(so.thesaurusAddrs)
 
 	so.tmp0 = so.tmp0[:0]
 	return err
@@ -176,8 +178,6 @@ func (so *synonymIndexOpaque) process(field index.SynonymField, fieldID uint16, 
 func (so *synonymIndexOpaque) realloc() {
 	var pidNext int
 	var sidNext uint32
-	so.ThesaurusMap = map[string]uint16{}
-	so.FieldIDtoThesaurusID = map[uint16]int{}
 
 	// count the number of unique thesauri from the batch of documents
 	for _, result := range so.results {
@@ -286,20 +286,21 @@ func (so *synonymIndexOpaque) grabBuf(size int) []byte {
 	return buf[:size]
 }
 
-func (so *synonymIndexOpaque) writeThesauri(w *CountHashWriter) (thesOffsets []uint64, err error) {
+func (so *synonymIndexOpaque) writeThesauri(w *CountHashWriter) error {
 
-	if so.results == nil || len(so.results) == 0 {
-		return nil, nil
+	if len(so.results) == 0 {
+		return nil
 	}
 
-	thesOffsets = make([]uint64, len(so.ThesaurusInv))
+	thesOffsets := make([]uint64, len(so.ThesaurusInv))
+	var err error
 
 	buf := so.grabBuf(binary.MaxVarintLen64)
 
 	if so.builder == nil {
 		so.builder, err = vellum.New(&so.builderBuf, nil)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
@@ -310,20 +311,20 @@ func (so *synonymIndexOpaque) writeThesauri(w *CountHashWriter) (thesOffsets []u
 			postingsBS := so.Synonyms[pid]
 			postingsOffset, err := writeSynonyms(postingsBS, w, buf)
 			if err != nil {
-				return nil, err
+				return err
 			}
 
 			if postingsOffset > uint64(0) {
 				err = so.builder.Insert([]byte(term), postingsOffset)
 				if err != nil {
-					return nil, err
+					return err
 				}
 			}
 		}
 
 		err = so.builder.Close()
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		thesOffsets[thesaurusID] = uint64(w.Count())
@@ -334,13 +335,13 @@ func (so *synonymIndexOpaque) writeThesauri(w *CountHashWriter) (thesOffsets []u
 		n := binary.PutUvarint(buf, uint64(len(vellumData)))
 		_, err = w.Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// write this vellum to disk
 		_, err = w.Write(vellumData)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// reset vellum for reuse
@@ -348,13 +349,13 @@ func (so *synonymIndexOpaque) writeThesauri(w *CountHashWriter) (thesOffsets []u
 
 		err = so.builder.Reset(&so.builderBuf)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// write out the synTermMap for this thesaurus
 		err := writeSynTermMap(so.SynonymIDtoTerm[thesaurusID], w, buf)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		thesaurusStart := w.Count()
@@ -362,23 +363,23 @@ func (so *synonymIndexOpaque) writeThesauri(w *CountHashWriter) (thesOffsets []u
 		n = binary.PutUvarint(buf, fieldNotUninverted)
 		_, err = w.Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		n = binary.PutUvarint(buf, fieldNotUninverted)
 		_, err = w.Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		n = binary.PutUvarint(buf, thesOffsets[thesaurusID])
 		_, err = w.Write(buf[:n])
 		if err != nil {
-			return nil, err
+			return err
 		}
 		so.thesaurusAddrs[thesaurusID] = thesaurusStart
 	}
-	return thesOffsets, nil
+	return nil
 }
 
 // -----------------------------------------------------------------------------
@@ -398,7 +399,9 @@ func (s *synonymIndexSection) getSynonymIndexOpaque(opaque map[int]resetable) *s
 // results in the opaque before the section processes a synonym field.
 func (s *synonymIndexSection) InitOpaque(args map[string]interface{}) resetable {
 	rv := &synonymIndexOpaque{
-		thesaurusAddrs: map[int]int{},
+		ThesaurusMap:         map[string]uint16{},
+		FieldIDtoThesaurusID: map[uint16]int{},
+		thesaurusAddrs:       map[int]int{},
 	}
 	for k, v := range args {
 		rv.Set(k, v)
@@ -422,10 +425,9 @@ func (s *synonymIndexSection) Process(opaque map[int]resetable, docNum uint32, f
 // Persist serializes and writes the thesauri processed to the writer, along
 // with the synonym postings lists, and the synonym term map. Implements the
 // Persist API for the synonym index section.
-func (s *synonymIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) (n int64, err error) {
-	synIndexOpaque := s.getSynonymIndexOpaque(opaque)
-	_, err = synIndexOpaque.writeThesauri(w)
-	return 0, err
+func (s *synonymIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) error {
+	so := s.getSynonymIndexOpaque(opaque)
+	return so.writeThesauri(w)
 }
 
 // AddrForField returns the file offset of the thesaurus for the given fieldID,
@@ -433,15 +435,15 @@ func (s *synonymIndexSection) Persist(opaque map[int]resetable, w *CountHashWrit
 // and returns the corresponding thesaurus offset from the thesaurusAddrs map.
 // Implements the AddrForField API for the synonym index section.
 func (s *synonymIndexSection) AddrForField(opaque map[int]resetable, fieldID int) int {
-	synIndexOpaque := s.getSynonymIndexOpaque(opaque)
-	if synIndexOpaque == nil || synIndexOpaque.FieldIDtoThesaurusID == nil {
+	so := s.getSynonymIndexOpaque(opaque)
+	if so == nil || so.FieldIDtoThesaurusID == nil {
 		return 0
 	}
-	tid, exists := synIndexOpaque.FieldIDtoThesaurusID[uint16(fieldID)]
+	tid, exists := so.FieldIDtoThesaurusID[uint16(fieldID)]
 	if !exists {
 		return 0
 	}
-	return synIndexOpaque.thesaurusAddrs[tid]
+	return so.thesaurusAddrs[tid]
 }
 
 // Merge merges the thesauri, synonym postings lists and synonym term maps from
@@ -526,6 +528,13 @@ func writeSynTermMap(synTermMap map[uint32]string, w *CountHashWriter, bufMaxVar
 	}
 	n := binary.PutUvarint(bufMaxVarintLen64, uint64(len(synTermMap)))
 	_, err := w.Write(bufMaxVarintLen64[:n])
+	if err != nil {
+		return err
+	}
+
+	// write the size of the term map (unused for now)
+	n = binary.PutUvarint(bufMaxVarintLen64, 0)
+	_, err = w.Write(bufMaxVarintLen64[:n])
 	if err != nil {
 		return err
 	}

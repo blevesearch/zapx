@@ -22,14 +22,13 @@ import (
 	"os"
 
 	index "github.com/blevesearch/bleve_index_api"
-	"github.com/blevesearch/vellum"
 )
 
-const Version uint32 = 16
-const IndexSectionsVersion uint32 = 16
+const Version uint32 = 17
+
 const Type string = "zap"
 
-const fieldNotUninverted = math.MaxUint64
+const fieldNotUninverted uint64 = math.MaxUint64
 
 func (sb *SegmentBase) Persist(path string) error {
 	return PersistSegmentBase(sb, path)
@@ -99,8 +98,7 @@ func persistSegmentBaseToWriter(sb *SegmentBase, w io.Writer) (int, error) {
 		return 0, err
 	}
 
-	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.fieldsIndexOffset, sb.sectionsIndexOffset,
-		sb.docValueOffset, sb.chunkMode, sb.memCRC, br)
+	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.sectionsIndexOffset, sb.chunkMode, sb.memCRC, br)
 	if err != nil {
 		return 0, err
 	}
@@ -166,29 +164,34 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		chunkMode:           chunkMode,
 		numDocs:             numDocs,
 		storedIndexOffset:   storedIndexOffset,
-		fieldsIndexOffset:   sectionsIndexOffset,
 		sectionsIndexOffset: sectionsIndexOffset,
 		fieldDvReaders:      make([]map[uint16]*docValueReader, len(segmentSections)),
-		docValueOffset:      0, // docValueOffsets identified automatically by the section
 		updatedFields:       make(map[string]*index.UpdateFieldInfo),
-		fieldFSTs:           make(map[uint16]*vellum.FST),
+		invIndexCache:       newInvertedIndexCache(),
 		vecIndexCache:       newVectorIndexCache(),
 		synIndexCache:       newSynonymIndexCache(),
-		// following fields gets populated by loadFieldsNew
-		fieldsMap: make(map[string]uint16),
-		dictLocs:  make([]uint64, 0),
-		fieldsInv: make([]string, 0),
+		nstIndexCache:       newNestedIndexCache(),
+		// following fields gets populated by loadFields
+		fieldsMap:     make(map[string]uint16),
+		fieldsOptions: make(map[string]index.FieldIndexingOptions),
+		fieldsInv:     make([]string, 0),
 	}
 	sb.updateSize()
 
 	// load the data/section starting offsets for each field
 	// by via the sectionsIndexOffset as starting point.
-	err := sb.loadFieldsNew()
+	err := sb.loadFields()
 	if err != nil {
 		return nil, err
 	}
 
 	err = sb.loadDvReaders()
+	if err != nil {
+		return nil, err
+	}
+
+	// initialize any of the caches if needed
+	err = sb.nstIndexCache.initialize(sb.numDocs, sb.getEdgeListOffset(), sb.mem)
 	if err != nil {
 		return nil, err
 	}

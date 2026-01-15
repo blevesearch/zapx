@@ -29,7 +29,7 @@ var thesaurusCmd = &cobra.Command{
 	Short: "thesaurus prints the thesaurus with the specified name",
 	Long:  `The thesaurus command lets you print the thesaurus with the specified name.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		pos := segment.FieldsIndexOffset()
+		pos := segment.SectionsIndexOffset()
 		if pos == 0 {
 			// this is the case only for older file formats
 			return fmt.Errorf("file format not supported")
@@ -62,6 +62,11 @@ var thesaurusCmd = &cobra.Command{
 		if numSyns == 0 {
 			return fmt.Errorf("no synonyms found")
 		}
+
+		// Read the length of the synonym term map (unused for now)
+		_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+		pos += uint64(n)
+
 		synTermMap := make(map[uint32][]byte, numSyns)
 		for i := 0; i < int(numSyns); i++ {
 			synID, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])

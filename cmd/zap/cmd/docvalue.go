@@ -23,7 +23,7 @@ import (
 	"sort"
 	"strconv"
 
-	zap "github.com/blevesearch/zapx/v16"
+	zap "github.com/blevesearch/zapx/v17"
 	"github.com/golang/snappy"
 	"github.com/spf13/cobra"
 )
@@ -193,7 +193,7 @@ func docValueCmd(cmd *cobra.Command, args []string) error {
 
 	data := segment.Data()
 	// iterate through fields index
-	pos := segment.FieldsIndexOffset()
+	pos := segment.SectionsIndexOffset()
 	if pos == 0 {
 		// this is the case only for older file formats
 		return fmt.Errorf("file format not supported")

@@ -1,3 +1,17 @@
+//  Copyright (c) 2026 Couchbase, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// 		http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //go:build vectors
 // +build vectors
 
@@ -6,7 +20,6 @@ package zap
 import (
 	"encoding/binary"
 	"math"
-	"math/rand"
 	"os"
 	"testing"
 
@@ -326,19 +339,26 @@ func getSectionContentOffsets(sb *SegmentBase, offset uint64) (
 	docValueEnd, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
+	// read the vector optimized for value
 	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
 	numVecs, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
+	// read the length of the vector to docID map (unused for now)
+	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+
 	vecDocIDsMappingOffset = pos
 	for i := 0; i < int(numVecs); i++ {
-		_, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += uint64(n)
 		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
 	}
+
+	// read the type of vector index (unused for now)
+	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
 
 	indexBytesLen, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
@@ -377,13 +397,8 @@ func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
 		return nil, err
 	}
 
-	ids := make([]int64, len(dataset))
-	for i := 0; i < len(dataset); i++ {
-		ids[i] = int64(i)
-	}
-
 	if isIVF {
-		err = idx.SetDirectMap(2)
+		err = idx.SetDirectMap(1)
 		if err != nil {
 			return nil, err
 		}
@@ -394,7 +409,7 @@ func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
 		}
 	}
 
-	idx.AddWithIDs(vecs, ids)
+	idx.Add(vecs)
 
 	return idx, nil
 }
@@ -467,7 +482,7 @@ func TestVectorSegment(t *testing.T) {
 	}
 
 	data := stubVecData
-	vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3, "IDMap2,Flat", false)
+	vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3, "Flat", false)
 	if err != nil {
 		t.Fatalf("error creating vector index %v", err)
 	}
@@ -512,7 +527,7 @@ func TestVectorSegment(t *testing.T) {
 	hitDocIDs := []uint64{2, 6, 8, 9}
 	hitVecs := [][]float32{data[0], data[4], data[6][0:3], data[7][0:3]}
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
-		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", false, nil)
+		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -556,23 +571,6 @@ func TestVectorSegment(t *testing.T) {
 			hitCounter++
 		}
 		vecIndex.Close()
-	}
-}
-
-// Test to check if 2 identical vectors return unique hashes.
-func TestHashCode(t *testing.T) {
-	var v1 []float32
-	for i := 0; i < 10; i++ {
-		v1 = append(v1, rand.Float32())
-	}
-
-	h1 := hashCode(v1)
-
-	h2 := hashCode(v1)
-
-	if h1 == h2 {
-		t.Fatal("expected unique hashes for the same vector each time the " +
-			"hash is computed")
 	}
 }
 
@@ -635,7 +633,7 @@ func TestPersistedVectorSegment(t *testing.T) {
 	hitDocIDs := []uint64{2, 6, 8, 9}
 	hitVecs := [][]float32{data[0], data[4], data[6][0:3], data[7][0:3]}
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
-		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", false, nil)
+		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", nil)
 		if err != nil {
 			t.Fatal(err)
 		}

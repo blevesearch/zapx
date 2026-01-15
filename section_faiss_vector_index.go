@@ -93,7 +93,7 @@ type vecIndexInfo struct {
 func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
 	drops []*roaring.Bitmap, fieldsInv []string, newDocNumsIn [][]uint64, w *CountHashWriter,
 	closeCh chan struct{}, config map[string]interface{}) error {
-	vo := v.getvectorIndexOpaque(opaque)
+	vo := v.getVectorIndexOpaque(opaque)
 	vo.config = config
 	// the segments with valid vector sections in them
 	// preallocating the space over here, if there are too many fields
@@ -306,15 +306,15 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex *faiss.IndexImpl,
 			fmt.Println("mergeCandidates", i)
 			mergeCandidates = append(mergeCandidates, i)
 		} else {
-			indexReconsLen := len(vecIndexes[i].vecIds) * vecIndexes[i].index.D()
+			indexReconsLen := len(vecIndexes[i].vecIds) * vecIndexes[i].faissIndex.D()
 			if indexReconsLen > reconsCap {
 				reconsCap = indexReconsLen
 			}
 		}
 		nvecs += len(vecIndexes[i].vecIds)
 		indexOptimizedFor = vecIndexes[i].indexOptimizedFor
-		dims = vecIndexes[i].index.D()
-		metric = int(vecIndexes[i].index.MetricType())
+		dims = vecIndexes[i].faissIndex.D()
+		metric = int(vecIndexes[i].faissIndex.MetricType())
 
 	}
 
@@ -349,7 +349,7 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex *faiss.IndexImpl,
 				return seg.ErrClosed
 			}
 			if j < len(mergeCandidates) && i == mergeCandidates[j] {
-				err = faissIndex.MergeFrom(vecIndexes[i].index, 0)
+				err = faissIndex.MergeFrom(vecIndexes[i].faissIndex, 0)
 				if err != nil {
 					return err
 				}
@@ -357,9 +357,9 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex *faiss.IndexImpl,
 				fmt.Println("mergeFrom", i)
 			} else {
 				// reconstruction will be done on IVFFlat and Flat indexes
-				neededReconsLen := len(vecIndexes[i].vecIds) * vecIndexes[i].index.D()
+				neededReconsLen := len(vecIndexes[i].vecIds) * faissIndex.D()
 				reconsVecs = reconsVecs[:neededReconsLen]
-				reconsVecs, err := vecIndexes[i].index.ReconstructBatch(vecIndexes[i].vecIds, reconsVecs)
+				reconsVecs, err := faissIndex.ReconstructBatch(vecIndexes[i].vecIds, reconsVecs)
 				if err != nil {
 					return err
 				}
@@ -386,7 +386,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex *faiss.Inde
 	vecIndexes []*vecIndexInfo, w *CountHashWriter, closeCh chan struct{}) error {
 	// safe to assume that all the indexes are of the same config values, given
 	// that they are extracted from the field mapping info.
-	var dims, metric, indexDataCap, reconsCap int
+	var dims, metric, indexDataCap, reconsCap, totalVecs int
 	var indexOptimizedFor string
 	var validMerge bool
 	for segI, segBase := range sbs {
@@ -413,15 +413,13 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex *faiss.Inde
 			return err
 		}
 		if len(vecIndexes[segI].vecIds) > 0 {
-			indexReconsLen := len(vecIndexes[segI].vecIds) * index.D()
+			indexReconsLen := len(vecIndexes[segI].vecIds) * faissIndex.D()
 			if indexReconsLen > reconsCap {
 				reconsCap = indexReconsLen
 			}
 			indexDataCap += indexReconsLen
-			finalVecIDCap += len(vecIndexes[segI].vecIds)
 			totalVecs += len(vecIndexes[segI].vecIds)
 		}
-		vecIndexes[segI].index = index
 
 		// set the dims and metric values from the constructed index.
 		dims = faissIndex.D()
@@ -460,7 +458,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex *faiss.Inde
 	}
 
 	var err error
-	for i, currVecIndex := range vecIndexes {
+	for _, currVecIndex := range vecIndexes {
 		if isClosed(closeCh) {
 			freeReconstructedIndexes(vecIndexes)
 			return seg.ErrClosed
@@ -663,7 +661,6 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 				faissIndex.Close()
 				return err
 			}
-
 		}
 		// add the vectors to the index using sequential vector IDs starting
 		// from 0 to N-1

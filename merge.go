@@ -165,9 +165,10 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	updatedFields := mergeUpdatedFields(segments)
 	fieldsInv = filterFields(fieldsInv, updatedFields)
 	fieldsMap = mapFields(fieldsInv)
-	fieldsOptions = finalizeFieldOptions(fieldsOptions, updatedFields)
-	// fieldsSame cannot be true if fields were deleted
 	if len(updatedFields) > 0 {
+		// finalize field options based on updated field info
+		fieldsOptions = finalizeFieldOptions(fieldsOptions, updatedFields)
+		// fieldsSame cannot be true if fields were deleted
 		fieldsSame = false
 	}
 

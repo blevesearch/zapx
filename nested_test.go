@@ -663,7 +663,7 @@ func TestNestedSegmentMergeWithDeletes(t *testing.T) {
 	if mergedSb.countNested() != 1 {
 		t.Fatalf("expected 1 nested doc in merged segment, got %d", mergedSb.countNested())
 	}
-	// CoutntRoot should be 1 (company2)
+	// CountRoot should be 1 (company2)
 	rootCount := mergedSb.CountRoot(nil)
 	if rootCount != 1 {
 		t.Fatalf("expected 1 root doc in merged segment, got %d", rootCount)

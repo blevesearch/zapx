@@ -515,7 +515,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 			// set nprobe value
 			faissIndex.SetNProbe(nprobe)
 			// train the index with the vectors
-			err = faissIndex.Train(content.vectorData)
+			err = faissIndex.Train(content.vectors)
 			if err != nil {
 				faissIndex.Close()
 				return err
@@ -523,7 +523,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 		}
 		// add the vectors to the index using sequential vector IDs starting
 		// from 0 to N-1
-		err = faissIndex.Add(content.vectorData)
+		err = faissIndex.Add(content.vectors)
 		if err != nil {
 			faissIndex.Close()
 			return err
@@ -628,11 +628,13 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 				dimension:    dim,
 				metric:       metric,
 				optimizedFor: indexOptimizedFor,
+				vectors:      make([]float32, 0, dim*numVectors),
+				vecDocIDs:    make([]uint32, 0, numVectors),
 			}
 			vo.fieldVectorIndex[fieldID] = content
 		}
 		// track the vector data and docIDs
-		content.vectorData = append(content.vectorData, vector...)
+		content.vectors = append(content.vectors, vector...)
 		content.vecDocIDs = append(content.vecDocIDs, docNum)
 	}
 }
@@ -658,8 +660,9 @@ func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) reseta
 
 // vectorIndexContent contains the information required to create a vector index for a vector field.
 type vectorIndexContent struct {
-	vectorData []float32
-
+	// vectors stores flattened vectors in a row-major order
+	vectors []float32
+	// vecDocIDs corresponding to each vector
 	vecDocIDs []uint32
 	// dimension is the dimension of all vectors
 	dimension int

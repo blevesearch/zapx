@@ -484,7 +484,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 	tempBuf := vo.grabBuf(binary.MaxVarintLen64)
 	for fieldID, content := range vo.fieldVectorIndex {
 		// number of vectors to be indexed for this field
-		nvecs := len(content.vectors)
+		nvecs := len(content.vecDocIDs)
 		// dimension of each vector
 		dims := content.dimension
 		// Set the faiss metric type (default is Euclidean Distance or l2_norm)
@@ -499,11 +499,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 		if err != nil {
 			return err
 		}
-		// flatten the vectors into a single slice of size numVectors * dims
-		vecs := make([]float32, 0, nvecs*dims)
-		for _, vecInfo := range content.vectors {
-			vecs = append(vecs, vecInfo.vector...)
-		}
+
 		if indexClass == IndexTypeIVF {
 			// set the direct map to reconstruct vectors based on vector IDs
 			// in future merges, we keep 1 as the direct map type to use an
@@ -519,7 +515,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 			// set nprobe value
 			faissIndex.SetNProbe(nprobe)
 			// train the index with the vectors
-			err = faissIndex.Train(vecs)
+			err = faissIndex.Train(content.vectors)
 			if err != nil {
 				faissIndex.Close()
 				return err
@@ -527,7 +523,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 		}
 		// add the vectors to the index using sequential vector IDs starting
 		// from 0 to N-1
-		err = faissIndex.Add(vecs)
+		err = faissIndex.Add(content.vectors)
 		if err != nil {
 			faissIndex.Close()
 			return err
@@ -573,10 +569,10 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 			return err
 		}
 		// write the vecID -> docID mapping
-		for _, vecEntry := range content.vectors {
+		for _, docID := range content.vecDocIDs {
 			// write docIDs associated with every vector, with vecID being
 			// implicit from the order of addition, i.e., 0 to N-1
-			n = binary.PutUvarint(tempBuf, uint64(vecEntry.docID))
+			n = binary.PutUvarint(tempBuf, uint64(docID))
 			_, err = w.Write(tempBuf[:n])
 			if err != nil {
 				return err
@@ -632,15 +628,14 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 				dimension:    dim,
 				metric:       metric,
 				optimizedFor: indexOptimizedFor,
+				vectors:      make([]float32, 0, dim*numVectors),
+				vecDocIDs:    make([]uint32, 0, numVectors),
 			}
 			vo.fieldVectorIndex[fieldID] = content
 		}
-		// add an entry to the index content's vectors, supplying both
-		// the vector and the docNum for this vector within the segment
-		content.vectors = append(content.vectors, &vectorEntry{
-			vector: vector,
-			docID:  docNum,
-		})
+		// track the vector data and docIDs
+		content.vectors = append(content.vectors, vector...)
+		content.vecDocIDs = append(content.vecDocIDs, docNum)
 	}
 }
 
@@ -665,20 +660,16 @@ func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) reseta
 
 // vectorIndexContent contains the information required to create a vector index for a vector field.
 type vectorIndexContent struct {
-	// vectors maps vectorID to vectorEntry
-	vectors []*vectorEntry
+	// vectors stores flattened vectors in a row-major order
+	vectors []float32
+	// vecDocIDs corresponding to each vector
+	vecDocIDs []uint32
 	// dimension is the dimension of all vectors
 	dimension int
 	// metric is the distance metric to be used
 	metric string
 	// optimizedFor is the optimization type for the index
 	optimizedFor string
-}
-
-// vectorEntry captures a vector and its associated document ID within the segment.
-type vectorEntry struct {
-	vector []float32
-	docID  uint32
 }
 
 // vectorIndexOpaque holds the internal state for vector index processing.

@@ -40,11 +40,14 @@ const (
 	// finding enough documents, we start increasing up to the number of centroidsToProbe
 	// up to the total number of eligible centroids available
 	nprobeIncreaseThreshold = 2
+
+	binaryOversampleValue = 4
 )
 
 // vectorIndexWrapper conforms to scorch_segment_api's VectorIndex interface
 type vectorIndexWrapper struct {
-	vecIndex     *faiss.IndexImpl
+	fIndex       faiss.FloatIndex
+	bIndex       faiss.BinaryIndex
 	mapping      *idMapping
 	exclude      *bitmap
 	fieldID      uint16
@@ -60,8 +63,13 @@ type vectorIndexWrapper struct {
 
 func (v *vectorIndexWrapper) Search(qVector []float32, k int64, params json.RawMessage) (segment.VecPostingsList, error) {
 	// check if vector index is present and dimensionality matches
-	if v.vecIndex == nil || v.vecIndex.D() != len(qVector) {
+	if v.fIndex == nil || v.fIndex.D() != len(qVector) {
 		// vector index not found or dimensionality mismatched
+		return emptyVecPostingsList, nil
+	}
+	// check if a binary index is present and if so, check dimensionality matches
+	if v.bIndex != nil && v.bIndex.D() != len(qVector) {
+		// binary index dimensionality mismatched
 		return emptyVecPostingsList, nil
 	}
 	// check if number of docs or number of vectors is zero
@@ -74,8 +82,15 @@ func (v *vectorIndexWrapper) Search(qVector []float32, k int64, params json.RawM
 		// all vectors excluded, so return empty postings list
 		return emptyVecPostingsList, nil
 	}
-	// search the vector index now
-	rs, err := v.searchWithoutIDs(qVector, k, v.exclude, params)
+
+	var rs resultSet
+	var err error
+
+	if v.bIndex != nil {
+		rs, err = v.searchBinaryWithoutIDs(qVector, k, v.exclude, params)
+	} else {
+		rs, err = v.searchFloatWithoutIDs(qVector, k, v.exclude, params)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -91,8 +106,13 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		return emptyVecPostingsList, nil
 	}
 	// if vector index is not present or dimensionality mismatched, return empty postings list
-	if v.vecIndex == nil || v.vecIndex.D() != len(qVector) {
+	if v.fIndex == nil || v.fIndex.D() != len(qVector) {
 		// vector index not found or dimensionality mismatched
+		return emptyVecPostingsList, nil
+	}
+	// check if a binary index is present and if so, check dimensionality matches
+	if v.bIndex != nil && v.bIndex.D() != len(qVector) {
+		// binary index dimensionality mismatched
 		return emptyVecPostingsList, nil
 	}
 	// check if number of docs or number of vectors is zero
@@ -147,7 +167,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	}
 	// If the index is not an IVF index, then the search can be
 	// performed directly, using the Flat index.
-	if !v.vecIndex.IsIVFIndex() {
+	if !v.fIndex.IsIVFIndex() {
 		// perform search with included IDs in the bitmap
 		rs, err := v.searchWithIDs(qVector, k, includeBM, params)
 		if err != nil {
@@ -156,8 +176,18 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		// populate the postings list from the result set
 		return getPostingsList(rs), nil
 	}
+
+	if v.bIndex != nil {
+		rs, err := v.searchBinaryWithIDs(qVector, k, includeBM, params)
+		if err != nil {
+			return nil, err
+		}
+		// populate the postings list from the result set
+		return getPostingsList(rs), nil
+	}
+
 	// Getting the IVF index parameters, nprobe and nlist, set at index time.
-	nprobe, nlist := v.vecIndex.IVFParams()
+	nprobe, nlist := v.fIndex.IVFParams()
 	// Create a FAISS selector based on the include bitmap.
 	includeSelector, err := getIncludeSelector(includeBM)
 	if err != nil {
@@ -169,7 +199,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// Determining which clusters, identified by centroid ID,
 	// have at least one eligible vector and hence, ought to be
 	// probed.
-	clusterVectorCounts, err := v.vecIndex.ObtainClusterVectorCountsFromIVFIndex(includeSelector, nlist)
+	clusterVectorCounts, err := v.fIndex.ObtainClusterVectorCountsFromIVFIndex(includeSelector, nlist)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +228,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// Search the coarse quantizer to order the centroids based on proximity
 	// to the query vector.
 	eligibleCentroidIDs, centroidDistances, err :=
-		v.vecIndex.ObtainClustersWithDistancesFromIVFIndex(qVector, centroidSelector, int64(centroidCount))
+		v.fIndex.ObtainClustersWithDistancesFromIVFIndex(qVector, centroidSelector, int64(centroidCount))
 	if err != nil {
 		return nil, err
 	}
@@ -258,11 +288,11 @@ func (v *vectorIndexWrapper) Size() uint64 {
 
 func (v *vectorIndexWrapper) ObtainKCentroidCardinalitiesFromIVFIndex(limit int, descending bool) (
 	[]index.CentroidCardinality, error) {
-	if v.vecIndex == nil || !v.vecIndex.IsIVFIndex() {
+	if v.fIndex == nil || !v.fIndex.IsIVFIndex() {
 		return nil, nil
 	}
 
-	cardinalities, centroids, err := v.vecIndex.ObtainKCentroidCardinalitiesFromIVFIndex(limit, descending)
+	cardinalities, centroids, err := v.fIndex.ObtainKCentroidCardinalitiesFromIVFIndex(limit, descending)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +327,7 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 	// we have multi-vector documents leading to duplicates in docIDs retrieved
 	numIter := 0
 	// get the metric type of the index to help with deduplication logic
-	metricType := v.vecIndex.MetricType()
+	metricType := v.fIndex.MetricType()
 	// we keep searching until we have k unique docIDs or we have exhausted the vector index
 	// or we have reached the maximum number of deduplication iterations allowed
 	for numIter < maxMultiVectorDocSearchRetries && rs.size() < k && !exhausted {
@@ -365,7 +395,7 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 
 // searchWithoutIDs performs a search on the vector index to retrieve the top K documents while
 // excluding any vector IDs specified in the exclude bitmap.
-func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclude *bitmap, params json.RawMessage) (
+func (v *vectorIndexWrapper) searchFloatWithoutIDs(qVector []float32, k int64, exclude *bitmap, params json.RawMessage) (
 	resultSet, error) {
 	return v.docSearch(k, v.sb.numDocs,
 		func() ([]float32, []int64, error) {
@@ -384,7 +414,7 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclud
 			if sel != nil {
 				defer sel.Delete()
 			}
-			return v.vecIndex.SearchWithoutIDs(qVector, k, sel, params)
+			return v.fIndex.SearchWithSelector(qVector, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
@@ -416,6 +446,120 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclud
 		})
 }
 
+func (v *vectorIndexWrapper) searchBinaryWithoutIDs(qVector []float32, k int64, exclude *bitmap, params json.RawMessage) (
+	resultSet, error) {
+	binQVector := convertToBinary(qVector, len(qVector))
+	binKVal := binaryOversampleValue * k
+
+	return v.docSearch(k, v.sb.numDocs,
+		func() ([]float32, []int64, error) {
+			sel, err := getExcludeSelector(exclude)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if sel != nil {
+				defer sel.Delete()
+			}
+
+			_, binIDs, err := v.bIndex.SearchBinaryWithSelector(binQVector, binKVal, sel, params)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			distances := make([]float32, len(binIDs))
+			err = v.fIndex.DistCompute(qVector, binIDs, len(binIDs), distances)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			scores, labels := TopNIDsByDistance(distances, binIDs, int(k))
+			return scores, labels, nil
+		},
+		func(numIter int, labels []int64) bool {
+			if numIter == 1 {
+				// if we do not have an exclude bitmap yet, create a new one
+				if exclude == nil {
+					exclude = newBitmap(v.mapping.numVectors())
+				} else {
+					// clone the existing exclude bitmap
+					exclude = exclude.clone()
+				}
+			}
+			// prepare the exclude list for the next iteration by adding
+			// the vector ids retrieved in this iteration
+			for _, vecID := range labels {
+				// should not happen, but just a safeguard, as we catch -1
+				// in the main loop
+				if vecID == -1 {
+					continue
+				}
+				exclude.set(uint32(vecID))
+			}
+			// with exclude bitmap updated, we can proceed to the next iteration
+			// fast check if the exclude bitmap has all vectors excluded, in which case
+			// we can stop searching further
+			return exclude.cardinality() != v.mapping.numVectors()
+		})
+}
+
+func (v *vectorIndexWrapper) searchBinaryWithIDs(qVector []float32, k int64, include *bitmap, params json.RawMessage) (
+	resultSet, error) {
+	binQVector := convertToBinary(qVector, len(qVector))
+	binKVal := binaryOversampleValue * k
+
+	return v.docSearch(k, v.sb.numDocs,
+		func() ([]float32, []int64, error) {
+			sel, err := getIncludeSelector(include)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if sel != nil {
+				defer sel.Delete()
+			}
+
+			_, binIDs, err := v.bIndex.SearchBinaryWithSelector(binQVector, binKVal, sel, params)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			distances := make([]float32, len(binIDs))
+			err = v.fIndex.DistCompute(qVector, binIDs, len(binIDs), distances)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			scores, labels := TopNIDsByDistance(distances, binIDs, int(k))
+			return scores, labels, nil
+		},
+		func(numIter int, labels []int64) bool {
+			// if this is the first loop iteration and we have < k unique docIDs,
+			// we clone the existing include slice before modifying it
+			if numIter == 1 {
+				if include == nil {
+					// should not happen, but just a safeguard
+					include = newBitmap(v.mapping.numVectors())
+				} else {
+					// clone the existing include bitmap
+					include = include.clone()
+				}
+			}
+			// removing the vector ids retrieved in this iteration
+			// from the include set
+			for _, vecID := range labels {
+				// should not happen, but just a safeguard, as we catch -1
+				// in the main loop
+				if vecID == -1 {
+					continue
+				}
+				include.clear(uint32(vecID))
+			}
+			// only continue searching if we still have vector ids to include
+			return !include.isEmpty()
+		})
+}
+
 // searchWithIDs performs a search on the vector index to retrieve the top K documents while only
 // considering the vector IDs specified in the include bitmap.
 // NOTE: The include bitmap must NOT be nil and must have at least one vector ID set.
@@ -436,7 +580,7 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include *
 			if sel != nil {
 				defer sel.Delete()
 			}
-			return v.vecIndex.SearchWithIDs(qVector, k, sel, params)
+			return v.fIndex.SearchWithSelector(qVector, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
@@ -489,7 +633,7 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(eligibleCentroidIDs []in
 			if sel != nil {
 				defer sel.Delete()
 			}
-			return v.vecIndex.SearchClustersFromIVFIndex(eligibleCentroidIDs, centroidDis, centroidsToProbe,
+			return v.fIndex.SearchClustersFromIVFIndex(eligibleCentroidIDs, centroidDis, centroidsToProbe,
 				qVector, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
@@ -891,4 +1035,53 @@ func (m *idMapping) vecsForDoc(docID uint32) ([]uint32, bool) {
 		return nil, false
 	}
 	return m.docToVec[docID], true
+}
+
+// ------------------------------------------------------------------------------
+// Quick Select
+// ------------------------------------------------------------------------------
+
+func TopNIDsByDistance(dist []float32, ids []int64, n int) ([]float32, []int64) {
+	if n <= 0 || n > len(dist) {
+		return nil, nil
+	}
+
+	// We want the N largest distances
+	target := len(dist) - n
+
+	quickselect(dist, ids, 0, len(dist)-1, target)
+
+	// Return top-N IDs (unordered)
+	return dist[target:], ids[target:]
+}
+
+func quickselect(dist []float32, ids []int64, left, right, k int) {
+	for left < right {
+		pivot := partition(dist, ids, left, right)
+		if pivot == k {
+			return
+		} else if pivot < k {
+			left = pivot + 1
+		} else {
+			right = pivot - 1
+		}
+	}
+}
+
+func partition(dist []float32, ids []int64, left, right int) int {
+	pivotVal := dist[right]
+	store := left
+
+	for i := left; i < right; i++ {
+		// We want largest distances ⇒ partition small ones left
+		if dist[i] < pivotVal {
+			dist[i], dist[store] = dist[store], dist[i]
+			ids[i], ids[store] = ids[store], ids[i]
+			store++
+		}
+	}
+
+	dist[store], dist[right] = dist[right], dist[store]
+	ids[store], ids[right] = ids[right], ids[store]
+	return store
 }

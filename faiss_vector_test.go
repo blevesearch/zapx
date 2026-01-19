@@ -19,6 +19,7 @@ package zap
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"os"
 	"testing"
@@ -378,7 +379,7 @@ func serializeVecs(dataset [][]float32) []float32 {
 }
 
 func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
-	indexKey string, isIVF bool) (*faiss.IndexImpl, error) {
+	indexKey string, isIVF bool) (faiss.FloatIndex, error) {
 	// input dataset may have flattened nested vectors, len(vec) > dims
 	// Let's fold them back into nested vectors
 	var dataset [][]float32
@@ -391,27 +392,39 @@ func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
 	}
 
 	vecs := serializeVecs(dataset)
-
-	idx, err := faiss.IndexFactory(dims, indexKey, faiss.MetricL2)
+	indexClass := faiss.FloatFlat
+	if isIVF {
+		indexClass = faiss.FloatIVF
+	}
+	idx, err := faiss.IndexFactory(dims, indexKey, faiss.MetricL2, faiss.FloatIndexType, indexClass)
 	if err != nil {
 		return nil, err
 	}
 
+	fIndex, ok := idx.(faiss.FloatIndex)
+	if !ok {
+		return nil, fmt.Errorf("unable to cast to float index")
+	}
+
 	if isIVF {
-		err = idx.SetDirectMap(1)
+		ivfIdx, ok := idx.(faiss.IVFIndex)
+		if !ok {
+			return nil, fmt.Errorf("unable to cast to IVF index")
+		}
+		err = ivfIdx.SetDirectMap(1)
 		if err != nil {
 			return nil, err
 		}
 
-		err = idx.Train(vecs)
+		err = ivfIdx.Train(vecs)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	idx.Add(vecs)
+	fIndex.Add(vecs)
 
-	return idx, nil
+	return fIndex, nil
 }
 
 func calculateL2Score(qVec []float32, vec []float32) float32 {
@@ -486,7 +499,7 @@ func TestVectorSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error creating vector index %v", err)
 	}
-	buf, err := faiss.WriteIndexIntoBuffer(vecIndex)
+	buf, err := faiss.WriteIndexIntoBuffer(vecIndex, faiss.FloatIndexType)
 	if err != nil {
 		t.Fatalf("error serializing vector index %v", err)
 	}

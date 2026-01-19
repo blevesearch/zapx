@@ -79,7 +79,7 @@ var vectorCmd = &cobra.Command{
 		indexBytes := data[pos : pos+indexSize]
 		pos += indexSize
 		// construct the faiss index from the buffer
-		vecIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
+		vecIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly, faiss.FloatIndexType)
 		if err != nil {
 			return fmt.Errorf("error reading faiss index from buffer: %v", err)
 		}
@@ -111,7 +111,12 @@ var vectorCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("error parsing vecID: %v", err)
 			}
-			vec, err := vecIndex.Reconstruct(int64(vecID))
+			var fIndex faiss.FloatIndex
+			fIndex, ok := vecIndex.(faiss.FloatIndex)
+			if !ok {
+				return fmt.Errorf("vector index is not a float index, cannot reconstruct")
+			}
+			vec, err := fIndex.Reconstruct(int64(vecID))
 			if err != nil {
 				return fmt.Errorf("error while reconstructing vector with ID %v, err: %v", vecID, err)
 			}

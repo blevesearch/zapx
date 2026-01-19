@@ -2,6 +2,8 @@ module github.com/blevesearch/zapx/v17
 
 go 1.24
 
+toolchain go1.24.0
+
 require (
 	github.com/RoaringBitmap/roaring/v2 v2.4.5
 	github.com/blevesearch/bleve_index_api v1.3.0
@@ -20,3 +22,7 @@ require (
 	github.com/spf13/pflag v1.0.5 // indirect
 	golang.org/x/sys v0.13.0 // indirect
 )
+
+replace github.com/blevesearch/bleve_index_api => ../bleve_index_api
+
+replace github.com/blevesearch/go-faiss => ../../go-faiss

@@ -288,8 +288,22 @@ func (v *vectorIndexWrapper) Size() uint64 {
 
 func (v *vectorIndexWrapper) ObtainKCentroidCardinalitiesFromIVFIndex(limit int, descending bool) (
 	[]index.CentroidCardinality, error) {
-	// no-op API
-	return nil, nil
+	if v.vecIndex == nil || !v.vecIndex.IsIVFIndex() {
+		return nil, nil
+	}
+
+	cardinalities, centroids, err := v.vecIndex.ObtainKCentroidCardinalitiesFromIVFIndex(limit, descending)
+	if err != nil {
+		return nil, err
+	}
+	centroidCardinalities := make([]index.CentroidCardinality, len(cardinalities))
+	for i, cardinality := range cardinalities {
+		centroidCardinalities[i] = index.CentroidCardinality{
+			Centroid:    centroids[i],
+			Cardinality: cardinality,
+		}
+	}
+	return centroidCardinalities, nil
 }
 
 // Utility function to add the corresponding docID and scores for each unique

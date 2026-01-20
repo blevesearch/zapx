@@ -288,7 +288,7 @@ func (v *vectorIndexWrapper) Size() uint64 {
 
 func (v *vectorIndexWrapper) ObtainKCentroidCardinalitiesFromIVFIndex(limit int, descending bool) (
 	[]index.CentroidCardinality, error) {
-	// no-op API in v16 backport btanch
+	// no-op API
 	return nil, nil
 }
 

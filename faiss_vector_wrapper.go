@@ -24,6 +24,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bits-and-blooms/bitset"
+	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
@@ -283,6 +284,12 @@ func (v *vectorIndexWrapper) Close() {
 
 func (v *vectorIndexWrapper) Size() uint64 {
 	return v.vecIndexSize
+}
+
+func (v *vectorIndexWrapper) ObtainKCentroidCardinalitiesFromIVFIndex(limit int, descending bool) (
+	[]index.CentroidCardinality, error) {
+	// no-op API in v16 backport btanch
+	return nil, nil
 }
 
 // Utility function to add the corresponding docID and scores for each unique

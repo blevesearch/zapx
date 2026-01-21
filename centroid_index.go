@@ -17,6 +17,7 @@ import (
 // }
 
 func (sb *SegmentBase) GetCoarseQuantizer(field string) (*faiss.IndexImpl, error) {
+	fmt.Println("GetCoarseQuantizer", field)
 	fieldIDPlus1 := sb.fieldsMap[field]
 	if fieldIDPlus1 <= 0 {
 		// fmt.Println("invalid field ID", fieldIDPlus1, field)
@@ -43,16 +44,19 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (*faiss.IndexImpl, error
 	numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
+	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
+
 	// if nvecs > 0 {
 	// 	fmt.Println("nvecs > 0", nvecs, field)
 	// 	return nil, fmt.Errorf("centroid index is supposed to be a template index")
 	// }
 	for i := 0; i < int(numVecs); i++ {
-		_, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += n
 		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
 	}
+	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += n
 	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
@@ -63,6 +67,10 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (*faiss.IndexImpl, error
 		return nil, err
 	}
 
+	// faissIndex, _, _, err := sb.vecIndexCache.loadOrCreate(fieldIDPlus1-1, sb.mem[pos:], uint32(sb.numDocs), nil)
+	// if err != nil {
+	// 	return nil, err
+	// }
 	fmt.Println("centroid index", faissIndex != nil)
 	fmt.Println("centroid index.IsIVFIndex()", faissIndex.IsIVFIndex())
 	fmt.Println("centroid index.Ntotal()", faissIndex.Ntotal())

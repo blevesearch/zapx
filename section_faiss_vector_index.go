@@ -82,6 +82,8 @@ func (v *faissVectorIndexSection) AddrForField(opaque map[int]resetable, fieldID
 // vecIndexInfo contains information specific to a vector index,
 // including metadata and the faiss index pointer itself.
 type vecIndexInfo struct {
+	numVecs           int
+	field             string
 	startOffset       int
 	indexSize         uint64
 	vecIds            []int64
@@ -149,6 +151,8 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			newIndexInfo := &vecIndexInfo{
 				indexOptimizedFor: index.VectorIndexOptimizationsReverseLookup[int(indexOptimizationTypeInt)],
 				vecIds:            make([]int64, 0, numVecs),
+				numVecs:           int(numVecs),
+				field:             fieldName,
 			}
 			for vecID := 0; vecID < int(numVecs); vecID++ {
 				docID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
@@ -328,7 +332,7 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex *faiss.IndexImpl,
 
 	reconsVecs := make([]float32, 0, reconsCap)
 	if indexClass == IndexTypeIVF {
-		err = faissIndex.SetDirectMap(2)
+		err = faissIndex.SetDirectMap(1)
 		if err != nil {
 			return err
 		}
@@ -359,11 +363,11 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex *faiss.IndexImpl,
 				// reconstruction will be done on IVFFlat and Flat indexes
 				neededReconsLen := len(vecIndexes[i].vecIds) * faissIndex.D()
 				reconsVecs = reconsVecs[:neededReconsLen]
-				reconsVecs, err := faissIndex.ReconstructBatch(vecIndexes[i].vecIds, reconsVecs)
+				reconsVecs, err := vecIndexes[i].faissIndex.ReconstructBatch(vecIndexes[i].vecIds, reconsVecs)
 				if err != nil {
 					return err
 				}
-				err = faissIndex.AddWithIDs(reconsVecs, vecIndexes[i].vecIds)
+				err = faissIndex.Add(reconsVecs)
 				if err != nil {
 					return err
 				}
@@ -372,6 +376,7 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex *faiss.IndexImpl,
 
 	}
 
+	fmt.Println("writing index to buffer", nvecs)
 	mergedIndexBytes, err := faiss.WriteIndexIntoBuffer(faissIndex)
 	if err != nil {
 		return err
@@ -407,6 +412,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex *faiss.Inde
 		// read the serialized index bytes
 		indexBytes := segBase.mem[currVecIndex.startOffset : currVecIndex.startOffset+int(currVecIndex.indexSize)]
 		// reconstruct the faiss index from the bytes
+		fmt.Println("reading index from buffer", *currVecIndex)
 		faissIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faissIOFlags)
 		if err != nil {
 			freeReconstructedIndexes(vecIndexes)

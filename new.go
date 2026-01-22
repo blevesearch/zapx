@@ -30,6 +30,7 @@ import (
 var NewSegmentBufferNumResultsBump int = 100
 var NewSegmentBufferNumResultsFactor float64 = 1.0
 var NewSegmentBufferAvgBytesPerDocFactor float64 = 1.0
+var MaxSegmentBufferInitialSize int = 10 * 1024 * 1024 // 10MB
 
 // ValidateDocFields can be set by applications to perform additional checks
 // on fields in a document being added to a new segment, by default it does
@@ -59,7 +60,11 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 			NewSegmentBufferNumResultsFactor)
 		estimateNumResults := int(float64(len(results)+NewSegmentBufferNumResultsBump) *
 			NewSegmentBufferAvgBytesPerDocFactor)
-		br.Grow(estimateAvgBytesPerDoc * estimateNumResults)
+		sizeEstimate := estimateAvgBytesPerDoc * estimateNumResults
+		if sizeEstimate > MaxSegmentBufferInitialSize {
+			sizeEstimate = MaxSegmentBufferInitialSize
+		}
+		br.Grow(sizeEstimate)
 	}
 
 	s.results, s.edgeList = flattenNestedDocuments(results, s.edgeList)

@@ -65,7 +65,7 @@ func (vc *vectorIndexCache) Clear() {
 
 // loadOrCreate obtains the vector index from the cache or creates it if it's not present.
 func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uint32, except *roaring.Bitmap) (
-	fIndex faiss.FloatIndex, bIndex faiss.BinaryIndex, mapping *idMapping, exclude *bitmap, err error) {
+	fIndex *faiss.IndexImpl, bIndex *faiss.BinaryIndexImpl, mapping *idMapping, exclude *bitmap, err error) {
 	// first try to read from the cache with a read lock
 	vc.m.RLock()
 	if vc.isClosed {
@@ -97,8 +97,8 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uin
 
 // Rebuilding the cache on a miss.
 func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
-	numDocs uint32, except *roaring.Bitmap) (fIndex faiss.FloatIndex,
-	bIndex faiss.BinaryIndex, mapping *idMapping, exclude *bitmap, err error) {
+	numDocs uint32, except *roaring.Bitmap) (fIndex *faiss.IndexImpl,
+	bIndex *faiss.BinaryIndexImpl, mapping *idMapping, exclude *bitmap, err error) {
 	// if the cache doesn't have the entry, construct the vector to doc id map and
 	// the vector index out of the mem bytes and update the cache under lock.
 	pos := 0
@@ -140,29 +140,22 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	}
 	pos += n
 	// read the serialized vector index
-	index, err := faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faissIOFlags, faiss.FloatIndexType)
+	fIndex, err = faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faissIOFlags)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("faiss index load error: %v", err)
 	}
 	pos += int(indexSize)
-	var ok bool
-	if fIndex, ok = index.(faiss.FloatIndex); !ok {
-		return nil, nil, nil, nil, fmt.Errorf("faiss index is not a float index")
-	}
 
-	if indexType == uint64(faiss.BinaryIndexType) {
+	if indexType == uint64(FaissBinaryIndex) {
 		binSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
 
 		if binSize > 0 {
-			index, err := faiss.ReadIndexFromBuffer(mem[pos:pos+int(binSize)], faissIOFlags, faiss.BinaryIndexType)
+			bIndex, err = faiss.ReadBinaryIndexFromBuffer(mem[pos:pos+int(binSize)], faissIOFlags)
 			if err != nil {
 				return nil, nil, nil, nil, fmt.Errorf("faiss binary index load error: %v", err)
 			}
 			pos += int(binSize)
-			if bIndex, ok = index.(faiss.BinaryIndex); !ok {
-				return nil, nil, nil, nil, fmt.Errorf("faiss binary index is not a binary index")
-			}
 		}
 	}
 	// update the cache
@@ -171,7 +164,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 }
 
 func (vc *vectorIndexCache) insertLOCKED(fieldID uint16,
-	fIndex faiss.FloatIndex, bIndex faiss.BinaryIndex, mapping *idMapping) {
+	fIndex *faiss.IndexImpl, bIndex *faiss.BinaryIndexImpl, mapping *idMapping) {
 	// the first time we've hit the cache, try to spawn a monitoring routine
 	// which will reconcile the moving averages for all the fields being hit
 	if len(vc.cache) == 0 {
@@ -274,7 +267,7 @@ func (e *ewma) add(val uint64) {
 
 // -----------------------------------------------------------------------------
 
-func createCacheEntry(fIndex faiss.FloatIndex, bIndex faiss.BinaryIndex, mapping *idMapping, alpha float64) *cacheEntry {
+func createCacheEntry(fIndex *faiss.IndexImpl, bIndex *faiss.BinaryIndexImpl, mapping *idMapping, alpha float64) *cacheEntry {
 	ce := &cacheEntry{
 		fIndex:  fIndex,
 		bIndex:  bIndex,
@@ -296,8 +289,8 @@ type cacheEntry struct {
 	// threshold we close/cleanup only if the live refs to the cache entry is 0.
 	refs int64
 
-	fIndex  faiss.FloatIndex
-	bIndex  faiss.BinaryIndex
+	fIndex  *faiss.IndexImpl
+	bIndex  *faiss.BinaryIndexImpl
 	mapping *idMapping
 }
 
@@ -313,7 +306,7 @@ func (ce *cacheEntry) decRef() {
 	atomic.AddInt64(&ce.refs, -1)
 }
 
-func (ce *cacheEntry) load(except *roaring.Bitmap) (faiss.FloatIndex, faiss.BinaryIndex, *idMapping, *bitmap, error) {
+func (ce *cacheEntry) load(except *roaring.Bitmap) (*faiss.IndexImpl, *faiss.BinaryIndexImpl, *idMapping, *bitmap, error) {
 	ce.incHit()
 	ce.addRef()
 	return ce.fIndex, ce.bIndex, ce.mapping, getExcludedVectors(ce.mapping, except), nil

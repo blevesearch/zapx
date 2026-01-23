@@ -19,19 +19,26 @@ package zap
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	index "github.com/blevesearch/bleve_index_api"
 )
 
+// getTempPath returns a cross-platform temporary file path for testing
+func getTempPath(filename string) string {
+	return filepath.Join(os.TempDir(), filename)
+}
+
 func TestBuild(t *testing.T) {
-	_ = os.RemoveAll("/tmp/scorch.zap")
+	tmpPath := getTempPath("scorch.zap")
+	_ = os.RemoveAll(tmpPath)
 
 	sb, _, err := buildTestSegment()
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = PersistSegmentBase(sb, "/tmp/scorch.zap")
+	err = PersistSegmentBase(sb, tmpPath)
 	if err != nil {
 		t.Fatal(err)
 	}

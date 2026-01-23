@@ -31,15 +31,16 @@ import (
 var zapPlugin = &ZapPlugin{}
 
 func TestOpen(t *testing.T) {
-	_ = os.RemoveAll("/tmp/scorch.zap")
+	tmpPath := getTempPath("scorch.zap")
+	_ = os.RemoveAll(tmpPath)
 
 	testSeg, _, _ := buildTestSegment()
-	err := PersistSegmentBase(testSeg, "/tmp/scorch.zap")
+	err := PersistSegmentBase(testSeg, tmpPath)
 	if err != nil {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	segment, err := zapPlugin.Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open(tmpPath)
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -330,15 +331,16 @@ func TestOpen(t *testing.T) {
 }
 
 func TestOpenMulti(t *testing.T) {
-	_ = os.RemoveAll("/tmp/scorch.zap")
+	tmpPath := getTempPath("scorch.zap")
+	_ = os.RemoveAll(tmpPath)
 
 	testSeg, _, _ := buildTestSegmentMulti()
-	err := PersistSegmentBase(testSeg, "/tmp/scorch.zap")
+	err := PersistSegmentBase(testSeg, tmpPath)
 	if err != nil {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	segment, err := zapPlugin.Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open(tmpPath)
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -430,15 +432,16 @@ func TestOpenMulti(t *testing.T) {
 }
 
 func TestOpenMultiWithTwoChunks(t *testing.T) {
-	_ = os.RemoveAll("/tmp/scorch.zap")
+	tmpPath := getTempPath("scorch.zap")
+	_ = os.RemoveAll(tmpPath)
 
 	testSeg, _, _ := buildTestSegmentMultiWithChunkFactor(1)
-	err := PersistSegmentBase(testSeg, "/tmp/scorch.zap")
+	err := PersistSegmentBase(testSeg, tmpPath)
 	if err != nil {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	segment, err := zapPlugin.Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open(tmpPath)
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -525,15 +528,16 @@ func TestOpenMultiWithTwoChunks(t *testing.T) {
 }
 
 func TestSegmentVisitableDocValueFieldsList(t *testing.T) {
-	_ = os.RemoveAll("/tmp/scorch.zap")
+	tmpPath := getTempPath("scorch.zap")
+	_ = os.RemoveAll(tmpPath)
 
 	testSeg, _, _ := buildTestSegmentMultiWithChunkFactor(1)
-	err := PersistSegmentBase(testSeg, "/tmp/scorch.zap")
+	err := PersistSegmentBase(testSeg, tmpPath)
 	if err != nil {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	seg, err := zapPlugin.Open("/tmp/scorch.zap")
+	seg, err := zapPlugin.Open(tmpPath)
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -553,15 +557,15 @@ func TestSegmentVisitableDocValueFieldsList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error closing segment: %v", err)
 	}
-	_ = os.RemoveAll("/tmp/scorch.zap")
+	_ = os.RemoveAll(tmpPath)
 
 	testSeg, _, _ = buildTestSegmentWithDefaultFieldMapping(1)
-	err = PersistSegmentBase(testSeg, "/tmp/scorch.zap")
+	err = PersistSegmentBase(testSeg, tmpPath)
 	if err != nil {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	seg, err = zapPlugin.Open("/tmp/scorch.zap")
+	seg, err = zapPlugin.Open(tmpPath)
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -604,18 +608,19 @@ func TestSegmentVisitableDocValueFieldsList(t *testing.T) {
 }
 
 func TestSegmentDocsWithNonOverlappingFields(t *testing.T) {
-	_ = os.RemoveAll("/tmp/scorch.zap")
+	tmpPath := getTempPath("scorch.zap")
+	_ = os.RemoveAll(tmpPath)
 
 	testSeg, _, err := buildTestSegmentMultiWithDifferentFields(true, true)
 	if err != nil {
 		t.Fatalf("error building segment: %v", err)
 	}
-	err = PersistSegmentBase(testSeg, "/tmp/scorch.zap")
+	err = PersistSegmentBase(testSeg, tmpPath)
 	if err != nil {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	segment, err := zapPlugin.Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open(tmpPath)
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -652,23 +657,26 @@ func TestSegmentDocsWithNonOverlappingFields(t *testing.T) {
 }
 
 func TestMergedSegmentDocsWithNonOverlappingFields(t *testing.T) {
-	_ = os.RemoveAll("/tmp/scorch1.zap")
-	_ = os.RemoveAll("/tmp/scorch2.zap")
-	_ = os.RemoveAll("/tmp/scorch3.zap")
+	tmpPath1 := getTempPath("scorch1.zap")
+	tmpPath2 := getTempPath("scorch2.zap")
+	tmpPath3 := getTempPath("scorch3.zap")
+	_ = os.RemoveAll(tmpPath1)
+	_ = os.RemoveAll(tmpPath2)
+	_ = os.RemoveAll(tmpPath3)
 
 	testSeg1, _, _ := buildTestSegmentMultiWithDifferentFields(true, false)
-	err := PersistSegmentBase(testSeg1, "/tmp/scorch1.zap")
+	err := PersistSegmentBase(testSeg1, tmpPath1)
 	if err != nil {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
 	testSeg2, _, _ := buildTestSegmentMultiWithDifferentFields(false, true)
-	err = PersistSegmentBase(testSeg2, "/tmp/scorch2.zap")
+	err = PersistSegmentBase(testSeg2, tmpPath2)
 	if err != nil {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	segment1, err := zapPlugin.Open("/tmp/scorch1.zap")
+	segment1, err := zapPlugin.Open(tmpPath1)
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -679,7 +687,7 @@ func TestMergedSegmentDocsWithNonOverlappingFields(t *testing.T) {
 		}
 	}()
 
-	segment2, err := zapPlugin.Open("/tmp/scorch2.zap")
+	segment2, err := zapPlugin.Open(tmpPath2)
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -694,7 +702,7 @@ func TestMergedSegmentDocsWithNonOverlappingFields(t *testing.T) {
 	segsToMerge[0] = segment1
 	segsToMerge[1] = segment2
 
-	_, nBytes, err := zapPlugin.Merge(segsToMerge, []*roaring.Bitmap{nil, nil}, "/tmp/scorch3.zap", nil, nil)
+	_, nBytes, err := zapPlugin.Merge(segsToMerge, []*roaring.Bitmap{nil, nil}, tmpPath3, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -703,7 +711,7 @@ func TestMergedSegmentDocsWithNonOverlappingFields(t *testing.T) {
 		t.Fatalf("expected a non zero total_compaction_written_bytes")
 	}
 
-	segmentM, err := zapPlugin.Open("/tmp/scorch3.zap")
+	segmentM, err := zapPlugin.Open(tmpPath3)
 	if err != nil {
 		t.Fatalf("error opening merged segment: %v", err)
 	}

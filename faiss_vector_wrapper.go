@@ -46,8 +46,8 @@ const (
 
 // vectorIndexWrapper conforms to scorch_segment_api's VectorIndex interface
 type vectorIndexWrapper struct {
-	fIndex       faiss.FloatIndex
-	bIndex       faiss.BinaryIndex
+	fIndex       *faiss.IndexImpl
+	bIndex       *faiss.BinaryIndexImpl
 	mapping      *idMapping
 	exclude      *bitmap
 	fieldID      uint16
@@ -165,11 +165,9 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	if numSelected == v.mapping.numVectors() {
 		return v.Search(qVector, k, params)
 	}
-	// If the index is not an IVF index, then the search can be
-	// performed directly, using the Flat index.
-	if !v.fIndex.IsIVFIndex() {
-		// perform search with included IDs in the bitmap
-		rs, err := v.searchWithIDs(qVector, k, includeBM, params)
+
+	if v.bIndex != nil {
+		rs, err := v.searchBinaryWithIDs(qVector, k, includeBM, params)
 		if err != nil {
 			return nil, err
 		}
@@ -177,8 +175,11 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		return getPostingsList(rs), nil
 	}
 
-	if v.bIndex != nil {
-		rs, err := v.searchBinaryWithIDs(qVector, k, includeBM, params)
+	// If the index is not an IVF index, then the search can be
+	// performed directly, using the Flat index.
+	if !v.fIndex.IsIVFIndex() {
+		// perform search with included IDs in the bitmap
+		rs, err := v.searchWithIDs(qVector, k, includeBM, params)
 		if err != nil {
 			return nil, err
 		}
@@ -414,7 +415,7 @@ func (v *vectorIndexWrapper) searchFloatWithoutIDs(qVector []float32, k int64, e
 			if sel != nil {
 				defer sel.Delete()
 			}
-			return v.fIndex.SearchWithSelector(qVector, k, sel, params)
+			return v.fIndex.SearchWithoutIDs(qVector, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
@@ -462,13 +463,12 @@ func (v *vectorIndexWrapper) searchBinaryWithoutIDs(qVector []float32, k int64, 
 				defer sel.Delete()
 			}
 
-			_, binIDs, err := v.bIndex.SearchBinaryWithSelector(binQVector, binKVal, sel, params)
+			_, binIDs, err := v.bIndex.SearchWithSelector(binQVector, binKVal, sel, params)
 			if err != nil {
 				return nil, nil, err
 			}
 
-			distances := make([]float32, len(binIDs))
-			err = v.fIndex.DistCompute(qVector, binIDs, len(binIDs), distances)
+			distances, err := v.fIndex.DistCompute(qVector, binIDs)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -519,13 +519,12 @@ func (v *vectorIndexWrapper) searchBinaryWithIDs(qVector []float32, k int64, inc
 				defer sel.Delete()
 			}
 
-			_, binIDs, err := v.bIndex.SearchBinaryWithSelector(binQVector, binKVal, sel, params)
+			_, binIDs, err := v.bIndex.SearchWithSelector(binQVector, binKVal, sel, params)
 			if err != nil {
 				return nil, nil, err
 			}
 
-			distances := make([]float32, len(binIDs))
-			err = v.fIndex.DistCompute(qVector, binIDs, len(binIDs), distances)
+			distances, err := v.fIndex.DistCompute(qVector, binIDs)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -580,7 +579,7 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include *
 			if sel != nil {
 				defer sel.Delete()
 			}
-			return v.fIndex.SearchWithSelector(qVector, k, sel, params)
+			return v.fIndex.SearchWithIDs(qVector, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,

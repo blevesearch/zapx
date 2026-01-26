@@ -39,15 +39,16 @@ func buildTestSegmentForDict() (*SegmentBase, uint64, error) {
 }
 
 func TestDictionary(t *testing.T) {
-	_ = os.RemoveAll("/tmp/scorch.zap")
+	tmpPath := getTempPath("scorch.zap")
+	_ = os.RemoveAll(tmpPath)
 
 	testSeg, _, _ := buildTestSegmentForDict()
-	err := PersistSegmentBase(testSeg, "/tmp/scorch.zap")
+	err := PersistSegmentBase(testSeg, tmpPath)
 	if err != nil {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	segment, err := zapPlugin.Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open(tmpPath)
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -125,15 +126,16 @@ func TestDictionaryError(t *testing.T) {
 		hash[uint8(i)] = *lb
 	}
 
-	_ = os.RemoveAll("/tmp/scorch.zap")
+	tmpPath := getTempPath("scorch.zap")
+	_ = os.RemoveAll(tmpPath)
 
 	testSeg, _, _ := buildTestSegmentForDict()
-	err := PersistSegmentBase(testSeg, "/tmp/scorch.zap")
+	err := PersistSegmentBase(testSeg, tmpPath)
 	if err != nil {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	segment, err := zapPlugin.Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open(tmpPath)
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}
@@ -228,15 +230,16 @@ func TestDictionaryError(t *testing.T) {
 }
 
 func TestDictionaryBug1156(t *testing.T) {
-	_ = os.RemoveAll("/tmp/scorch.zap")
+	tmpPath := getTempPath("scorch.zap")
+	_ = os.RemoveAll(tmpPath)
 
 	testSeg, _, _ := buildTestSegmentForDict()
-	err := PersistSegmentBase(testSeg, "/tmp/scorch.zap")
+	err := PersistSegmentBase(testSeg, tmpPath)
 	if err != nil {
 		t.Fatalf("error persisting segment: %v", err)
 	}
 
-	segment, err := zapPlugin.Open("/tmp/scorch.zap")
+	segment, err := zapPlugin.Open(tmpPath)
 	if err != nil {
 		t.Fatalf("error opening segment: %v", err)
 	}

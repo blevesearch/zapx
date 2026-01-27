@@ -301,7 +301,7 @@ func (di *docValueReader) visitDocValues(docNum uint64,
 	// pick the terms for the given docNum
 	uncompressed = uncompressed[start:end]
 	for {
-		i := bytes.IndexByte(uncompressed, termSeparator)
+		i := bytes.IndexByte(uncompressed, index.DocValueTermSeparator)
 		if i < 0 {
 			break
 		}
@@ -339,20 +339,10 @@ func (sb *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
 		}
 	}
 
-	var fieldIDPlus1 uint16
-	var dvIter *docValueReader
+	var initDvReaders bool
 	if dvs.dvrs == nil {
 		dvs.dvrs = make([]*docValueReader, len(sb.fieldsInv))
-		for _, field := range fields {
-			if fieldIDPlus1, ok = sb.fieldsMap[field]; !ok {
-				continue
-			}
-			fieldID := fieldIDPlus1 - 1
-			dvIter = sb.fieldDvReaders[SectionInvertedTextIndex][fieldID]
-			if dvIter != nil {
-				dvs.dvrs[fieldID] = dvIter.cloneInto(dvs.dvrs[fieldID])
-			}
-		}
+		initDvReaders = true
 	}
 
 	// find the chunkNumber where the docValues are stored
@@ -361,12 +351,14 @@ func (sb *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
 	if err != nil {
 		return nil, err
 	}
-	var dvr *docValueReader
+	var fieldIDPlus1, fieldID uint16
+	var dvr, dvIter *docValueReader
 	var docInChunk uint64
 	for _, field := range fields {
 		if fieldIDPlus1, ok = sb.fieldsMap[field]; !ok {
 			continue
 		}
+		fieldID = fieldIDPlus1 - 1
 
 		if sb.fieldsOptions[field].SkipChunking() {
 			docInChunk = localDocNum
@@ -374,6 +366,15 @@ func (sb *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
 			docInChunk = localDocNum / chunkFactor
 		}
 
+		// initialize the docValueReader for the field if needed
+		if initDvReaders {
+			dvIter = sb.fieldDvReaders[SectionInvertedTextIndex][fieldID]
+			if dvIter != nil {
+				dvs.dvrs[fieldID] = dvIter.cloneInto(dvs.dvrs[fieldID])
+			}
+		}
+
+		dvr = dvs.dvrs[fieldID]
 		dvr = dvs.dvrs[fieldIDPlus1-1]
 		if dvr != nil {
 			// check if the chunk is already loaded

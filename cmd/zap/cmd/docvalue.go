@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 
+	index "github.com/blevesearch/bleve_index_api"
 	zap "github.com/blevesearch/zapx/v17"
 	"github.com/golang/snappy"
 	"github.com/spf13/cobra"
@@ -168,12 +169,10 @@ func dumpDocValueResults(data []byte, args []string, field string, id int, field
 		return err
 	}
 
-	var termSeparator byte = 0xff
-
 	// pick the terms for the given docNum
 	uncompressed = uncompressed[start:end]
 	for {
-		i := bytes.IndexByte(uncompressed, termSeparator)
+		i := bytes.IndexByte(uncompressed, index.DocValueTermSeparator)
 		if i < 0 {
 			break
 		}

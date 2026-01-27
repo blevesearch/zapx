@@ -552,7 +552,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) error {
 
 				docTermMap[docNum] = append(
 					append(docTermMap[docNum], term...),
-					termSeparator)
+					index.DocValueTermSeparator)
 			}
 
 			tfEncoder.Close()
@@ -625,7 +625,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) error {
 				if fieldTermMap, ok := io.extraDocValues[docNum]; ok {
 					if sTerms, ok := fieldTermMap[uint16(fieldID)]; ok {
 						for _, sTerm := range sTerms {
-							docTerms = append(append(docTerms, sTerm...), termSeparator)
+							docTerms = append(append(docTerms, sTerm...), index.DocValueTermSeparator)
 						}
 					}
 				}

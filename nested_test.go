@@ -125,7 +125,7 @@ func buildNestedDocument(def *testNestedDoc) *stubNestedDocument {
 }
 
 func buildTestSegmentForNested(results []index.Document) (*SegmentBase, error) {
-	seg, _, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode)
+	seg, _, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -41,7 +41,7 @@ func buildTestSynonymDocument(id string, synonymSource string, terms []string, s
 }
 
 func buildTestSegmentForThesaurus(results []index.Document) (*SegmentBase, error) {
-	seg, _, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode)
+	seg, _, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode, nil)
 	return seg.(*SegmentBase), err
 }
 

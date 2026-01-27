@@ -6,18 +6,11 @@ package zap
 
 import (
 	"encoding/binary"
-	"fmt"
 
 	faiss "github.com/blevesearch/go-faiss"
 )
 
-// type CentroidIndexSegment interface {
-// 	segment.Segment
-// 	GetCoarseQuantizer(field string) (*faiss.IndexImpl, error)
-// }
-
 func (sb *SegmentBase) GetCoarseQuantizer(field string) (*faiss.IndexImpl, error) {
-	fmt.Println("GetCoarseQuantizer", field)
 	fieldIDPlus1 := sb.fieldsMap[field]
 	if fieldIDPlus1 <= 0 {
 		// fmt.Println("invalid field ID", fieldIDPlus1, field)
@@ -35,11 +28,13 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (*faiss.IndexImpl, error
 	// the below loop loads the following:
 	// 1. doc values(first 2 iterations) - adhering to the sections format. never
 	// valid values for vector section
-	// 2. index optimization type.
+	// 2. index optimization type. --> this should be set to fastmerge to safeguard against searches
 	for i := 0; i < 3; i++ {
 		_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
 	}
+
+	// if index optimization type is fastmerge, then don't search
 
 	numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
@@ -47,10 +42,6 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (*faiss.IndexImpl, error
 	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
-	// if nvecs > 0 {
-	// 	fmt.Println("nvecs > 0", nvecs, field)
-	// 	return nil, fmt.Errorf("centroid index is supposed to be a template index")
-	// }
 	for i := 0; i < int(numVecs); i++ {
 		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
@@ -60,20 +51,9 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (*faiss.IndexImpl, error
 	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
-	fmt.Println("indexSize", indexSize, field)
-	// centroid index doesn't have any data vectors in it, its just template with coarse quantizer
 	faissIndex, err := faiss.ReadIndexFromBuffer(sb.mem[pos:pos+int(indexSize)], faiss.IOFlagReadMmap)
 	if err != nil {
 		return nil, err
 	}
-
-	// faissIndex, _, _, err := sb.vecIndexCache.loadOrCreate(fieldIDPlus1-1, sb.mem[pos:], uint32(sb.numDocs), nil)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	fmt.Println("centroid index", faissIndex != nil)
-	fmt.Println("centroid index.IsIVFIndex()", faissIndex.IsIVFIndex())
-	fmt.Println("centroid index.Ntotal()", faissIndex.Ntotal())
-	fmt.Println("centroid index.D()", faissIndex.D())
 	return faissIndex, nil
 }

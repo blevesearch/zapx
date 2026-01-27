@@ -24,7 +24,7 @@ import (
 	index "github.com/blevesearch/bleve_index_api"
 )
 
-const Version uint32 = 17
+const Version uint32 = 16
 
 const Type string = "zap"
 
@@ -165,7 +165,7 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		numDocs:             numDocs,
 		storedIndexOffset:   storedIndexOffset,
 		sectionsIndexOffset: sectionsIndexOffset,
-		fieldDvReaders:      make([]map[uint16]*docValueReader, len(segmentSections)),
+		fieldDvReaders:      make([][]*docValueReader, len(segmentSections)),
 		updatedFields:       make(map[string]*index.UpdateFieldInfo),
 		invIndexCache:       newInvertedIndexCache(),
 		vecIndexCache:       newVectorIndexCache(),

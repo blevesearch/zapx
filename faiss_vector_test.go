@@ -391,7 +391,6 @@ func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
 	}
 
 	vecs := serializeVecs(dataset)
-
 	idx, err := faiss.IndexFactory(dims, indexKey, faiss.MetricL2)
 	if err != nil {
 		return nil, err

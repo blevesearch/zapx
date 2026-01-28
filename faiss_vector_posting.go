@@ -300,13 +300,16 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 	// create the vector index wrapper by loading (or creating) the vector index
 	// and the vector to docID mapping
 	var err error
-	rv.vecIndex, rv.mapping, rv.exclude, err = sb.vecIndexCache.loadOrCreate(fieldID, sb.mem[pos:], uint32(sb.numDocs), except)
+	rv.fIndex, rv.bIndex, rv.mapping, rv.exclude, err = sb.vecIndexCache.loadOrCreate(fieldID, sb.mem[pos:], uint32(sb.numDocs), except)
 	if err != nil {
 		return nil, err
 	}
 	// get the size of the vector index
-	if rv.vecIndex != nil {
-		rv.vecIndexSize = rv.vecIndex.Size()
+	if rv.fIndex != nil {
+		rv.vecIndexSize = rv.fIndex.Size()
+	}
+	if rv.bIndex != nil {
+		rv.vecIndexSize += rv.bIndex.Size()
 	}
 
 	// get the number of nested documents in this segment, if any

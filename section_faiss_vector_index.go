@@ -513,10 +513,7 @@ func determineBinaryIndexToUse(nvecs, nlist int) string {
 }
 
 func determineIndexTypeFromOptimization(indexOptimizedFor string) uint64 {
-	if indexOptimizedFor == index.IndexOptimizedForBinary {
-		return FaissBinaryIndex
-	}
-	return FaissFloatIndex
+	return FaissBinaryIndex
 }
 
 func makeFaissBinaryIndex(dims int, description string, metric int, vecs []float32,
@@ -592,7 +589,7 @@ func determineCentroids(nvecs int) int {
 // determineIndexToUse returns a description string for the index and quantizer type,
 // and an index type constant.
 func determineFloatIndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, int) {
-	if indexOptimizedFor == index.IndexOptimizedForBinary && nvecs >= 10000 {
+	if nvecs >= 10000 {
 		return "Flat", IndexTypeFlat
 	}
 	if indexOptimizedFor == index.IndexOptimizedForMemoryEfficient {

@@ -58,6 +58,7 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 			invIndexCache:  newInvertedIndexCache(),
 			vecIndexCache:  newVectorIndexCache(),
 			synIndexCache:  newSynonymIndexCache(),
+			nstIndexCache:  newNestedIndexCache(),
 			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
 		},
 		f:    f,
@@ -84,6 +85,14 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 		_ = rv.Close()
 		return nil, err
 	}
+
+	// initialize any of the caches if needed
+	err = rv.nstIndexCache.initialize(rv.numDocs, rv.getEdgeListOffset(), rv.mem)
+	if err != nil {
+		_ = rv.Close()
+		return nil, err
+	}
+
 	return rv, nil
 }
 
@@ -100,7 +109,7 @@ type SegmentBase struct {
 	fieldsMap           map[string]uint16                     // fieldName -> fieldID+1
 	fieldsOptions       map[string]index.FieldIndexingOptions // fieldName -> fieldOptions
 	fieldsInv           []string                              // fieldID -> fieldName
-	fieldsSectionsMap   []map[uint16]uint64                   // fieldID -> section -> address
+	fieldsSectionsMap   [][]uint64                            // fieldID -> section -> address
 	numDocs             uint64
 	storedIndexOffset   uint64
 	sectionsIndexOffset uint64
@@ -115,6 +124,7 @@ type SegmentBase struct {
 	invIndexCache *invertedIndexCache
 	vecIndexCache *vectorIndexCache
 	synIndexCache *synonymIndexCache
+	nstIndexCache *nestedIndexCache
 }
 
 func (sb *SegmentBase) Size() int {
@@ -159,6 +169,7 @@ func (sb *SegmentBase) Close() (err error) {
 	sb.invIndexCache.Clear()
 	sb.vecIndexCache.Clear()
 	sb.synIndexCache.Clear()
+	sb.nstIndexCache.Clear()
 	return nil
 }
 
@@ -219,6 +230,9 @@ func (s *Segment) loadConfig() error {
 	storedIndexOffset := sectionsIndexOffset - 8
 	numDocsOffset := storedIndexOffset - 8
 
+	// read offsets for the writer id length (unused for now)
+	idLenOffset := numDocsOffset - 4
+
 	// read 32-bit crc
 	s.crc = binary.BigEndian.Uint32(s.mm[crcOffset : crcOffset+4])
 
@@ -240,8 +254,12 @@ func (s *Segment) loadConfig() error {
 	// read 64-bit num docs
 	s.numDocs = binary.BigEndian.Uint64(s.mm[numDocsOffset : numDocsOffset+8])
 
-	s.incrementBytesRead(uint64(FooterSize))
-	s.SegmentBase.mem = s.mm[:len(s.mm)-FooterSize]
+	// read the length of the id (unused for now)
+	idLen := binary.BigEndian.Uint32(s.mm[idLenOffset : idLenOffset+4])
+
+	footerSize := FooterSize + int(idLen)
+	s.incrementBytesRead(uint64(footerSize))
+	s.SegmentBase.mem = s.mm[:len(s.mm)-footerSize]
 	return nil
 }
 
@@ -318,9 +336,7 @@ func (sb *SegmentBase) loadFields() error {
 		addr := binary.BigEndian.Uint64(sb.mem[pos : pos+8])
 		sb.incrementBytesRead(8)
 
-		fieldSectionMap := make(map[uint16]uint64)
-
-		err := sb.loadField(uint16(fieldID), addr, fieldSectionMap)
+		fieldSectionMap, err := sb.loadField(uint16(fieldID), addr)
 		if err != nil {
 			return err
 		}
@@ -334,11 +350,11 @@ func (sb *SegmentBase) loadFields() error {
 	return nil
 }
 
-func (sb *SegmentBase) loadField(fieldID uint16, pos uint64,
-	fieldSectionMap map[uint16]uint64) error {
+// loadField loads the field metadata for the given fieldID at the given position
+func (sb *SegmentBase) loadField(fieldID uint16, pos uint64) ([]uint64, error) {
 	if pos == 0 {
 		// there is no indexing structure present for this field/section
-		return nil
+		return nil, nil
 	}
 
 	fieldStartPos := pos // to track the number of bytes read
@@ -353,12 +369,15 @@ func (sb *SegmentBase) loadField(fieldID uint16, pos uint64,
 	pos += uint64(sz)
 
 	sb.fieldsInv = append(sb.fieldsInv, fieldName)
-	sb.fieldsMap[fieldName] = uint16(fieldID + 1)
+	sb.fieldsMap[fieldName] = fieldID + 1
 	sb.fieldsOptions[fieldName] = index.FieldIndexingOptions(fieldOptions)
 
 	fieldNumSections, sz := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(sz)
-
+	// create an address mapping array for each of the segment sections
+	// if the field has a valid section index, then the address will be non-zero
+	// else it will be zero.
+	fieldSectionMap := make([]uint64, NumSections)
 	for sectionIdx := uint64(0); sectionIdx < fieldNumSections; sectionIdx++ {
 		// read section id
 		fieldSectionType := binary.BigEndian.Uint16(sb.mem[pos : pos+2])
@@ -370,7 +389,7 @@ func (sb *SegmentBase) loadField(fieldID uint16, pos uint64,
 
 	// account the bytes read while parsing the sections field index.
 	sb.incrementBytesRead((pos - uint64(fieldStartPos)) + fieldNameLen)
-	return nil
+	return fieldSectionMap, nil
 }
 
 // Dictionary returns the term dictionary for the specified field
@@ -635,10 +654,11 @@ func (s *Segment) Close() (err error) {
 }
 
 func (s *Segment) closeActual() (err error) {
-	// clear contents from the vector and synonym index cache before un-mmapping
+	// clear contents from all caches before un-mmapping
 	s.invIndexCache.Clear()
 	s.vecIndexCache.Clear()
 	s.synIndexCache.Clear()
+	s.nstIndexCache.Clear()
 
 	if s.mm != nil {
 		err = s.mm.Unmap()
@@ -711,6 +731,25 @@ func (s *Segment) DictAddr(field string) (uint64, error) {
 	return dictLoc, nil
 }
 
+// VectorAddr is a helper function to compute the file offset where the
+// vector index is stored for the specified field.
+func (s *Segment) VectorAddr(name string) (uint64, error) {
+	fieldIDPlus1, ok := s.fieldsMap[name]
+	if !ok {
+		return 0, fmt.Errorf("no such field '%s'", name)
+	}
+	vectorStart := s.fieldsSectionsMap[fieldIDPlus1-1][SectionFaissVectorIndex]
+	if vectorStart == 0 {
+		return 0, fmt.Errorf("no vector index for field '%s'", name)
+	}
+	for i := 0; i < 2; i++ {
+		_, n := binary.Uvarint(s.mem[vectorStart : vectorStart+binary.MaxVarintLen64])
+		vectorStart += uint64(n)
+	}
+	vectorLoc, _ := binary.Uvarint(s.mem[vectorStart : vectorStart+binary.MaxVarintLen64])
+	return vectorLoc, nil
+}
+
 // ThesaurusAddr is a helper function to compute the file offset where the
 // thesaurus is stored with the specified name.
 func (s *Segment) ThesaurusAddr(name string) (uint64, error) {
@@ -728,6 +767,12 @@ func (s *Segment) ThesaurusAddr(name string) (uint64, error) {
 	}
 	thesLoc, _ := binary.Uvarint(s.mem[thesaurusStart : thesaurusStart+binary.MaxVarintLen64])
 	return thesLoc, nil
+}
+
+// EdgeListAddr is the exported helper function to compute the
+// file offset where the edge list is stored.
+func (s *Segment) EdgeListAddr() (uint64, error) {
+	return s.getEdgeListOffset(), nil
 }
 
 func (sb *SegmentBase) loadDvReaders() error {
@@ -780,4 +825,71 @@ func (s *SegmentBase) GetUpdatedFields() map[string]*index.UpdateFieldInfo {
 // Setter method to store updateFieldInfo within segment base
 func (s *SegmentBase) SetUpdatedFields(updatedFields map[string]*index.UpdateFieldInfo) {
 	s.updatedFields = updatedFields
+}
+
+// Ancestors returns a slice of document numbers representing the ancestors of the
+// specified document (docNum) within the segment. If the document has no ancestors,
+// a slice containing only the document number itself is returned. The prealloc
+// parameter allows for reusing a preallocated slice to avoid additional allocations.
+func (sb *SegmentBase) Ancestors(docNum uint64, prealloc []index.AncestorID) []index.AncestorID {
+	return sb.nstIndexCache.ancestry(docNum, prealloc)
+}
+
+// CountRoot returns the number of root documents in the segment, excluding any
+// documents that are marked as deleted in the provided bitmap. The deleted bitmap
+// may contain both root and sub-document numbers, and the method ensures that
+// only root documents are counted.
+func (sb *SegmentBase) CountRoot(deleted *roaring.Bitmap) uint64 {
+	// the formula is as follows:
+	// Total Docs (T) = Root Docs (R) + Sub Docs (S)
+	// R = T - S
+	// Now if we have D deleted docs, some of which may be sub-docs, we need to exclude
+	// those from the root doc count. Let D = dR + dS, where dR is the number of deleted
+	// root docs and dS is the number of deleted sub docs.
+	// dR = D - dS
+	// Therefore, the count of root docs excluding deleted ones is:
+	// R - dR = (T - S) - (D - dS)
+	return (sb.Count() - sb.countNested()) - (sb.nstIndexCache.countRoot(deleted))
+}
+
+// AddNestedDocuments returns a bitmap containing the original document numbers in drops,
+// plus any descendant document numbers for each dropped document. The drops
+// parameter represents a set of document numbers to be dropped, and the returned
+// bitmap includes both the original drops and all their descendants (if any).
+func (sb *SegmentBase) AddNestedDocuments(drops *roaring.Bitmap) *roaring.Bitmap {
+	// If no drops or no subDocs, nothing to do
+	if drops == nil || drops.GetCardinality() == 0 || sb.countNested() == 0 {
+		return drops
+	}
+	// Get the edge list for this segment
+	el := sb.EdgeList()
+	// Algorithm => iterate through each child->parent mapping in the edge list,
+	// and for each pair, check if the parent is in the drops bitmap.
+	// If it is, and the child is also not already in the drops bitmap,
+	// add the child to the drops. Repeat this process until no
+	// new additions are made in an iteration.
+	changed := true
+	for changed {
+		changed = false
+		el.Iterate(func(child uint64, parent uint64) bool {
+			if drops.Contains(uint32(parent)) && !drops.Contains(uint32(child)) {
+				drops.Add(uint32(child))
+				changed = true
+			}
+			return true
+		})
+	}
+	return drops
+}
+
+// EdgeList returns an EdgeList interface representing the parent-child relationships between documents in the segment.
+// The EdgeList interface allows iteration over child-parent document pairs, enabling navigation of document hierarchies.
+// The underlying implementation may use a map or a slice, but callers should rely on the interface methods.
+func (sb *SegmentBase) EdgeList() EdgeList {
+	return sb.nstIndexCache.edgeList()
+}
+
+// Utility method to count the number of nested documents in the segment, not exported.
+func (sb *SegmentBase) countNested() uint64 {
+	return sb.nstIndexCache.countNested()
 }

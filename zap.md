@@ -36,26 +36,30 @@
 
 Footer section describes the configuration of particular ZAP file. The format of footer is version-dependent, so it is necessary to check `V` field before the parsing.
 
-            +===================================================+
-            | Stored Fields                                     |
-            |===================================================|
-    +-----> | Stored Fields Index                               |
-    |       |===================================================|
-    |       | Inverted Text Index Section                       |
-    |       |===================================================|
-    |       | Vector Index Section                              |
-    |       |===================================================|
-    |       | Sections Info                                     |
-    |       |===================================================|
-    |   +-> | Sections Index                                    |
-    |   |   |========+========+=======+========+=======+========|
-    |   |   |   D#   |   SF   |   S   |   CF   |   V   |   CC   | (Footer)
-    |   |   +========+========+=======+========+=======+========+
-    |   |                 |           |
-    +---------------------+           |
-        |-----------------------------+
+            +=================================================================+
+            | Stored Fields                                                   |
+            |=================================================================|
+    +-----> | Stored Fields Index                                             |
+    |       |=================================================================|
+    |       | Inverted Text Index Section                                     |
+    |       |=================================================================|
+    |       | Vector Index Section                                            |
+    |       |=================================================================|
+    |       | Synonym Index Section                                           |
+    |       |=================================================================|
+    |       | Sections Info                                                   |
+    |       |=================================================================|
+    |   +-> | Sections Index                                                  |
+    |   |   |==..==+=======+======+======+=====+======+=====+======+==========|
+    |   |   |  ID  |  IDL  |  D#  |  SF  |  S  |  CF  |  V  |  CC  | (Footer) |
+    |   |   +==..==+=======+======+======+=====+======+=====+======+==========+
+    |   |                             |     |
+    +---------------------------------+     |
+        |                                   |
+        +-----------------------------------+
 
-
+     ID. ID of the Writer Used.
+    IDL. Length of the Writer ID.
      D#. Number of Docs.
      SF. Stored Fields Index Offset.
       S. Sections Index Offset
@@ -66,18 +70,22 @@ Footer section describes the configuration of particular ZAP file. The format of
 ## Stored Fields
 
 Stored Fields Index is `D#` consecutive 64-bit unsigned integers - offsets, where relevant Stored Fields Data records are located.
+We also store the EdgeList for nested documents, if present in the segment, to preserve hierarchical relationships.
+If there are NE edges, it means there are NE nested or sub-documents, with each edge representing a child -> parent relationship.
 
-    0                                [SF]                   [SF + D# * 8]
-    | Stored Fields                  | Stored Fields Index              |
-    |================================|==================================|
-    |                                |                                  |
-    |       |--------------------|   ||--------|--------|. . .|--------||
-    |   |-> | Stored Fields Data |   ||      0 |      1 |     | D# - 1 ||
-    |   |   |--------------------|   ||--------|----|---|. . .|--------||
-    |   |                            |              |                   |
-    |===|============================|==============|===================|
-        |                                           |
-        |-------------------------------------------|
+    0                                [SF]                   [SF + D# * 8]                       
+    | Stored Fields                  | Stored Fields Index              | Edge List Information                                                  |
+    |================================|==================================|========================================================================|
+    |                                |                                  |                                                                        | 
+    |       |--------------------|   ||--------|--------|. . .|--------|||~~~~~~~~|~~~~~~~~|~~~~~~~~|~~~~~~~~|~~~~~~~~|. . .|~~~~~~~~~|~~~~~~~~~||
+    |   |-> | Stored Fields Data |   ||      0 |      1 |     | D# - 1 |||   NE   |   C1   |   P1   |   C2   |   P2   |     |   CNE   |   PNE   ||
+    |   |   |--------------------|   ||--------|----|---|. . .|--------|||~~~~~~~~|~~~~~~~~|~~~~~~~~|~~~~~~~~|~~~~~~~~|. . .|~~~~~~~~~|~~~~~~~~~||
+    |   |                            |              |                   |                                                                        |
+    |===|============================|==============|===================|========================================================================|
+
+        NE. Number of edges in the edge list.
+        Ci. Child Document Number for edge i.
+        Pi. Parent Document Number for edge i.
 
 Stored Fields Data is an arbitrary size record, which consists of metadata and [Snappy](https://github.com/golang/snappy)-compressed data.
 
@@ -163,33 +171,37 @@ In case of inverted text index, the dictionary is encoded in [Vellum](https://gi
 
 ## Vector Index Section
 
-In a vector index, each vector in a document is given a unique Id. This vector Id is to be used within the [Faiss](https://github.com/blevesearch/faiss) index. The mapping between the document Id and the vector Id is stored along with a serialized vector index. Doc Values are not applicable to this section.
+In a vector index, each vector is assigned a unique, monotonically increasing ID ranging from `0` to `N-1`, where `N` is the total number of vectors in the index. This ID is used internally by the [Faiss](https://github.com/blevesearch/faiss) index. Each vector ID maps to a document ID within the segment, and this mapping is stored as an array of size `N`.
 
         |================================================================+- Inverted Text Index Section
         |                                                                |
         |================================================================+- Vector Index Section
         |                                                                |
-        |   +~~~~~~~~~~+~~~~~~~+~~~~~+~~~~~~+                            |
-    +-------> DV Start | DVEnd | VIO | NVEC |                            |
-    |   |   +~~~~~~~~~~+~~~~~~~+~~~~~+~~~~~~+                            |
+        |   +~~~~~~~~~~+~~~~~~~~+~~~~~+~~~~~~+~~~~~~+                    |
+    +-------> DV Start | DV End | VIO | NVEC |  ML  |                    |
+    |   |   +~~~~~~~~~~+~~~~~~~~+~~~~~+~~~~~~+~~~~~~+                    |
     |   |                                                                |
-    |   |   +~~~~~~~~~~~~+~~~~~~~~~~~~+                                  |
-    |   |   | VectorID_0 |   DocID_0  |                                  |
-    |   |   +~~~~~~~~~~~~+~~~~~~~~~~~~+                                  |
-    |   |   | VectorID_1 |   DocID_1  |                                  |
-    |   |   +~~~~~~~~~~~~+~~~~~~~~~~~~+                                  |
-    |   |   |    ...     |    ...     |                                  |
-    |   |   +~~~~~~~~~~~~+~~~~~~~~~~~~+                                  |
-    |   |   | VectorID_N |   DocID_N  |                                  |
-    |   |   +~~~~~~~~~~~~+~~~~~~~~~~~~+                                  |
+    |   |   +~~~~~~~~~~~~~+                                              |
+    |   |   |   DocID_1   |                                              |
+    |   |   +~~~~~~~~~~~~~+                                              |
+    |   |   |   DocID_2   |                                              |
+    |   |   +~~~~~~~~~~~~~+                                              |
+    |   |   |     ...     |                                              |
+    |   |   +~~~~~~~~~~~~~+                                              |
+    |   |   |   DocID_N   |                                              |
+    |   |   +~~~~~~~~~~~~~+                                              |
+    |   |                                                                |
+    |   |   +~~~~~~~~~~~~~+                                              |
+    |   |   |  INDEX TYPE |                                              |
+    |   |   +~~~~~~~~~~~~~+                                              |
     |   |                                                                |
     |   |   +~~~~~~~~~~~~~+                                              |
     |   |   |  FAISS LEN  |                                              |
     |   |   +~~~~~~~~~~~~~+                                              |
     |   |                                                                |
-    |   |   +---------------------------+...+------------------------+   |
-    |   |   |                  SERIALIZED FAISS INDEX                |   |
-    |   |   +---------------------------+...+------------------------+   |
+    |   |   +---------------------------+...+----------------------+     |
+    |   |   |                SERIALIZED FAISS INDEX                |     |
+    |   |   +---------------------------+...+----------------------+     |
     |   |                                                                |
     |   |================================================================+- Synonym Index Section
     |   |                                                                |
@@ -204,6 +216,8 @@ In a vector index, each vector in a document is given a unique Id. This vector I
          VI   - Vector Index
          VIO  - Vector Index Optimized for
          NVEC - Number of vectors
+         ML   - Length of the vector to document ID map
+         INDEX TYPE - Type of the vector index
          FAISS LEN - Length of serialized FAISS index
 
 ## Synonym Index Section
@@ -218,19 +232,20 @@ In a synonyms index, the relationship between a term and its synonyms is represe
         |                                                                |
         |    (Offset)  +~~~~~+----------+...+---+                        |
         |   +--------->|  RL | ROARING64 BITMAP |                        |
-        |   |          +~~~~~+----------+...+---+                        +-------------------+         
-        |   |(Term -> Offset)                                                                |    
-        |   +--------+                                                                       |
-        |            |                            Term ID to Term map (NST Entries)          |   
-        |    +~~~~+~~~~+~~~~~[{~~~~~+~~~~+~~~~~~}{~~~~~+~~~~+~~~~~~}...{~~~~~+~~~~+~~~~~~}]  |
-        | +->| VL | VD | NST || TID | TL | Term || TID | TL | Term |   | TID | TL | Term |   |
-        | |  +~~~~+~~~~+~~~~~[{~~~~~+~~~~+~~~~~~}{~~~~~+~~~~+~~~~~~}...{~~~~~+~~~~+~~~~~~}]  |
-        | |                                                                                  |
-        | +----------------------------+                                                     |
-        |                              |                                                     |   
-        | +~~~~~~~~~~+~~~~~~~~+~~~~~~~~~~~~~~~~~+                                            |
-    +-----> DV Start | DV End | ThesaurusOffset |                                            |   
-    |   | +~~~~~~~~~~+~~~~~~~~+~~~~~~~~~~~~~~~~~+                        +-------------------+
+        |   |          +~~~~~+----------+...+---+                        +------------------------+
+        |   |(Term -> Offset)                                                                     |
+        |   |                                                                                     |
+        |   +--------+                                                                            |
+        |            |                            Term ID to Term map (NST Entries)               |
+        |    +~~~~+~~~~+~~~~~+~~~~[{~~~~~+~~~~+~~~~~~}{~~~~~+~~~~+~~~~~~}...{~~~~~+~~~~+~~~~~~}]  |
+        | +->| VL | VD | NST | ML || TID | TL | Term || TID | TL | Term |   | TID | TL | Term |   |
+        | |  +~~~~+~~~~+~~~~~+~~~~[{~~~~~+~~~~+~~~~~~}{~~~~~+~~~~+~~~~~~}...{~~~~~+~~~~+~~~~~~}]  |
+        | |                                                                                       |
+        | +----------------------------+                                                          |
+        |                              |                                                          |
+        | +~~~~~~~~~~+~~~~~~~~+~~~~~~~~~~~~~~~~~+                                                 |
+    +-----> DV Start | DV End | ThesaurusOffset |                                                 |
+    |   | +~~~~~~~~~~+~~~~~~~~+~~~~~~~~~~~~~~~~~+                        +------------------------+
     |   |                                                                |
     |   |                                                                |
     |   |================================================================+- Sections Info
@@ -246,6 +261,7 @@ In a synonyms index, the relationship between a term and its synonyms is represe
          VD  - Vellum Data (Term -> Offset)
          RL  - Roaring64 Length
          NST - Number of entries in the term ID to term map
+         ML  - Length of the term ID to term map
          TID - Term ID (32-bit)
          TL  - Term Length
 

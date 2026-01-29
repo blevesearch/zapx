@@ -165,9 +165,10 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	updatedFields := mergeUpdatedFields(segments)
 	fieldsInv = filterFields(fieldsInv, updatedFields)
 	fieldsMap = mapFields(fieldsInv)
-	fieldsOptions = finalizeFieldOptions(fieldsOptions, updatedFields)
-	// fieldsSame cannot be true if fields were deleted
 	if len(updatedFields) > 0 {
+		// finalize field options based on updated field info
+		fieldsOptions = finalizeFieldOptions(fieldsOptions, updatedFields)
+		// fieldsSame cannot be true if fields were deleted
 		fieldsSame = false
 	}
 
@@ -594,6 +595,60 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 	// now write out the stored doc index
 	for _, docNumOffset := range docNumOffsets {
 		err := binary.Write(w, binary.BigEndian, docNumOffset)
+		if err != nil {
+			return 0, nil, err
+		}
+	}
+
+	// calculate new edge list if applicable
+	var newEdgeList map[uint64]uint64
+
+	for segI, segment := range segments {
+		// check for the closure in meantime
+		if isClosed(closeCh) {
+			return 0, nil, seg.ErrClosed
+		}
+		// get the edgeList for this segment
+		edgeList := segment.EdgeList()
+		// if no edgeList, nothing to do
+		if edgeList == nil {
+			continue
+		}
+		newSegDocNums := rv[segI]
+		edgeList.Iterate(func(oldChild uint64, oldParent uint64) bool {
+			newParent := newSegDocNums[oldParent]
+			newChild := newSegDocNums[oldChild]
+			if newParent != docDropped &&
+				newChild != docDropped {
+				if newEdgeList == nil {
+					newEdgeList = make(map[uint64]uint64)
+				}
+				newEdgeList[newChild] = newParent
+			}
+			return true
+		})
+	}
+
+	// write out the new edge list
+	// first write out the number of entries
+	// which is also the number of valid subDocs
+	// in the merged segment
+	buf := make([]byte, binary.MaxVarintLen64)
+	n := binary.PutUvarint(buf, uint64(len(newEdgeList)))
+	_, err := w.Write(buf[:n])
+	if err != nil {
+		return 0, nil, err
+	}
+	// write the child -> parent edge list
+	// child and parent are both flattened doc ids
+	for child, parent := range newEdgeList {
+		n = binary.PutUvarint(buf, child)
+		_, err = w.Write(buf[:n])
+		if err != nil {
+			return 0, nil, err
+		}
+		n = binary.PutUvarint(buf, parent)
+		_, err = w.Write(buf[:n])
 		if err != nil {
 			return 0, nil, err
 		}

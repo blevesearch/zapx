@@ -28,7 +28,7 @@ const Version uint32 = 17
 
 const Type string = "zap"
 
-const fieldNotUninverted = math.MaxUint64
+const fieldNotUninverted uint64 = math.MaxUint64
 
 func (sb *SegmentBase) Persist(path string) error {
 	return PersistSegmentBase(sb, path)
@@ -170,6 +170,7 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		invIndexCache:       newInvertedIndexCache(),
 		vecIndexCache:       newVectorIndexCache(),
 		synIndexCache:       newSynonymIndexCache(),
+		nstIndexCache:       newNestedIndexCache(),
 		// following fields gets populated by loadFields
 		fieldsMap:     make(map[string]uint16),
 		fieldsOptions: make(map[string]index.FieldIndexingOptions),
@@ -185,6 +186,12 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 	}
 
 	err = sb.loadDvReaders()
+	if err != nil {
+		return nil, err
+	}
+
+	// initialize any of the caches if needed
+	err = sb.nstIndexCache.initialize(sb.numDocs, sb.getEdgeListOffset(), sb.mem)
 	if err != nil {
 		return nil, err
 	}

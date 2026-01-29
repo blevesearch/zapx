@@ -1,3 +1,17 @@
+//  Copyright (c) 2026 Couchbase, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// 		http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //go:build vectors
 // +build vectors
 
@@ -6,7 +20,6 @@ package zap
 import (
 	"encoding/binary"
 	"math"
-	"math/rand"
 	"os"
 	"testing"
 
@@ -326,19 +339,26 @@ func getSectionContentOffsets(sb *SegmentBase, offset uint64) (
 	docValueEnd, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
+	// read the vector optimized for value
 	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
 	numVecs, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
+	// read the length of the vector to docID map (unused for now)
+	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+
 	vecDocIDsMappingOffset = pos
 	for i := 0; i < int(numVecs); i++ {
-		_, n := binary.Varint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += uint64(n)
 		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
 	}
+
+	// read the type of vector index (unused for now)
+	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
 
 	indexBytesLen, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
@@ -377,13 +397,8 @@ func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
 		return nil, err
 	}
 
-	ids := make([]int64, len(dataset))
-	for i := 0; i < len(dataset); i++ {
-		ids[i] = int64(i)
-	}
-
 	if isIVF {
-		err = idx.SetDirectMap(2)
+		err = idx.SetDirectMap(1)
 		if err != nil {
 			return nil, err
 		}
@@ -394,7 +409,7 @@ func letsCreateVectorIndexOfTypeForTesting(inputData [][]float32, dims int,
 		}
 	}
 
-	idx.AddWithIDs(vecs, ids)
+	idx.Add(vecs)
 
 	return idx, nil
 }
@@ -467,7 +482,7 @@ func TestVectorSegment(t *testing.T) {
 	}
 
 	data := stubVecData
-	vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3, "IDMap2,Flat", false)
+	vecIndex, err := letsCreateVectorIndexOfTypeForTesting(data, 3, "Flat", false)
 	if err != nil {
 		t.Fatalf("error creating vector index %v", err)
 	}
@@ -485,15 +500,39 @@ func TestVectorSegment(t *testing.T) {
 	}
 
 	queryVec := []float32{0.0, 0.0, 0.0}
-	hitDocIDs := []uint64{2, 9, 9}
-	hitVecs := [][]float32{data[0], data[7][0:3], data[7][3:6]}
+	// With the deduplication logic for multi-vector documents, each document
+	// appears only once in the results with its best score. The search continues
+	// until k unique documents are found. Results are ordered by docID in the
+	// postings list.
+	//
+	// Expected unique documents (ordered by squared L2 distance, lower = closer):
+	//
+	// First Iteration:
+	// - docID 9: stubVecData[7][0:3] = {0.123, 0.456, 0.789}, L2 ≈ 0.84 (best)
+	// - docID 9: stubVecData[7][3:6] = {0.987, 0.654, 0.321}, L2 ≈ 1.50 (duplicate, discarded)
+	// - docID 2: stubVecData[0]      = {1.0, 2.0, 3.0},       L2 = 14
+	// We have 2 unique docs so far < 3 requested, continue searching...
+	//
+	// Second Iteration:
+	// - docID 8: stubVecData[6][0:3] = {1.23, 2.45, 2.867},   L2 ≈ 15.73 (best)
+	// - docID 6: stubVecData[4]      = {4.439, 0.307, 1.063}, L2 ≈ 20.92
+	// - docID 8: stubVecData[6][3:6] = {3.33, 4.56, 5.67},    L2 ≈ 64.03 (duplicate, discarded)
+	// We have 4 unique docs now >= 3 requested, stop searching.
+	//
+	// Final unique docs: [9, 2, 8, 6]
+	// Final scores: [0.85, 14, 15.74, 20.92]
+	//
+	// But iteration order is by docID: [2, 6, 8, 9]
+	// Shortening to k will be done in bleve's knn collector
+	hitDocIDs := []uint64{2, 6, 8, 9}
+	hitVecs := [][]float32{data[0], data[4], data[6][0:3], data[7][0:3]}
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
-		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", false, nil)
+		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		pl, err := vecIndex.Search([]float32{0.0, 0.0, 0.0}, 3, nil)
+		pl, err := vecIndex.Search(queryVec, 3, nil)
 		if err != nil {
 			vecIndex.Close()
 			t.Fatal(err)
@@ -509,6 +548,11 @@ func TestVectorSegment(t *testing.T) {
 			}
 			if next == nil {
 				break
+			}
+
+			if hitCounter >= len(hitDocIDs) {
+				vecIndex.Close()
+				t.Fatalf("more results than expected, got extra docID %d", next.Number())
 			}
 
 			expectedDocID := hitDocIDs[hitCounter]
@@ -527,23 +571,6 @@ func TestVectorSegment(t *testing.T) {
 			hitCounter++
 		}
 		vecIndex.Close()
-	}
-}
-
-// Test to check if 2 identical vectors return unique hashes.
-func TestHashCode(t *testing.T) {
-	var v1 []float32
-	for i := 0; i < 10; i++ {
-		v1 = append(v1, rand.Float32())
-	}
-
-	h1 := hashCode(v1)
-
-	h2 := hashCode(v1)
-
-	if h1 == h2 {
-		t.Fatal("expected unique hashes for the same vector each time the " +
-			"hash is computed")
 	}
 }
 
@@ -578,11 +605,35 @@ func TestPersistedVectorSegment(t *testing.T) {
 	}()
 
 	data := stubVecData
-	queryVec := []float32{0.0, 0.0, 0.0}
-	hitDocIDs := []uint64{2, 9, 9}
-	hitVecs := [][]float32{data[0], data[7][0:3], data[7][3:6]}
+	queryVec := []float32{0.555, 0.555, 0.555}
+	// With the deduplication logic for multi-vector documents, each document
+	// appears only once in the results with its best score. The search continues
+	// until k unique documents are found. Results are ordered by docID in the
+	// postings list.
+	//
+	// Expected unique documents (ordered by squared L2 distance, lower = closer):
+	//
+	// First Iteration (k=3 requested):
+	// - docID 9: stubVecData[7][0:3] = {0.123, 0.456, 0.789}, L2 ≈ 0.25 (best)
+	// - docID 9: stubVecData[7][3:6] = {0.987, 0.654, 0.321}, L2 ≈ 0.25 (duplicate, discarded)
+	// - docID 2: stubVecData[0]      = {1.0, 2.0, 3.0},       L2 ≈ 8.26
+	// We have 2 unique docs so far < 3 requested, continue searching...
+	//
+	// Second Iteration (excluding vectors from first iteration):
+	// - docID 8: stubVecData[6][0:3] = {1.23, 2.45, 2.867},   L2 ≈ 9.39 (best)
+	// - docID 6: stubVecData[4]      = {4.439, 0.307, 1.063}, L2 ≈ 15.40
+	// - docID 8: stubVecData[6][3:6] = {3.33, 4.56, 5.67},    L2 ≈ 49.90 (duplicate, discarded)
+	//
+	// We have 4 unique docs now >= 3 requested, stop searching.
+	// Final unique docs: [9, 2, 8, 6]
+	// Final scores: [0.24, 8.27, 9.39, 15.40]
+	//
+	// Iteration order is by docID: [2, 6, 8, 9]
+	// Shortening to k will be done in bleve's knn collector
+	hitDocIDs := []uint64{2, 6, 8, 9}
+	hitVecs := [][]float32{data[0], data[4], data[6][0:3], data[7][0:3]}
 	if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
-		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", false, nil)
+		vecIndex, err := vecSeg.InterpretVectorIndex("stubVec", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -604,6 +655,11 @@ func TestPersistedVectorSegment(t *testing.T) {
 			}
 			if next == nil {
 				break
+			}
+
+			if hitCounter >= len(hitDocIDs) {
+				vecIndex.Close()
+				t.Fatalf("more results than expected, got extra docID %d", next.Number())
 			}
 
 			expectedDocID := hitDocIDs[hitCounter]

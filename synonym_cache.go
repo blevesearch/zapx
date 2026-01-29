@@ -86,6 +86,10 @@ func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte) (*
 	if numSyns == 0 {
 		return nil, nil, 0, fmt.Errorf("no synonyms found")
 	}
+
+	// read the size of the synonym term map (unused for now)
+	_, n = binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
 	synTermMap := make(map[uint32][]byte, numSyns)
 	for i := 0; i < int(numSyns); i++ {
 		synID, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])

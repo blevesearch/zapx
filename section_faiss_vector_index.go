@@ -361,7 +361,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	// in indexData added into the index.
 	nlist := determineCentroids(nvecs)
 	nprobe := calculateNprobe(nlist, indexOptimizedFor)
-	indexDescription, indexClass := determineFloatIndexToUse(nvecs, nlist, indexOptimizedFor)
+	indexDescription, indexClass, metric := determineFloatIndexToUse(nvecs, nlist, indexOptimizedFor, metric)
 	// freeing the reconstructed indexes immediately - waiting till the end
 	// to do the same is not needed because the following operations don't need
 	// the reconstructed ones anymore and doing so will hold up memory which can
@@ -588,25 +588,25 @@ func determineCentroids(nvecs int) int {
 
 // determineIndexToUse returns a description string for the index and quantizer type,
 // and an index type constant.
-func determineFloatIndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, int) {
-	if nvecs >= 10000 {
-		return "Flat", IndexTypeFlat
+func determineFloatIndexToUse(nvecs, nlist int, indexOptimizedFor string, metric int) (string, int, int) {
+	if indexOptimizedFor == index.IndexOptimizedForBinary && nvecs >= 10000 {
+		return "Flat", IndexTypeFlat, faiss.MetricInnerProduct
 	}
 	if indexOptimizedFor == index.IndexOptimizedForMemoryEfficient {
 		switch {
 		case nvecs >= 1000:
-			return fmt.Sprintf("IVF%d,SQ4", nlist), IndexTypeIVF
+			return fmt.Sprintf("IVF%d,SQ4", nlist), IndexTypeIVF, metric
 		default:
-			return "Flat", IndexTypeFlat
+			return "Flat", IndexTypeFlat, metric
 		}
 	}
 	switch {
 	case nvecs >= 10000:
-		return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF
+		return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF, metric
 	case nvecs >= 1000:
-		return fmt.Sprintf("IVF%d,Flat", nlist), IndexTypeIVF
+		return fmt.Sprintf("IVF%d,Flat", nlist), IndexTypeIVF, metric
 	default:
-		return "Flat", IndexTypeFlat
+		return "Flat", IndexTypeFlat, metric
 	}
 }
 
@@ -632,8 +632,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 			metric = faiss.MetricInnerProduct
 		}
 		nlist := determineCentroids(nvecs)
-		indexDescription, indexClass := determineFloatIndexToUse(nvecs, nlist, content.optimizedFor)
-
+		indexDescription, indexClass, metric := determineFloatIndexToUse(nvecs, nlist, content.optimizedFor, metric)
 		fIndex, err := makeFaissFloatIndex(dims, indexDescription, metric, content.vectors, indexClass, calculateNprobe(nlist, content.optimizedFor))
 		if err != nil {
 			return err

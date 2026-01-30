@@ -399,9 +399,9 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	_, err = w.Write(mergedIndexBytes)
 
 	if indexType == FaissBinaryIndex {
-		binDescription := determineBinaryIndexToUse(nvecs, nlist)
+		binDescription, isFlat := determineBinaryIndexToUse(nvecs, nlist)
 
-		bIndex, err := makeFaissBinaryIndex(dims, binDescription, metric, indexData, nprobe)
+		bIndex, err := makeFaissBinaryIndex(dims, binDescription, isFlat, metric, indexData, nprobe)
 		if err != nil {
 			return err
 		}
@@ -503,12 +503,12 @@ func convertToBinary(vecs []float32, dims int) []uint8 {
 	return packed
 }
 
-func determineBinaryIndexToUse(nvecs, nlist int) string {
+func determineBinaryIndexToUse(nvecs, nlist int) (string, bool) {
 	switch {
-	case nvecs >= 10000:
-		return fmt.Sprintf("BIVF%d", nlist)
+	case nvecs >= 1000:
+		return fmt.Sprintf("BIVF%d", nlist), false
 	default:
-		return ""
+		return "BFlat", true
 	}
 }
 
@@ -516,7 +516,7 @@ func determineIndexTypeFromOptimization(indexOptimizedFor string) uint64 {
 	return FaissBinaryIndex
 }
 
-func makeFaissBinaryIndex(dims int, description string, metric int, vecs []float32,
+func makeFaissBinaryIndex(dims int, description string, isFlat bool, metric int, vecs []float32,
 	nprobe int32) (faiss.BinaryIndex, error) {
 	if description == "" {
 		return nil, nil
@@ -528,18 +528,20 @@ func makeFaissBinaryIndex(dims int, description string, metric int, vecs []float
 
 	bvecs := convertToBinary(vecs, dims)
 
-	err = index.SetDirectMap(1)
-	if err != nil {
-		index.Close()
-		return nil, err
-	}
+	if !isFlat {
+		err = index.SetDirectMap(1)
+		if err != nil {
+			index.Close()
+			return nil, err
+		}
 
-	index.SetNProbe(nprobe)
+		index.SetNProbe(nprobe)
 
-	err = index.Train(bvecs)
-	if err != nil {
-		index.Close()
-		return nil, err
+		err = index.Train(bvecs)
+		if err != nil {
+			index.Close()
+			return nil, err
+		}
 	}
 
 	err = index.Add(bvecs)
@@ -589,25 +591,25 @@ func determineCentroids(nvecs int) int {
 // determineIndexToUse returns a description string for the index and quantizer type,
 // and an index type constant.
 func determineFloatIndexToUse(nvecs, nlist int, indexOptimizedFor string, metric int) (string, int, int) {
-	if indexOptimizedFor == index.IndexOptimizedForBinary && nvecs >= 10000 {
-		return "Flat", IndexTypeFlat, faiss.MetricInnerProduct
-	}
-	if indexOptimizedFor == index.IndexOptimizedForMemoryEfficient {
-		switch {
-		case nvecs >= 1000:
-			return fmt.Sprintf("IVF%d,SQ4", nlist), IndexTypeIVF, metric
-		default:
-			return "Flat", IndexTypeFlat, metric
-		}
-	}
-	switch {
-	case nvecs >= 10000:
-		return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF, metric
-	case nvecs >= 1000:
-		return fmt.Sprintf("IVF%d,Flat", nlist), IndexTypeIVF, metric
-	default:
-		return "Flat", IndexTypeFlat, metric
-	}
+	// if indexOptimizedFor == index.IndexOptimizedForBinary {
+	return "Flat", IndexTypeFlat, faiss.MetricInnerProduct
+	// }
+	// if indexOptimizedFor == index.IndexOptimizedForMemoryEfficient {
+	// 	switch {
+	// 	case nvecs >= 1000:
+	// 		return fmt.Sprintf("IVF%d,SQ4", nlist), IndexTypeIVF, metric
+	// 	default:
+	// 		return "Flat", IndexTypeFlat, metric
+	// 	}
+	// }
+	// switch {
+	// case nvecs >= 10000:
+	// 	return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF, metric
+	// case nvecs >= 1000:
+	// 	return fmt.Sprintf("IVF%d,Flat", nlist), IndexTypeIVF, metric
+	// default:
+	// 	return "Flat", IndexTypeFlat, metric
+	// }
 }
 
 func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
@@ -649,7 +651,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 		indexType := determineIndexTypeFromOptimization(content.optimizedFor)
 		var bIndexBytes []byte
 		if indexType == FaissBinaryIndex {
-			bIndex, err := makeFaissBinaryIndex(dims, determineBinaryIndexToUse(nvecs, nlist), metric, content.vectors, calculateNprobe(nlist, content.optimizedFor))
+			binDesc, isFlat := determineBinaryIndexToUse(nvecs, nlist)
+			bIndex, err := makeFaissBinaryIndex(dims, binDesc, isFlat, metric, content.vectors, calculateNprobe(nlist, content.optimizedFor))
 			if err != nil {
 				return err
 			}

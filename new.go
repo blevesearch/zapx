@@ -45,7 +45,7 @@ func (z *ZapPlugin) New(results []index.Document) (
 	return z.newWithChunkMode(results, DefaultChunkMode, nil)
 }
 
-func (z *ZapPlugin) NewEx(results []index.Document, config map[string]interface{}) (
+func (z *ZapPlugin) NewUsing(results []index.Document, config map[string]interface{}) (
 	segment.Segment, uint64, error) {
 	return z.newWithChunkMode(results, DefaultChunkMode, config)
 }

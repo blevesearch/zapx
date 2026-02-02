@@ -38,9 +38,9 @@ func init() {
 	reflectStaticSizeSegmentBase = int(unsafe.Sizeof(sb))
 }
 
-// OpenEx returns a zap impl of a segment which tracks some config values during
+// OpenUsing returns a zap impl of a segment which tracks some config values during
 // the its lifetime.
-func (z *ZapPlugin) OpenEx(path string, config map[string]interface{}) (segment.Segment, error) {
+func (z *ZapPlugin) OpenUsing(path string, config map[string]interface{}) (segment.Segment, error) {
 	return z.open(path, config)
 }
 

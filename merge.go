@@ -42,7 +42,7 @@ func (z *ZapPlugin) Merge(segments []seg.Segment, drops []*roaring.Bitmap, path 
 	return z.merge(segments, drops, path, closeCh, s, nil)
 }
 
-func (z *ZapPlugin) MergeEx(segments []seg.Segment, drops []*roaring.Bitmap, path string,
+func (z *ZapPlugin) MergeUsing(segments []seg.Segment, drops []*roaring.Bitmap, path string,
 	closeCh chan struct{}, s seg.StatsReporter, config map[string]interface{}) (
 	[][]uint64, uint64, error) {
 	return z.merge(segments, drops, path, closeCh, s, config)

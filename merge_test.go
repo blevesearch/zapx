@@ -145,7 +145,7 @@ func testMergeWithEmptySegments(t *testing.T, before bool, numEmptySegments int)
 		fname := fmt.Sprintf("scorch-empty-%d.zap", i)
 
 		_ = os.RemoveAll("/tmp/" + fname)
-		emptySegment, _, err := zapPlugin.newWithChunkFactor([]index.Document{}, 1024)
+		emptySegment, _, err := zapPlugin.newWithChunkFactor([]index.Document{}, 1024, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -643,7 +643,7 @@ func buildTestSegmentMultiHelper(docIds []string) (*SegmentBase, uint64, error) 
 		doc2,
 	}
 
-	seg, size, err := zapPlugin.newWithChunkFactor(results, 1024)
+	seg, size, err := zapPlugin.newWithChunkFactor(results, 1024, nil)
 	return seg.(*SegmentBase), size, err
 }
 

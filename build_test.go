@@ -48,28 +48,28 @@ func buildTestSegment() (*SegmentBase, uint64, error) {
 		doc,
 	}
 
-	seg, size, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode)
+	seg, size, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode, nil)
 	return seg.(*SegmentBase), size, err
 }
 
 func buildTestSegmentMulti() (*SegmentBase, uint64, error) {
 	results := buildTestAnalysisResultsMulti()
 
-	seg, size, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode)
+	seg, size, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode, nil)
 	return seg.(*SegmentBase), size, err
 }
 
 func buildTestSegmentMultiWithChunkFactor(chunkFactor uint32) (*SegmentBase, uint64, error) {
 	results := buildTestAnalysisResultsMulti()
 
-	seg, size, err := zapPlugin.newWithChunkMode(results, chunkFactor)
+	seg, size, err := zapPlugin.newWithChunkMode(results, chunkFactor, nil)
 	return seg.(*SegmentBase), size, err
 }
 
 func buildTestSegmentMultiWithDifferentFields(includeDocA, includeDocB bool) (*SegmentBase, uint64, error) {
 	results := buildTestAnalysisResultsMultiWithDifferentFields(includeDocA, includeDocB)
 
-	seg, size, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode)
+	seg, size, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode, nil)
 	return seg.(*SegmentBase), size, err
 }
 
@@ -152,7 +152,7 @@ func buildTestSegmentWithDefaultFieldMapping(chunkFactor uint32) (
 		doc,
 	}
 
-	sb, _, err := zapPlugin.newWithChunkMode(results, chunkFactor)
+	sb, _, err := zapPlugin.newWithChunkMode(results, chunkFactor, nil)
 
 	return sb.(*SegmentBase), fields, err
 }

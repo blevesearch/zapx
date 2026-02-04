@@ -38,8 +38,18 @@ func init() {
 	reflectStaticSizeSegmentBase = int(unsafe.Sizeof(sb))
 }
 
+// OpenUsing returns a zap impl of a segment which tracks some config values during
+// the its lifetime.
+func (z *ZapPlugin) OpenUsing(path string, config map[string]interface{}) (segment.Segment, error) {
+	return z.open(path, config)
+}
+
 // Open returns a zap impl of a segment
-func (*ZapPlugin) Open(path string) (segment.Segment, error) {
+func (z *ZapPlugin) Open(path string) (segment.Segment, error) {
+	return z.open(path, nil)
+}
+
+func (*ZapPlugin) open(path string, config map[string]interface{}) (segment.Segment, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -60,6 +70,7 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 			synIndexCache:  newSynonymIndexCache(),
 			nstIndexCache:  newNestedIndexCache(),
 			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
+			config:         config,
 		},
 		f:    f,
 		mm:   mm,
@@ -119,6 +130,7 @@ type SegmentBase struct {
 
 	// index update specific tracking
 	updatedFields map[string]*index.UpdateFieldInfo
+	config        map[string]interface{} // config for the segment
 
 	// section-specific caches
 	invIndexCache *invertedIndexCache

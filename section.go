@@ -40,7 +40,7 @@ type section interface {
 	// as part of the merge API, write the merged data to the writer and also track
 	// the starting offset of this newly merged section data.
 	Merge(opaque map[int]resetable, segments []*SegmentBase, drops []*roaring.Bitmap, fieldsInv []string,
-		newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error
+		newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}, config map[string]interface{}) error
 
 	// opaque is used to track the data specific to this section. its not visible
 	// to the other sections and is only visible and freely modifiable by this specifc

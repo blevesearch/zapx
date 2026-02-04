@@ -452,7 +452,7 @@ func (s *synonymIndexSection) AddrForField(opaque map[int]resetable, fieldID int
 // synonym index section.
 func (s *synonymIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
 	drops []*roaring.Bitmap, fieldsInv []string, newDocNumsIn [][]uint64,
-	w *CountHashWriter, closeCh chan struct{}) error {
+	w *CountHashWriter, closeCh chan struct{}, config map[string]interface{}) error {
 	so := s.getSynonymIndexOpaque(opaque)
 	thesaurusAddrs, fieldIDtoThesaurusID, err := mergeAndPersistSynonymSection(segments, drops, fieldsInv, newDocNumsIn, w, closeCh)
 	if err != nil {

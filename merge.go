@@ -62,11 +62,11 @@ func (*ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path st
 			panic(fmt.Sprintf("oops, unexpected segment type: %T", segment))
 		}
 	}
-	return mergeSegmentBases(segmentBases, drops, path, DefaultChunkMode, closeCh, s)
+	return mergeSegmentBases(segmentBases, drops, path, DefaultChunkMode, closeCh, s, config)
 }
 
 func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, path string,
-	chunkMode uint32, closeCh chan struct{}, s seg.StatsReporter) (
+	chunkMode uint32, closeCh chan struct{}, s seg.StatsReporter, config map[string]interface{}) (
 	[][]uint64, uint64, error) {
 	flag := os.O_RDWR | os.O_CREATE
 
@@ -87,7 +87,7 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 	cr := NewCountHashWriterWithStatsReporter(br, s)
 
 	newDocNums, numDocs, storedIndexOffset, _, _, sectionsIndexOffset, err :=
-		mergeToWriter(segmentBases, drops, chunkMode, cr, closeCh)
+		mergeToWriter(segmentBases, drops, chunkMode, cr, closeCh, config)
 	if err != nil {
 		cleanup()
 		return nil, 0, err
@@ -166,7 +166,7 @@ func finalizeFieldOptions(fieldOptions map[string]index.FieldIndexingOptions,
 }
 
 func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
-	chunkMode uint32, cr *CountHashWriter, closeCh chan struct{}) (
+	chunkMode uint32, cr *CountHashWriter, closeCh chan struct{}, config map[string]interface{}) (
 	newDocNums [][]uint64, numDocs, storedIndexOffset uint64,
 	fieldsInv []string, fieldsMap map[string]uint16, sectionsIndexOffset uint64,
 	err error) {
@@ -213,7 +213,7 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		for i, x := range segmentSections {
 			mergeOpaque[int(i)] = x.InitOpaque(args)
 
-			err = x.Merge(mergeOpaque, segments, drops, fieldsInv, newDocNums, cr, closeCh)
+			err = x.Merge(mergeOpaque, segments, drops, fieldsInv, newDocNums, cr, closeCh, config)
 			if err != nil {
 				return nil, 0, 0, nil, nil, 0, err
 			}

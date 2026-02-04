@@ -62,6 +62,7 @@ func (v *faissVectorIndexSection) Process(opaque map[int]resetable, docNum uint3
 	if fieldID == math.MaxUint16 {
 		return
 	}
+
 	if vf, ok := field.(index.VectorField); ok {
 		vo := v.getVectorIndexOpaque(opaque)
 		vo.process(vf, fieldID, docNum)
@@ -81,6 +82,8 @@ func (v *faissVectorIndexSection) AddrForField(opaque map[int]resetable, fieldID
 // vecIndexInfo contains information specific to a vector index,
 // including metadata and the faiss index pointer itself.
 type vecIndexInfo struct {
+	numVecs           int
+	field             string
 	startOffset       int
 	indexSize         uint64
 	vecIds            []int64
@@ -90,9 +93,11 @@ type vecIndexInfo struct {
 
 // Merge merges vector indexes from multiple segments into a single index.
 func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
-	drops []*roaring.Bitmap, fieldsInv []string,
-	newDocNumsIn [][]uint64, w *CountHashWriter, closeCh chan struct{}) error {
+	drops []*roaring.Bitmap, fieldsInv []string, newDocNumsIn [][]uint64, w *CountHashWriter,
+	closeCh chan struct{}, config map[string]interface{}) error {
 	vo := v.getVectorIndexOpaque(opaque)
+	vo.config = config
+	// the segments with valid vector sections in them
 	// preallocating the space over here, if there are too many fields
 	// in the segment this will help by avoiding multiple allocation
 	// calls.
@@ -146,6 +151,8 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			newIndexInfo := &vecIndexInfo{
 				indexOptimizedFor: index.VectorIndexOptimizationsReverseLookup[int(indexOptimizationTypeInt)],
 				vecIds:            make([]int64, 0, numVecs),
+				numVecs:           int(numVecs),
+				field:             fieldName,
 			}
 			for vecID := 0; vecID < int(numVecs); vecID++ {
 				docID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
@@ -188,7 +195,19 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		if err != nil {
 			return err
 		}
-		err = vo.mergeAndWriteVectorIndexes(vecSegs, indexes, w, closeCh)
+
+		// use this with index optimization type
+		callback, _ := vo.config["getCentroidIndexCallback"]
+		var centroidIndex *faiss.IndexImpl
+		training, ok := vo.config["training"]
+		pretraining := ok && training.(bool)
+		if callback != nil && !pretraining {
+			centroidIndex, err = callback.(func(field string) (*faiss.IndexImpl, error))(fieldName)
+			if err != nil {
+				return err
+			}
+		}
+		err = vo.mergeAndWriteVectorIndexes(centroidIndex, vecSegs, indexes, w, closeCh)
 		if err != nil {
 			return err
 		}
@@ -245,8 +264,28 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *CountHashWriter
 	return nil
 }
 
-// calculateNprobe calculates the nprobe count given nlist (number of centroids)
-// based on the metric the index is optimized for.
+func (v *vectorIndexOpaque) flushVectorIndex(indexBytes []byte, w *CountHashWriter) error {
+	tempBuf := v.grabBuf(binary.MaxVarintLen64)
+
+	// write the type of the vector index (unused for now)
+	n := binary.PutUvarint(tempBuf, 0)
+	_, err := w.Write(tempBuf[:n])
+	if err != nil {
+		return err
+	}
+
+	n = binary.PutUvarint(tempBuf, uint64(len(indexBytes)))
+	_, err = w.Write(tempBuf[:n])
+	if err != nil {
+		return err
+	}
+
+	_, err = w.Write(indexBytes)
+	return err
+}
+
+// Calculates the nprobe count, given nlist(number of centroids) based on
+// the metric the index is optimized for.
 func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 	nprobe := int32(math.Sqrt(float64(nlist)))
 	if indexOptimizedFor == index.IndexOptimizedForLatency {
@@ -258,13 +297,104 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 	return nprobe
 }
 
+func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex *faiss.IndexImpl,
+	vecIndexes []*vecIndexInfo, w *CountHashWriter, closeCh chan struct{}) error {
+	defer freeReconstructedIndexes(vecIndexes)
+	var mergeCandidates []int
+	var indexOptimizedFor string
+	var dims, metric, nvecs, reconsCap int
+	var trained bool
+	for i := 0; i < len(vecIndexes); i++ {
+		if isClosed(closeCh) {
+			return seg.ErrClosed
+		}
+		if len(vecIndexes[i].vecIds) == 0 {
+			continue
+		} else if len(vecIndexes[i].vecIds) >= 10000 {
+			// merging only IVFSQ8 indexes
+			// all IVF<same class> indexes are eligible for merging
+			mergeCandidates = append(mergeCandidates, i)
+		} else {
+			indexReconsLen := len(vecIndexes[i].vecIds) * vecIndexes[i].faissIndex.D()
+			if indexReconsLen > reconsCap {
+				reconsCap = indexReconsLen
+			}
+		}
+		nvecs += len(vecIndexes[i].vecIds)
+		indexOptimizedFor = vecIndexes[i].indexOptimizedFor
+		dims = vecIndexes[i].faissIndex.D()
+		metric = int(vecIndexes[i].faissIndex.MetricType())
+
+	}
+
+	nlist := centroidIndex.Nlist()
+	indexDescription, indexClass := determineIndexToUse(nvecs, nlist, indexOptimizedFor)
+	faissIndex, err := faiss.IndexFactory(dims, indexDescription, metric)
+	if err != nil {
+		return err
+	}
+	defer faissIndex.Close()
+
+	reconsVecs := make([]float32, 0, reconsCap)
+	if indexClass == IndexTypeIVF {
+		err = faissIndex.SetDirectMap(1)
+		if err != nil {
+			return err
+		}
+
+		nprobe := calculateNprobe(nlist, indexOptimizedFor)
+		faissIndex.SetNProbe(nprobe)
+		if !trained {
+			// The centroid index will be an IVFSQ8 index - but with no vectors in it. The coase quantizer of that
+			// index will be cloned over here
+			err = faissIndex.SetQuantizers(centroidIndex)
+			if err != nil {
+				return err
+			}
+		}
+		var j int
+		for i := 0; i < len(vecIndexes); i++ {
+			if isClosed(closeCh) {
+				return seg.ErrClosed
+			}
+			if j < len(mergeCandidates) && i == mergeCandidates[j] {
+				err = faissIndex.MergeFrom(vecIndexes[i].faissIndex, faissIndex.Ntotal())
+				if err != nil {
+					return err
+				}
+				j++
+			} else {
+				// reconstruction will be done on IVFFlat and Flat indexes
+				neededReconsLen := len(vecIndexes[i].vecIds) * faissIndex.D()
+				reconsVecs = reconsVecs[:neededReconsLen]
+				reconsVecs, err := vecIndexes[i].faissIndex.ReconstructBatch(vecIndexes[i].vecIds, reconsVecs)
+				if err != nil {
+					return err
+				}
+				err = faissIndex.Add(reconsVecs)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+	}
+
+	mergedIndexBytes, err := faiss.WriteIndexIntoBuffer(faissIndex)
+	if err != nil {
+		return err
+	}
+
+	return v.flushVectorIndex(mergedIndexBytes, w)
+}
+
 // todo: naive implementation. need to keep in mind the perf implications and improve on this.
 // perhaps, parallelized merging can help speed things up over here.
-func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
+func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex *faiss.IndexImpl, sbs []*SegmentBase,
 	vecIndexes []*vecIndexInfo, w *CountHashWriter, closeCh chan struct{}) error {
 	// safe to assume that all the indexes are of the same config values, given
 	// that they are extracted from the field mapping info.
-	var dims, metric, indexDataCap, reconsCap int
+	var dims, metric, indexDataCap, reconsCap, totalVecs int
 	var indexOptimizedFor string
 	var validMerge bool
 	for segI, segBase := range sbs {
@@ -290,6 +420,15 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 			freeReconstructedIndexes(vecIndexes)
 			return err
 		}
+		if len(vecIndexes[segI].vecIds) > 0 {
+			indexReconsLen := len(vecIndexes[segI].vecIds) * faissIndex.D()
+			if indexReconsLen > reconsCap {
+				reconsCap = indexReconsLen
+			}
+			indexDataCap += indexReconsLen
+			totalVecs += len(vecIndexes[segI].vecIds)
+		}
+
 		// set the dims and metric values from the constructed index.
 		dims = faissIndex.D()
 		// at least one valid index to be merged, mark the merge as valid.
@@ -318,6 +457,14 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	// total number of vectors in the vector index after merge
 	// used to determine the index type to be created.
 	nvecs := 0
+
+	// hardcoded - refactor later
+	// fast merge only applicable for IVFSQ8 class indexes
+	if totalVecs >= 10000 && centroidIndex != nil {
+		return v.fastMergeIndexes(centroidIndex, vecIndexes, w, closeCh)
+	}
+
+	var err error
 	for _, currVecIndex := range vecIndexes {
 		if isClosed(closeCh) {
 			freeReconstructedIndexes(vecIndexes)
@@ -336,6 +483,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 				freeReconstructedIndexes(vecIndexes)
 				return err
 			}
+
 			indexData = append(indexData, recons...)
 			nvecs += currNumVecs
 		}
@@ -604,7 +752,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 
 func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, docNum uint32) {
 	if fieldID == math.MaxUint16 {
-		// doc processing checkpoint - no action needed
+		// doc processing checkpoint. currently nothing to do
 		return
 	}
 	vec := field.Vector()
@@ -647,9 +795,15 @@ func (v *faissVectorIndexSection) getVectorIndexOpaque(opaque map[int]resetable)
 }
 
 func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) resetable {
+
+	config := make(map[string]interface{})
+	if conf, ok := args["config"]; ok {
+		config = conf.(map[string]interface{})
+	}
 	rv := &vectorIndexOpaque{
 		fieldAddrs:       make(map[uint16]int),
 		fieldVectorIndex: make(map[uint16]*vectorIndexContent),
+		config:           config,
 	}
 	for k, v := range args {
 		rv.Set(k, v)
@@ -674,6 +828,9 @@ type vectorIndexContent struct {
 
 // vectorIndexOpaque holds the internal state for vector index processing.
 type vectorIndexOpaque struct {
+	init   bool
+	config map[string]interface{}
+
 	bytesWritten uint64
 	// fieldAddrs maps fieldID to the address of its vector section
 	fieldAddrs map[uint16]int

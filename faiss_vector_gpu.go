@@ -18,190 +18,174 @@
 package zap
 
 import (
-	"math"
-	"math/rand/v2"
 	"sync"
+	"time"
 
 	faiss "github.com/blevesearch/go-faiss"
 )
 
-var (
-	// NumGPUs is the number of available GPU devices
-	NumGPUs int
-	// GPULocks is a slice of mutexes for synchronizing access to GPU resources
-	// Primarily used for synchronizing calls to TransferToGPU and TransferToCPU
-	GPULocks []*sync.Mutex
+const (
+	DefaultBatchExecutionDelay = time.Duration(100 * time.Millisecond)
+	DefaultMaxBatchSize        = 512
 )
 
-func init() {
-	n, err := faiss.NumGPUs()
-	if err != nil {
-		NumGPUs = 0
+type GPUIndexSearchCallbackFunc func(qVector []float32, k int64) ([]float32, []int64, error)
+
+// ----------------------------------------------------------------
+// GPU Index
+// ----------------------------------------------------------------
+
+type requestBatch struct {
+	dims      int
+	vectors   []float32
+	k         []int64
+	respChans []chan *gpuResponse
+}
+
+func newRequestBatch(dims int) *requestBatch {
+	return &requestBatch{
+		dims:      dims,
+		vectors:   make([]float32, 0, DefaultMaxBatchSize*dims),
+		k:         make([]int64, 0, DefaultMaxBatchSize),
+		respChans: make([]chan *gpuResponse, 0, DefaultMaxBatchSize),
+	}
+}
+
+func (r *requestBatch) add(vector []float32, k int64, respChan chan *gpuResponse) {
+	r.vectors = append(r.vectors, vector...)
+	r.k = append(r.k, k)
+	r.respChans = append(r.respChans, respChan)
+}
+
+func (r *requestBatch) reset() {
+	r.vectors = r.vectors[:0]
+	r.k = r.k[:0]
+	r.respChans = r.respChans[:0]
+}
+
+func (r *requestBatch) count() int {
+	return len(r.k)
+}
+
+type gpuRequest struct {
+	vector   []float32
+	k        int64
+	respChan chan *gpuResponse
+}
+
+type gpuResponse struct {
+	distances []float32
+	labels    []int64
+	err       error
+}
+
+type batchWorker struct {
+	batch    *requestBatch
+	ticker   *time.Ticker
+	searchFn GPUIndexSearchCallbackFunc
+	reqChan  chan *gpuRequest
+	closeCh  chan struct{}
+	mu       sync.Mutex
+	pending  []*gpuRequest
+}
+
+func newBatchWorker(dims int, searchFn GPUIndexSearchCallbackFunc) *batchWorker {
+	return &batchWorker{
+		batch:    newRequestBatch(dims),
+		ticker:   time.NewTicker(DefaultBatchExecutionDelay),
+		searchFn: searchFn,
+		reqChan:  make(chan *gpuRequest, DefaultMaxBatchSize),
+		closeCh:  make(chan struct{}),
+		pending:  make([]*gpuRequest, 0, DefaultMaxBatchSize),
+	}
+}
+
+func (b *batchWorker) monitor() {
+	for {
+		select {
+		case <-b.ticker.C:
+			b.executeBatch()
+		case req := <-b.reqChan:
+			b.mu.Lock()
+			b.pending = append(b.pending, req)
+			b.mu.Unlock()
+		case <-b.closeCh:
+			b.executeBatch()
+			b.ticker.Stop()
+			return
+		}
+	}
+}
+
+func (b *batchWorker) executeBatch() {
+	b.mu.Lock()
+	if len(b.pending) == 0 {
+		b.mu.Unlock()
 		return
 	}
-	NumGPUs = n
-	GPULocks = make([]*sync.Mutex, NumGPUs)
-	for i := 0; i < NumGPUs; i++ {
-		GPULocks[i] = &sync.Mutex{}
+	b.batch.reset()
+	maxK := int64(0)
+	for _, req := range b.pending {
+		b.batch.add(req.vector, req.k, req.respChan)
+		if req.k > maxK {
+			maxK = req.k
+		}
+	}
+	b.pending = b.pending[:0]
+	b.mu.Unlock()
+	distances, labels, err := b.searchFn(b.batch.vectors, maxK)
+	var distOffset, labelOffset int64
+	for i := 0; i < b.batch.count(); i++ {
+		k := b.batch.k[i]
+		respDistances := distances[distOffset : distOffset+k]
+		respLabels := labels[labelOffset : labelOffset+k]
+		b.batch.respChans[i] <- &gpuResponse{
+			distances: respDistances,
+			labels:    respLabels,
+			err:       err,
+		}
+		distOffset += maxK
+		labelOffset += maxK
 	}
 }
 
-const (
-	// GPUIndexMinVectorsForTransfer is the minimum number of vectors
-	// required to consider transferring an IVF index to GPU for training
-	// Smaller indexes may not benefit from GPU acceleration
-	// due to transfer overheads
-	GPUIndexMinVectorsForTransfer = 30000
-
-	// GPUTransferOverheadFactor accounts for additional
-	// memory overhead involved during GPU index transfer,
-	// such as data transfer costs and temporary allocations
-	GPUTransferOverheadFactor = 1.4
-
-	// SoftmaxTemperature controls the sharpness of the probability distribution
-	// when selecting a GPU based on available free memory.
-	// Lower values (<1) make the selection more deterministic (favoring the GPU
-	// with the most free memory), while higher values (>1) make it more random
-	SoftmaxTemperature = 0.5
-)
-
-type gpuInfo struct {
-	id      int
-	freeMem float64 // in bytes
+type GPUIndex struct {
+	gpuIndex *faiss.GPUIndexImpl
+	worker   *batchWorker
+	mu       sync.Mutex
 }
 
-// GetDeviceID returns a device ID between 0 and NumGPUs-1 (inclusive) to be used for distributing work across multiple GPUs.
-// It returns -1 if no GPUs are available or an error occurs. The selection algorithm favors GPUs with more free memory,
-// using a softmax-based probabilistic selection to help spread load across multiple GPUs when more than two GPUs are available.
-func GetDeviceID() int {
-	// simple cases
-	// no GPUs available, return -1
-	if NumGPUs == 0 {
-		return -1
+func NewGPUIndex(cpuIndex *faiss.IndexImpl) (*GPUIndex, error) {
+	gpuIndex, err := faiss.CloneToGPU(cpuIndex, 0)
+	if err != nil {
+		return nil, err
 	}
-
-	var gpus []*gpuInfo
-	for i := 0; i < NumGPUs; i++ {
-		freeMem, err := faiss.FreeMemory(i)
-		if err != nil {
-			continue
-		}
-		gpus = append(gpus, &gpuInfo{id: i, freeMem: float64(freeMem)})
+	dims := gpuIndex.D()
+	rv := &GPUIndex{
+		gpuIndex: gpuIndex,
+		worker:   newBatchWorker(dims, gpuIndex.Search),
 	}
-
-	if len(gpus) == 0 {
-		// fallback if no memory info available
-		// return -1 to indicate no GPUs available
-		// even though NumGPUs > 0 as we couldn't
-		// get memory info and thus cannot provide a
-		// reliable device selection
-		return -1
-	}
-
-	var maxGPU *gpuInfo
-	for _, g := range gpus {
-		if maxGPU == nil || g.freeMem > maxGPU.freeMem {
-			maxGPU = g
-		}
-	}
-
-	// if all the GPUs are full, return -1
-	if maxGPU.freeMem == 0 {
-		return -1
-	}
-
-	// if only two or fewer GPUs, just pick the one with the most free memory
-	if len(gpus) <= 2 {
-		return maxGPU.id
-	}
-
-	// more than two GPUs, do softmax weighting based on free memory
-	// to probabilistically pick a GPU, favoring those with more free memory
-	// this helps spread load more evenly across multiple GPUs, while still
-	// favoring those with more available resources, mainly to avoid
-	// always picking the same GPU when multiple GPUs have similar free memory
-	expVals := make([]float64, len(gpus))
-	var sumExp float64
-	for i, g := range gpus {
-		val := math.Exp((g.freeMem - maxGPU.freeMem) / (SoftmaxTemperature * maxGPU.freeMem))
-		expVals[i] = val
-		sumExp += val
-	}
-
-	// Compute cumulative distribution and sample.
-	r := rand.Float64()
-	cumProb := 0.0
-	for i, g := range gpus {
-		cumProb += expVals[i] / sumExp
-		if r <= cumProb {
-			return g.id
-		}
-	}
-
-	// Fallback to max GPU
-	return maxGPU.id
+	go rv.worker.monitor()
+	return rv, nil
 }
 
-// TrainIndex trains the given FAISS index using the provided vectors and dimensions.
-// If useGPU is true and a suitable GPU is available, training is performed on the GPU;
-// otherwise, training falls back to the CPU. The function returns the trained index,
-// which may be a new instance if GPU training and transfer back to CPU succeed.
-func TrainIndex(index *faiss.IndexImpl, vecs []float32, dims int, useGPU bool) (*faiss.IndexImpl, error) {
-	// function to train index on CPU used as fallback on GPU failures
-	TrainCPU := func() (*faiss.IndexImpl, error) {
-		err := index.Train(vecs)
-		return index, err
+func (g *GPUIndex) Search(qVector []float32, k int64) ([]float32, []int64, error) {
+	respChan := make(chan *gpuResponse, 1)
+	req := &gpuRequest{
+		vector:   qVector,
+		k:        k,
+		respChan: respChan,
 	}
-	// decide whether to use GPU for training
-	if !useGPU || NumGPUs == 0 || len(vecs)/dims < GPUIndexMinVectorsForTransfer {
-		// use CPU training
-		return TrainCPU()
-	}
-	// attempt GPU training
-	deviceID := GetDeviceID()
-	if deviceID == -1 {
-		// no GPUs available, fallback to CPU training
-		return TrainCPU()
-	}
-	// lock the selected GPU for the duration of the transfer
-	GPULocks[deviceID].Lock()
-	// check if enough free memory is available
-	estimatedMemNeeded := uint64(float64(len(vecs)*SizeOfFloat32) * GPUTransferOverheadFactor) // input vectors + overhead
-	freeMem, err := faiss.FreeMemory(deviceID)
-	if err != nil || freeMem < estimatedMemNeeded {
-		// unable to get free memory info or not enough free memory,
-		// fallback to CPU training
-		GPULocks[deviceID].Unlock()
-		return TrainCPU()
-	}
-	// transfer index to GPU
-	gpuIndex, err := faiss.TransferToGPU(index, deviceID)
-	if err != nil {
-		// transfer failed, fallback to CPU training
-		GPULocks[deviceID].Unlock()
-		return TrainCPU()
-	}
-	GPULocks[deviceID].Unlock()
-	// train on GPU
-	err = gpuIndex.Train(vecs)
-	if err != nil {
-		// training failed, fallback to CPU training
-		gpuIndex.Close()
-		return TrainCPU()
-	}
-	// acquire lock again for transfer back to CPU
-	GPULocks[deviceID].Lock()
-	// transfer back to CPU
-	cpuIndex, err := faiss.TransferToCPU(gpuIndex)
-	gpuIndex.Close()
-	if err != nil {
-		GPULocks[deviceID].Unlock()
-		// transfer back failed, fallback to CPU training
-		return TrainCPU()
-	}
-	GPULocks[deviceID].Unlock()
-	// successful GPU training and transfer back to CPU
-	// now free the original index and return the new trained index
-	index.Close()
-	return cpuIndex, nil
+	g.worker.reqChan <- req
+	resp := <-respChan
+	return resp.distances, resp.labels, resp.err
+}
+
+func (g *GPUIndex) Close() {
+	close(g.worker.closeCh)
+	g.gpuIndex.Close()
+}
+
+func (g *GPUIndex) Size() uint64 {
+	return g.gpuIndex.Size()
 }

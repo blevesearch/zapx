@@ -64,8 +64,8 @@ func (vc *vectorIndexCache) Clear() {
 }
 
 // loadOrCreate obtains the vector index from the cache or creates it if it's not present.
-func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uint32, except *roaring.Bitmap) (
-	index *faiss.IndexImpl, mapping *idMapping, exclude *bitmap, err error) {
+func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, indexType VectorIndexType, mem []byte, numDocs uint32, except *roaring.Bitmap) (
+	container *indexContainer, mapping *idMapping, exclude *bitmap, err error) {
 	// first try to read from the cache with a read lock
 	vc.m.RLock()
 	if vc.isClosed {
@@ -92,13 +92,13 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uin
 		return entry.load(except)
 	}
 	// still not present, create and cache it
-	return vc.createAndCacheLOCKED(fieldID, mem, numDocs, except)
+	return vc.createAndCacheLOCKED(fieldID, indexType, mem, numDocs, except)
 }
 
 // Rebuilding the cache on a miss.
-func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
+func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, indexType VectorIndexType, mem []byte,
 	numDocs uint32, except *roaring.Bitmap) (
-	index *faiss.IndexImpl, mapping *idMapping, exclude *bitmap, err error) {
+	container *indexContainer, mapping *idMapping, exclude *bitmap, err error) {
 	// if the cache doesn't have the entry, construct the vector to doc id map and
 	// the vector index out of the mem bytes and update the cache under lock.
 	pos := 0
@@ -140,17 +140,24 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	}
 	pos += n
 	// read the serialized vector index
-	index, err = faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faissIOFlags)
+	floatIndex, err := faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faissIOFlags)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("faiss index load error: %v", err)
 	}
+	container = newIndexContainer(floatIndex)
+	if indexType.IsGPU() {
+		gpuIndex, err := NewGPUIndex(floatIndex)
+		if err == nil {
+			container.setGPUIndex(gpuIndex)
+		}
+	}
 	// update the cache
-	vc.insertLOCKED(fieldID, index, mapping)
-	return index, mapping, getExcludedVectors(mapping, except), nil
+	vc.insertLOCKED(fieldID, container, mapping)
+	return container, mapping, getExcludedVectors(mapping, except), nil
 }
 
 func (vc *vectorIndexCache) insertLOCKED(fieldID uint16,
-	index *faiss.IndexImpl, mapping *idMapping) {
+	container *indexContainer, mapping *idMapping) {
 	// the first time we've hit the cache, try to spawn a monitoring routine
 	// which will reconcile the moving averages for all the fields being hit
 	if len(vc.cache) == 0 {
@@ -161,7 +168,7 @@ func (vc *vectorIndexCache) insertLOCKED(fieldID uint16,
 	// this makes the average to be kept above the threshold value for a
 	// longer time and thereby the index to be resident in the cache
 	// for longer time.
-	vc.cache[fieldID] = createCacheEntry(index, mapping, 0.4)
+	vc.cache[fieldID] = createCacheEntry(container, mapping, 0.4)
 }
 
 func (vc *vectorIndexCache) incHit(fieldID uint16) {
@@ -253,10 +260,10 @@ func (e *ewma) add(val uint64) {
 
 // -----------------------------------------------------------------------------
 
-func createCacheEntry(index *faiss.IndexImpl, mapping *idMapping, alpha float64) *cacheEntry {
+func createCacheEntry(container *indexContainer, mapping *idMapping, alpha float64) *cacheEntry {
 	ce := &cacheEntry{
-		index:   index,
-		mapping: mapping,
+		container: container,
+		mapping:   mapping,
 		tracker: &ewma{
 			alpha:  alpha,
 			sample: 1,
@@ -274,8 +281,8 @@ type cacheEntry struct {
 	// threshold we close/cleanup only if the live refs to the cache entry is 0.
 	refs int64
 
-	index   *faiss.IndexImpl
-	mapping *idMapping
+	container *indexContainer
+	mapping   *idMapping
 }
 
 func (ce *cacheEntry) incHit() {
@@ -290,18 +297,18 @@ func (ce *cacheEntry) decRef() {
 	atomic.AddInt64(&ce.refs, -1)
 }
 
-func (ce *cacheEntry) load(except *roaring.Bitmap) (*faiss.IndexImpl, *idMapping, *bitmap, error) {
+func (ce *cacheEntry) load(except *roaring.Bitmap) (*indexContainer, *idMapping, *bitmap, error) {
 	ce.incHit()
 	ce.addRef()
-	return ce.index, ce.mapping, getExcludedVectors(ce.mapping, except), nil
+	return ce.container, ce.mapping, getExcludedVectors(ce.mapping, except), nil
 }
 
 func (ce *cacheEntry) close() {
 	go func() {
-		if ce.index != nil {
-			ce.index.Close()
+		if ce.container != nil {
+			ce.container.Close()
 		}
-		ce.index = nil
+		ce.container = nil
 		ce.mapping = nil
 	}()
 }

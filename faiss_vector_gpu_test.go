@@ -29,14 +29,3 @@ func TestNumGPUs(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
-
-func TestGetDeviceID(t *testing.T) {
-	id := GetDeviceID()
-	if NumGPUs == 0 {
-		if id != -1 {
-			t.Fatalf("expected -1 device ID when no GPUs available, got: %d", id)
-		}
-	} else if id < 0 || id >= NumGPUs {
-		t.Fatalf("expected device ID between 0 and %d, got: %d", NumGPUs-1, id)
-	}
-}

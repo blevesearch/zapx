@@ -85,6 +85,7 @@ type batchWorker struct {
 	searchFn GPUIndexSearchCallbackFunc
 	reqChan  chan *gpuRequest
 	closeCh  chan struct{}
+	doneCh   chan struct{}
 	mu       sync.Mutex
 	pending  []*gpuRequest
 }
@@ -96,6 +97,7 @@ func newBatchWorker(dims int, searchFn GPUIndexSearchCallbackFunc) *batchWorker 
 		searchFn: searchFn,
 		reqChan:  make(chan *gpuRequest, DefaultMaxBatchSize),
 		closeCh:  make(chan struct{}),
+		doneCh:   make(chan struct{}),
 		pending:  make([]*gpuRequest, 0, DefaultMaxBatchSize),
 	}
 }
@@ -114,8 +116,11 @@ func (b *batchWorker) monitor() {
 				b.executeBatch()
 			}
 		case <-b.closeCh:
+			// Flush pending batch and exit
 			b.executeBatch()
 			b.ticker.Stop()
+			close(b.reqChan)
+			close(b.doneCh)
 			return
 		}
 	}
@@ -156,7 +161,6 @@ func (b *batchWorker) executeBatch() {
 type GPUIndex struct {
 	gpuIndex *faiss.GPUIndexImpl
 	worker   *batchWorker
-	mu       sync.Mutex
 }
 
 func NewGPUIndex(cpuIndex *faiss.IndexImpl) (*GPUIndex, error) {
@@ -186,7 +190,11 @@ func (g *GPUIndex) Search(qVector []float32, k int64) ([]float32, []int64, error
 }
 
 func (g *GPUIndex) Close() {
+	// Signal worker to flush pending and exit
 	close(g.worker.closeCh)
+	// Wait for worker goroutine to complete
+	<-g.worker.doneCh
+	// Safe to close GPU index
 	g.gpuIndex.Close()
 }
 

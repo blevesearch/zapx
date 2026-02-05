@@ -44,11 +44,11 @@ const (
 
 // vectorIndexWrapper conforms to scorch_segment_api's VectorIndex interface
 type vectorIndexWrapper struct {
-	vecIndex     *faiss.IndexImpl
-	mapping      *idMapping
-	exclude      *bitmap
-	fieldID      uint16
-	vecIndexSize uint64
+	container *indexContainer
+	mapping   *idMapping
+	exclude   *bitmap
+	fieldID   uint16
+	size      uint64
 
 	// nestedMode indicates if the vector index is operating in nested document mode.
 	// if so we have a reusable ancestry slice to help with docID lookups
@@ -60,8 +60,12 @@ type vectorIndexWrapper struct {
 
 func (v *vectorIndexWrapper) Search(qVector []float32, k int64, params json.RawMessage) (segment.VecPostingsList, error) {
 	// check if vector index is present and dimensionality matches
-	if v.vecIndex == nil || v.vecIndex.D() != len(qVector) {
-		// vector index not found or dimensionality mismatched
+	if v.container == nil || !v.container.typ.IsFloat() {
+		// vector index not found
+		return emptyVecPostingsList, nil
+	}
+	if v.container.floatIndex.D() != len(qVector) {
+		// vector index dimensionality mismatched
 		return emptyVecPostingsList, nil
 	}
 	// check if number of docs or number of vectors is zero
@@ -90,9 +94,13 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	if eligibleList == nil || eligibleList.Count() == 0 {
 		return emptyVecPostingsList, nil
 	}
-	// if vector index is not present or dimensionality mismatched, return empty postings list
-	if v.vecIndex == nil || v.vecIndex.D() != len(qVector) {
-		// vector index not found or dimensionality mismatched
+	// check if vector index is present and dimensionality matches
+	if v.container == nil || !v.container.typ.IsFloat() {
+		// vector index not found
+		return emptyVecPostingsList, nil
+	}
+	if v.container.floatIndex.D() != len(qVector) {
+		// vector index dimensionality mismatched
 		return emptyVecPostingsList, nil
 	}
 	// check if number of docs or number of vectors is zero
@@ -147,7 +155,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	}
 	// If the index is not an IVF index, then the search can be
 	// performed directly, using the Flat index.
-	if !v.vecIndex.IsIVFIndex() {
+	if !v.container.floatIndex.IsIVFIndex() {
 		// perform search with included IDs in the bitmap
 		rs, err := v.searchWithIDs(qVector, k, includeBM, params)
 		if err != nil {
@@ -157,7 +165,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		return getPostingsList(rs), nil
 	}
 	// Getting the IVF index parameters, nprobe and nlist, set at index time.
-	nprobe, nlist := v.vecIndex.IVFParams()
+	nprobe, nlist := v.container.floatIndex.IVFParams()
 	// Create a FAISS selector based on the include bitmap.
 	includeSelector, err := getIncludeSelector(includeBM)
 	if err != nil {
@@ -169,7 +177,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// Determining which clusters, identified by centroid ID,
 	// have at least one eligible vector and hence, ought to be
 	// probed.
-	clusterVectorCounts, err := v.vecIndex.ObtainClusterVectorCountsFromIVFIndex(includeSelector, nlist)
+	clusterVectorCounts, err := v.container.floatIndex.ObtainClusterVectorCountsFromIVFIndex(includeSelector, nlist)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +206,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// Search the coarse quantizer to order the centroids based on proximity
 	// to the query vector.
 	eligibleCentroidIDs, centroidDistances, err :=
-		v.vecIndex.ObtainClustersWithDistancesFromIVFIndex(qVector, centroidSelector, int64(centroidCount))
+		v.container.floatIndex.ObtainClustersWithDistancesFromIVFIndex(qVector, centroidSelector, int64(centroidCount))
 	if err != nil {
 		return nil, err
 	}
@@ -253,16 +261,16 @@ func (v *vectorIndexWrapper) Close() {
 }
 
 func (v *vectorIndexWrapper) Size() uint64 {
-	return v.vecIndexSize
+	return v.size
 }
 
 func (v *vectorIndexWrapper) ObtainKCentroidCardinalitiesFromIVFIndex(limit int, descending bool) (
 	[]index.CentroidCardinality, error) {
-	if v.vecIndex == nil || !v.vecIndex.IsIVFIndex() {
+	if v.container == nil || !v.container.floatIndex.IsIVFIndex() {
 		return nil, nil
 	}
 
-	cardinalities, centroids, err := v.vecIndex.ObtainKCentroidCardinalitiesFromIVFIndex(limit, descending)
+	cardinalities, centroids, err := v.container.floatIndex.ObtainKCentroidCardinalitiesFromIVFIndex(limit, descending)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +305,7 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 	// we have multi-vector documents leading to duplicates in docIDs retrieved
 	numIter := 0
 	// get the metric type of the index to help with deduplication logic
-	metricType := v.vecIndex.MetricType()
+	metricType := v.container.floatIndex.MetricType()
 	// we keep searching until we have k unique docIDs or we have exhausted the vector index
 	// or we have reached the maximum number of deduplication iterations allowed
 	for numIter < maxMultiVectorDocSearchRetries && rs.size() < k && !exhausted {
@@ -384,7 +392,14 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclud
 			if sel != nil {
 				defer sel.Delete()
 			}
-			return v.vecIndex.SearchWithoutIDs(qVector, k, sel, params)
+			// if we have a gpu index available, we use it for searching instead of the cpu index,
+			// as long as :
+			// 1. NO selectors are used
+			// 2. NO search parameters are used
+			if v.container.typ.IsGPU() && sel == nil && len(params) == 0 {
+				return v.container.gpuIndex.Search(qVector, k)
+			}
+			return v.container.floatIndex.SearchWithoutIDs(qVector, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
@@ -436,7 +451,7 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include *
 			if sel != nil {
 				defer sel.Delete()
 			}
-			return v.vecIndex.SearchWithIDs(qVector, k, sel, params)
+			return v.container.floatIndex.SearchWithIDs(qVector, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
@@ -489,7 +504,7 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(eligibleCentroidIDs []in
 			if sel != nil {
 				defer sel.Delete()
 			}
-			return v.vecIndex.SearchClustersFromIVFIndex(eligibleCentroidIDs, centroidDis, centroidsToProbe,
+			return v.container.floatIndex.SearchClustersFromIVFIndex(eligibleCentroidIDs, centroidDis, centroidsToProbe,
 				qVector, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
@@ -891,4 +906,64 @@ func (m *idMapping) vecsForDoc(docID uint32) ([]uint32, bool) {
 		return nil, false
 	}
 	return m.docToVec[docID], true
+}
+
+// ------------------------------------------------------------------------------
+// VectorIndexType
+// ------------------------------------------------------------------------------
+
+type VectorIndexType uint64
+
+const (
+	FloatFaissIndex VectorIndexType = 1 << iota
+	GPUFaissIndex
+)
+
+func (o VectorIndexType) IsFloat() bool {
+	return o&FloatFaissIndex != 0
+}
+
+func (o VectorIndexType) IsGPU() bool {
+	return o&GPUFaissIndex != 0
+}
+
+// ------------------------------------------------------------------------------
+// IndexContainer
+// ------------------------------------------------------------------------------
+type indexContainer struct {
+	typ        VectorIndexType
+	floatIndex *faiss.IndexImpl
+	gpuIndex   *GPUIndex
+}
+
+func newIndexContainer(floatIndex *faiss.IndexImpl) *indexContainer {
+	return &indexContainer{
+		floatIndex: floatIndex,
+		typ:        FloatFaissIndex,
+	}
+}
+
+func (c *indexContainer) setGPUIndex(gpuIndex *GPUIndex) {
+	c.gpuIndex = gpuIndex
+	c.typ |= GPUFaissIndex
+}
+
+func (c *indexContainer) Close() {
+	if c.floatIndex != nil {
+		c.floatIndex.Close()
+	}
+	if c.gpuIndex != nil {
+		c.gpuIndex.Close()
+	}
+}
+
+func (c *indexContainer) Size() uint64 {
+	var size uint64
+	if c.floatIndex != nil {
+		size += c.floatIndex.Size()
+	}
+	if c.gpuIndex != nil {
+		size += c.gpuIndex.Size()
+	}
+	return size
 }

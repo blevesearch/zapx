@@ -463,6 +463,8 @@ func determineIndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, in
 		}
 	}
 	switch {
+	case nvecs >= 100000:
+		return fmt.Sprintf("IVF%d_HNSW32,SQ8", nlist), IndexTypeIVF
 	case nvecs >= 10000:
 		return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF
 	case nvecs >= 1000:

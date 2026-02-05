@@ -163,7 +163,7 @@ type GPUIndex struct {
 }
 
 func NewGPUIndex(cpuIndex *faiss.IndexImpl) (*GPUIndex, error) {
-	gpuIndex, err := faiss.CloneToGPU(cpuIndex, 0)
+	gpuIndex, err := faiss.CloneToGPU(cpuIndex)
 	if err != nil {
 		return nil, err
 	}

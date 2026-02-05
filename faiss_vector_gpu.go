@@ -108,7 +108,11 @@ func (b *batchWorker) monitor() {
 		case req := <-b.reqChan:
 			b.mu.Lock()
 			b.pending = append(b.pending, req)
+			shouldExecute := len(b.pending) >= DefaultMaxBatchSize
 			b.mu.Unlock()
+			if shouldExecute {
+				b.executeBatch()
+			}
 		case <-b.closeCh:
 			b.executeBatch()
 			b.ticker.Stop()

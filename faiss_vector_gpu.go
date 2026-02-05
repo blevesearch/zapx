@@ -119,7 +119,6 @@ func (b *batchWorker) monitor() {
 			// Flush pending batch and exit
 			b.executeBatch()
 			b.ticker.Stop()
-			close(b.reqChan)
 			close(b.doneCh)
 			return
 		}

@@ -21,7 +21,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"math/rand"
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/v2"
@@ -189,7 +188,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		if err != nil {
 			return err
 		}
-		err = vo.mergeAndWriteVectorIndexes(vecSegs, indexes, fieldName, w, closeCh)
+		err = vo.mergeAndWriteVectorIndexes(vecSegs, indexes, w, closeCh)
 		if err != nil {
 			return err
 		}
@@ -263,7 +262,6 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 // perhaps, parallelized merging can help speed things up over here.
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	vecIndexes []*vecIndexInfo, w *CountHashWriter, closeCh chan struct{}) error {
-
 	// safe to assume that all the indexes are of the same config values, given
 	// that they are extracted from the field mapping info.
 	var dims, metric, indexDataCap, reconsCap int
@@ -311,8 +309,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	if !validMerge {
 		return nil
 	}
-
-	finalVecIDs := make([]int64, 0, finalVecIDCap)
 	// merging of indexes with reconstruction method.
 	// the vecIds in each index contain only the valid vectors,
 	// so we reconstruct only those.
@@ -366,36 +362,26 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	if err != nil {
 		return err
 	}
+	// ensure the faiss index is closed after use
 	defer faissIndex.Close()
-
+	// if we are using an IVF index, set the direct map and train it
 	if indexClass == IndexTypeIVF {
 		// the direct map maintained in the IVF index is essential for the
-		// reconstruction of vectors based on vector IDs in the future merges.
-		// the AddWithIDs API also needs a direct map to be set before using.
-		err = faissIndex.SetDirectMap(2)
+		// reconstruction of vectors based on the sequential vector IDs in the future merges
+		// use direct map type 1 -> array based direct map, since we have sequential vector IDs
+		// starting from 0 to N-1.
+		err = faissIndex.SetDirectMap(1)
 		if err != nil {
 			return err
 		}
-
+		// calculate nprobe using a heuristic.
 		nprobe := calculateNprobe(nlist, indexOptimizedFor)
 		faissIndex.SetNProbe(nprobe)
 		// train the vector index, essentially performs k-means clustering to partition
 		// the data space of indexData such that during the search time, we probe
 		// only a subset of vectors -> non-exhaustive search. could be a time
 		// consuming step when the indexData is large.
-		// Best effort attempt to use GPU for training if configured
-		// May fall back to CPU training if GPU training fails due
-		// to any reason such as insufficient memory, or unavailability
-		// of GPUs, etc.
-		faissIndex, err = TrainIndex(faissIndex, indexData, dims, gpu)
-		if err != nil {
-			return err
-		}
-
-		// the direct map maintained in the IVF index is essential for the
-		// reconstruction of vectors based on vector IDs in the future merges.
-		// the AddWithIDs API also needs a direct map to be set before using.
-		err = faissIndex.SetDirectMap(2)
+		err = faissIndex.Train(indexData)
 		if err != nil {
 			return err
 		}
@@ -496,24 +482,17 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 	//        d. index optimization type
 	//        e. vectorID -> docID mapping
 	tempBuf := vo.grabBuf(binary.MaxVarintLen64)
-	for fieldID, content := range vo.vecFieldMap {
-		// calculate the capacity of the vecs and ids slices
-		// to avoid multiple allocations.
-		vecs := make([]float32, 0, len(content.vecs)*int(content.dim))
-		ids := make([]int64, 0, len(content.vecs))
-		for hash, vecInfo := range content.vecs {
-			vecs = append(vecs, vecInfo.vec...)
-			ids = append(ids, hash)
-		}
-
+	for fieldID, content := range vo.fieldVectorIndex {
+		// number of vectors to be indexed for this field
+		nvecs := len(content.vecDocIDs)
+		// dimension of each vector
+		dims := content.dimension
 		// Set the faiss metric type (default is Euclidean Distance or l2_norm)
 		metric := faiss.MetricL2
 		if content.metric == index.InnerProduct || content.metric == index.CosineSimilarity {
 			// use the same FAISS metric for inner product and cosine similarity
 			metric = faiss.MetricInnerProduct
 		}
-
-		nvecs := len(ids)
 		nlist := determineCentroids(nvecs)
 		indexDescription, indexClass := determineIndexToUse(nvecs, nlist, content.optimizedFor)
 		faissIndex, err := faiss.IndexFactory(dims, indexDescription, metric)
@@ -521,19 +500,22 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 			return err
 		}
 
-		defer faissIndex.Close()
-
 		if indexClass == IndexTypeIVF {
-			err = faissIndex.SetDirectMap(2)
+			// set the direct map to reconstruct vectors based on vector IDs
+			// in future merges, we keep 1 as the direct map type to use an
+			// array based direct map, since we have sequential vector IDs starting
+			// from 0 to N-1.
+			err = faissIndex.SetDirectMap(1)
 			if err != nil {
 				faissIndex.Close()
 				return err
 			}
-
-			nprobe := calculateNprobe(nlist, content.indexOptimizedFor)
+			// calculate nprobe using a heuristic.
+			nprobe := calculateNprobe(nlist, content.optimizedFor)
+			// set nprobe value
 			faissIndex.SetNProbe(nprobe)
-
-			err = faissIndex.Train(vecs)
+			// train the index with the vectors
+			err = faissIndex.Train(content.vectors)
 			if err != nil {
 				faissIndex.Close()
 				return err
@@ -625,65 +607,36 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 		// doc processing checkpoint - no action needed
 		return
 	}
-
-	//process field
 	vec := field.Vector()
 	dim := field.Dims()
 	metric := field.Similarity()
 	indexOptimizedFor := field.IndexOptimizedFor()
 	// caller is supposed to make sure len(vec) is a multiple of dim.
 	// Not double checking it here to avoid the overhead.
-	numSubVecs := len(vec) / dim
-	for i := 0; i < numSubVecs; i++ {
-		subVec := vec[i*dim : (i+1)*dim]
-
-		// NOTE: currently, indexing only unique vectors.
-		subVecHash := hashCode(subVec)
-		if _, ok := vo.vecIDMap[subVecHash]; !ok {
-			vo.vecIDMap[subVecHash] = &vecInfo{
-				docID: docNum,
+	// This accounts for multi-vector fields, where a field can have
+	// multiple vectors associated with it. In this case we process all
+	// vectors associated with the field as separate vectors.
+	numVectors := len(vec) / dim
+	for i := 0; i < numVectors; i++ {
+		vector := vec[i*dim : (i+1)*dim]
+		// check if we have content for this fieldID already
+		content, ok := vo.fieldVectorIndex[fieldID]
+		if !ok {
+			// create an entry for this fieldID as this is the first time
+			// we are seeing this field
+			content = &vectorIndexContent{
+				dimension:    dim,
+				metric:       metric,
+				optimizedFor: indexOptimizedFor,
+				vectors:      make([]float32, 0, dim*numVectors),
+				vecDocIDs:    make([]uint32, 0, numVectors),
 			}
+			vo.fieldVectorIndex[fieldID] = content
 		}
-
-		// tracking the unique vectors for every field which will be used later
-		// to construct the vector index.
-		if _, ok := vo.vecFieldMap[fieldID]; !ok {
-			vo.vecFieldMap[fieldID] = &indexContent{
-				vecs: map[int64]*vecInfo{
-					subVecHash: &vecInfo{
-						vec: subVec,
-					},
-				},
-				dim:               uint16(dim),
-				metric:            metric,
-				indexOptimizedFor: indexOptimizedFor,
-			}
-		} else {
-			vo.vecFieldMap[fieldID].vecs[subVecHash] = &vecInfo{
-				vec: subVec,
-			}
-		}
+		// track the vector data and docIDs
+		content.vectors = append(content.vectors, vector...)
+		content.vecDocIDs = append(content.vecDocIDs, docNum)
 	}
-}
-
-// todo: better hash function?
-// keep the perf aspects in mind with respect to the hash function.
-// Uses a time based seed to prevent 2 identical vectors in different
-// segments from having the same hash (which otherwise could cause an
-// issue when merging those segments)
-func hashCode(a []float32) int64 {
-	var rv, sum int64
-	for _, v := range a {
-		// Weighing each element of the vector differently to minimise chance
-		// of collisions between non identical vectors.
-		sum = int64(math.Float32bits(v)) + sum*31
-	}
-
-	// Similar to getVectorCode(), this uses the first 32 bits for the vector sum
-	// and the last 32 for a random 32-bit int to ensure identical vectors have
-	// unique hashes.
-	rv = sum<<32 | int64(rand.Int31())
-	return rv
 }
 
 func (v *faissVectorIndexSection) getVectorIndexOpaque(opaque map[int]resetable) *vectorIndexOpaque {
@@ -705,11 +658,18 @@ func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) reseta
 	return rv
 }
 
-type indexContent struct {
-	vecs              map[int64]*vecInfo
-	dim               uint16
-	metric            string
-	indexOptimizedFor string
+// vectorIndexContent contains the information required to create a vector index for a vector field.
+type vectorIndexContent struct {
+	// vectors stores flattened vectors in a row-major order
+	vectors []float32
+	// vecDocIDs corresponding to each vector
+	vecDocIDs []uint32
+	// dimension is the dimension of all vectors
+	dimension int
+	// metric is the distance metric to be used
+	metric string
+	// optimizedFor is the optimization type for the index
+	optimizedFor string
 }
 
 // vectorIndexOpaque holds the internal state for vector index processing.

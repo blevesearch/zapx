@@ -312,10 +312,10 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		if err != nil {
 			return nil, err
 		}
-		if fieldsOptions[fieldName].SkipChunking() {
+		if fieldsOptions[fieldName].SkipDVChunking() {
 			chunkSize = 1
 		}
-		fdvEncoder := newChunkedContentCoder(chunkSize, newSegDocCount-1, w, true, fieldsOptions[fieldName].SkipSnappy())
+		fdvEncoder := newChunkedContentCoder(chunkSize, newSegDocCount-1, w, true, fieldsOptions[fieldName].SkipDVCompression())
 
 		fdvReadersAvailable := false
 		var dvIterClone *docValueReader
@@ -616,10 +616,10 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) error {
 		if err != nil {
 			return err
 		}
-		if io.FieldsOptions[io.FieldsInv[fieldID]].SkipChunking() {
+		if io.FieldsOptions[io.FieldsInv[fieldID]].SkipDVChunking() {
 			chunkSize = 1
 		}
-		fdvEncoder := newChunkedContentCoder(chunkSize, uint64(len(io.results)-1), w, false, io.FieldsOptions[io.FieldsInv[fieldID]].SkipSnappy())
+		fdvEncoder := newChunkedContentCoder(chunkSize, uint64(len(io.results)-1), w, false, io.FieldsOptions[io.FieldsInv[fieldID]].SkipDVCompression())
 		if io.IncludeDocValues[fieldID] {
 			for docNum, docTerms := range docTermMap {
 				if fieldTermMap, ok := io.extraDocValues[docNum]; ok {

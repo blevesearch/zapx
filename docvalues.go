@@ -181,7 +181,7 @@ func (di *docValueReader) loadDvChunk(chunkNumber uint64, s *SegmentBase) error 
 	curChunkEnd += end
 
 	// if skip chunking is enabled, each chunk has 1 document's docValues
-	if di.indexOptions.SkipChunking() {
+	if di.indexOptions.SkipDVChunking() {
 		di.curChunkData = s.mem[destChunkDataLoc:curChunkEnd]
 		di.curChunkNum = chunkNumber
 		di.uncompressed = di.uncompressed[:0]
@@ -224,12 +224,13 @@ func (di *docValueReader) iterateAllDocValues(s *SegmentBase, visitor docNumTerm
 			return err
 		}
 
-		if di.curChunkData == nil || (len(di.curChunkHeader) == 0 && !di.indexOptions.SkipChunking()) {
+		// if chunkdate is missing or chunk header is missing (when chunking is enabled), ignore chunk
+		if di.curChunkData == nil || (len(di.curChunkHeader) == 0 && !di.indexOptions.SkipDVChunking()) {
 			continue
 		}
 
 		var uncompressed []byte
-		if di.indexOptions.SkipSnappy() {
+		if di.indexOptions.SkipDVCompression() {
 			uncompressed = di.curChunkData
 		} else {
 			// uncompress the already loaded data
@@ -242,7 +243,7 @@ func (di *docValueReader) iterateAllDocValues(s *SegmentBase, visitor docNumTerm
 
 		// if chunking is skipped, then all docValues
 		// for the chunk belong to a single docNum
-		if di.indexOptions.SkipChunking() {
+		if di.indexOptions.SkipDVCompression() {
 			err = visitor(uint64(i), uncompressed)
 			if err != nil {
 				return err
@@ -268,7 +269,7 @@ func (di *docValueReader) visitDocValues(docNum uint64,
 	visitor index.DocValueVisitor) error {
 
 	var start, end uint64
-	if di.indexOptions.SkipChunking() {
+	if di.indexOptions.SkipDVChunking() {
 		// docNum directly maps to the chunk number
 		start = 0
 		end = uint64(len(di.curChunkData))
@@ -286,7 +287,7 @@ func (di *docValueReader) visitDocValues(docNum uint64,
 	if len(di.uncompressed) > 0 {
 		uncompressed = di.uncompressed
 	} else {
-		if di.indexOptions.SkipSnappy() {
+		if di.indexOptions.SkipDVCompression() {
 			uncompressed = di.curChunkData
 		} else {
 			// uncompress the already loaded data
@@ -360,7 +361,7 @@ func (sb *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
 		}
 		fieldID = fieldIDPlus1 - 1
 
-		if sb.fieldsOptions[field].SkipChunking() {
+		if sb.fieldsOptions[field].SkipDVChunking() {
 			docInChunk = localDocNum
 		} else {
 			docInChunk = localDocNum / chunkFactor
@@ -375,7 +376,6 @@ func (sb *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
 		}
 
 		dvr = dvs.dvrs[fieldID]
-		dvr = dvs.dvrs[fieldIDPlus1-1]
 		if dvr != nil {
 			// check if the chunk is already loaded
 			if docInChunk != dvr.curChunkNumber() {

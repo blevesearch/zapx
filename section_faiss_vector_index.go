@@ -660,7 +660,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 			metric = faiss.MetricInnerProduct
 		}
 		fIndexBytes, err := makeFaissFloatIndex(content.vectors, metric, content.optimizedFor,
-			len(content.vecDocIDs), nvecs)
+			content.dimension, nvecs)
 		if err != nil {
 			return err
 		}

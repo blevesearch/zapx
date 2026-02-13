@@ -357,11 +357,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		freeReconstructedIndexes(vecIndexes)
 		return nil
 	}
-	// index type to be created after merge based on the number of vectors
-	// in indexData added into the index.
-	nlist := determineCentroids(nvecs)
-	nprobe := calculateNprobe(nlist, indexOptimizedFor)
-	indexDescription, indexClass := determineFloatIndexToUse(nvecs, nlist, indexOptimizedFor)
 	// freeing the reconstructed indexes immediately - waiting till the end
 	// to do the same is not needed because the following operations don't need
 	// the reconstructed ones anymore and doing so will hold up memory which can
@@ -369,18 +364,11 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	freeReconstructedIndexes(vecIndexes)
 	// create the faiss index to hold the merged data, and add the
 	// reconstructed vectors into it.
-	fIndex, err := makeFaissFloatIndex(dims, indexDescription, metric, indexData, indexClass, nprobe)
+	fIndexBytes, err := makeFaissFloatIndex(indexData, metric, indexOptimizedFor, dims, nvecs)
 	if err != nil {
 		return err
 	}
-	// ensure the faiss index is closed after use
-	defer fIndex.Close()
 
-	// serialize the merged index into a byte slice, and write it out
-	mergedIndexBytes, err := faiss.WriteIndexIntoBuffer(fIndex)
-	if err != nil {
-		return err
-	}
 	// get a temporary buffer for writing out the index
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 	// write the type of the vector index
@@ -390,36 +378,28 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		return err
 	}
 	// write the length of the serialized vector index bytes
-	n = binary.PutUvarint(tempBuf, uint64(len(mergedIndexBytes)))
+	n = binary.PutUvarint(tempBuf, uint64(len(fIndexBytes)))
 	_, err = w.Write(tempBuf[:n])
 	if err != nil {
 		return err
 	}
 	// write the vector index data
-	_, err = w.Write(mergedIndexBytes)
+	_, err = w.Write(fIndexBytes)
 
 	if indexType == FaissBinaryIndex {
-		binDescription, indexClass := determineBinaryIndexToUse(nvecs, nlist)
-
-		bIndex, err := makeFaissBinaryIndex(dims, binDescription, indexClass, indexData, nprobe)
+		bIndexBytes, err := makeFaissBinaryIndex(indexData, indexOptimizedFor, dims, nvecs)
 		if err != nil {
 			return err
 		}
-		defer bIndex.Close()
 
-		// serialize the merged binary index into a byte slice, and write it out
-		mergedBIndexBytes, err := faiss.WriteBinaryIndexIntoBuffer(bIndex)
-		if err != nil {
-			return err
-		}
 		// write the length of the serialized binary vector index bytes
-		n = binary.PutUvarint(tempBuf, uint64(len(mergedBIndexBytes)))
+		n = binary.PutUvarint(tempBuf, uint64(len(bIndexBytes)))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return err
 		}
 		// write the binary vector index data
-		_, err = w.Write(mergedBIndexBytes)
+		_, err = w.Write(bIndexBytes)
 		if err != nil {
 			return err
 		}
@@ -428,18 +408,21 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	return err
 }
 
-func makeFaissFloatIndex(dims int, description string, metric int, vecs []float32,
-	indexClass int, nprobe int32) (*faiss.IndexImpl, error) {
+func makeFaissFloatIndex(vecs []float32, metric int, indexOptimizedFor string, dims int, nvecs int) ([]byte, error) {
+
+	nlist := determineCentroids(nvecs)
+	description, indexClass := determineFloatIndexToUse(nvecs, nlist, indexOptimizedFor)
+	nprobe := calculateNprobe(nlist, indexOptimizedFor)
 
 	index, err := faiss.IndexFactory(dims, description, metric)
 	if err != nil {
 		return nil, err
 	}
+	defer index.Close()
 
 	if indexClass == IndexTypeIVF {
 		err = index.SetDirectMap(1)
 		if err != nil {
-			index.Close()
 			return nil, err
 		}
 
@@ -447,17 +430,21 @@ func makeFaissFloatIndex(dims int, description string, metric int, vecs []float3
 
 		err = index.Train(vecs)
 		if err != nil {
-			index.Close()
 			return nil, err
 		}
 	}
 	err = index.Add(vecs)
 	if err != nil {
-		index.Close()
 		return nil, err
 	}
 
-	return index, nil
+	// serialize the merged index into a byte slice, and write it out
+	indexBytes, err := faiss.WriteIndexIntoBuffer(index)
+	if err != nil {
+		return nil, err
+	}
+
+	return indexBytes, nil
 }
 
 func convertToBinary(vecs []float32, dims int) []uint8 {
@@ -505,28 +492,29 @@ func determineBinaryIndexToUse(nvecs, nlist int) (string, int) {
 }
 
 func determineIndexTypeFromOptimization(indexOptimizedFor string) uint64 {
-	if indexOptimizedFor == index.IndexOptimizedForBinary {
+	if indexOptimizedFor == index.IndexOptimizedWithBivfFlat {
 		return FaissBinaryIndex
 	}
 	return FaissFloatIndex
 }
 
-func makeFaissBinaryIndex(dims int, description string, indexClass int, vecs []float32,
-	nprobe int32) (faiss.BinaryIndex, error) {
-	if description == "" {
-		return nil, nil
-	}
+func makeFaissBinaryIndex(vecs []float32, indexOptimizedFor string, dims int, nvecs int) ([]byte, error) {
+
+	nlist := determineCentroids(nvecs)
+	description, indexClass := determineBinaryIndexToUse(nvecs, nlist)
+	nprobe := calculateNprobe(nlist, indexOptimizedFor)
+
 	index, err := faiss.BinaryIndexFactory(dims, description)
 	if err != nil {
 		return nil, err
 	}
+	defer index.Close()
 
 	bvecs := convertToBinary(vecs, dims)
 
 	if indexClass == IndexTypeIVF {
 		err = index.SetDirectMap(1)
 		if err != nil {
-			index.Close()
 			return nil, err
 		}
 
@@ -534,18 +522,22 @@ func makeFaissBinaryIndex(dims int, description string, indexClass int, vecs []f
 
 		err = index.Train(bvecs)
 		if err != nil {
-			index.Close()
 			return nil, err
 		}
 	}
 
 	err = index.Add(bvecs)
 	if err != nil {
-		index.Close()
 		return nil, err
 	}
 
-	return index, nil
+	// serialize the merged binary index into a byte slice, and write it out
+	mergedBIndexBytes, err := faiss.WriteBinaryIndexIntoBuffer(index)
+	if err != nil {
+		return nil, err
+	}
+
+	return mergedBIndexBytes, nil
 }
 
 // freeReconstructedIndexes closes all faiss indexes in the provided slice.
@@ -586,24 +578,25 @@ func determineCentroids(nvecs int) int {
 // determineIndexToUse returns a description string for the index and quantizer type,
 // and an index type constant.
 func determineFloatIndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, int) {
-	if indexOptimizedFor == index.IndexOptimizedForBinary {
+	switch indexOptimizedFor {
+	case index.IndexOptimizedWithBivfFlat:
 		return "Flat", IndexTypeFlat
-	}
-	if indexOptimizedFor == index.IndexOptimizedForMemoryEfficient {
+	case index.IndexOptimizedForMemoryEfficient:
 		switch {
 		case nvecs >= 1000:
 			return fmt.Sprintf("IVF%d,SQ4", nlist), IndexTypeIVF
 		default:
 			return "Flat", IndexTypeFlat
 		}
-	}
-	switch {
-	case nvecs >= 10000:
-		return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF
-	case nvecs >= 1000:
-		return fmt.Sprintf("IVF%d,Flat", nlist), IndexTypeIVF
 	default:
-		return "Flat", IndexTypeFlat
+		switch {
+		case nvecs >= 10000:
+			return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF
+		case nvecs >= 1000:
+			return fmt.Sprintf("IVF%d,Flat", nlist), IndexTypeIVF
+		default:
+			return "Flat", IndexTypeFlat
+		}
 	}
 }
 
@@ -620,29 +613,16 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 	for fieldID, content := range vo.fieldVectorIndex {
 		// number of vectors to be indexed for this field
 		nvecs := len(content.vecDocIDs)
-		// dimension of each vector
-		dims := content.dimension
 		// Set the faiss metric type (default is Euclidean Distance or l2_norm)
 		metric := faiss.MetricL2
-		if content.metric == index.InnerProduct || content.metric == index.CosineSimilarity || content.optimizedFor == index.IndexOptimizedForBinary {
+		if content.metric == index.InnerProduct || content.metric == index.CosineSimilarity {
 			// use the same FAISS metric for inner product and cosine similarity
-			// binary indexes also force cosine similarity metric for reranking
 			metric = faiss.MetricInnerProduct
 		}
-		nlist := determineCentroids(nvecs)
-		indexDescription, indexClass := determineFloatIndexToUse(nvecs, nlist, content.optimizedFor)
-		fIndex, err := makeFaissFloatIndex(dims, indexDescription, metric, content.vectors, indexClass, calculateNprobe(nlist, content.optimizedFor))
+		fIndexBytes, err := makeFaissFloatIndex(content.vectors, metric, content.optimizedFor, len(content.vecDocIDs), nvecs)
 		if err != nil {
 			return err
 		}
-		// serialize the built index into a byte slice to be written out
-		indexBytes, err := faiss.WriteIndexIntoBuffer(fIndex)
-		if err != nil {
-			fIndex.Close()
-			return err
-		}
-		// close the index after serialization to free resources
-		fIndex.Close()
 
 		indexType := determineIndexTypeFromOptimization(content.optimizedFor)
 
@@ -695,30 +675,21 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 			return err
 		}
 		// write the length of the serialized vector index bytes
-		n = binary.PutUvarint(tempBuf, uint64(len(indexBytes)))
+		n = binary.PutUvarint(tempBuf, uint64(len(fIndexBytes)))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return err
 		}
 		// write the vector index data
-		_, err = w.Write(indexBytes)
+		_, err = w.Write(fIndexBytes)
 		if err != nil {
 			return err
 		}
 		if indexType == FaissBinaryIndex {
-			binDesc, indexClass := determineBinaryIndexToUse(nvecs, nlist)
-			bIndex, err := makeFaissBinaryIndex(dims, binDesc, indexClass, content.vectors, calculateNprobe(nlist, content.optimizedFor))
+			bIndexBytes, err := makeFaissBinaryIndex(content.vectors, content.optimizedFor, content.dimension, nvecs)
 			if err != nil {
 				return err
 			}
-			// serialize the built binary index into a byte slice to be written out
-			bIndexBytes, err := faiss.WriteBinaryIndexIntoBuffer(bIndex)
-			if err != nil {
-				bIndex.Close()
-				return err
-			}
-			// close the index after serialization to free resources
-			bIndex.Close()
 
 			// write the length of the serialized binary vector index bytes
 			n = binary.PutUvarint(tempBuf, uint64(len(bIndexBytes)))

@@ -147,17 +147,17 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	}
 	pos += int(indexSize)
 
-	if indexType == uint64(FaissBinaryIndex) {
+	if indexType == uint64(FaissBIVFIndex) {
+		// read the faiss binary index size
 		binSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
 
-		if binSize > 0 {
-			index.bIndex, err = faiss.ReadBinaryIndexFromBuffer(mem[pos:pos+int(binSize)], faissIOFlags)
-			if err != nil {
-				return nil, nil, nil, fmt.Errorf("faiss binary index load error: %v", err)
-			}
-			pos += int(binSize)
+		// read the serialized binary vector index
+		index.bIndex, err = faiss.ReadBinaryIndexFromBuffer(mem[pos:pos+int(binSize)], faissIOFlags)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("faiss binary index load error: %v", err)
 		}
+		pos += int(binSize)
 	}
 	// update the cache
 	vc.insertLOCKED(fieldID, index, mapping)
@@ -313,7 +313,9 @@ func (ce *cacheEntry) load(except *roaring.Bitmap) (*faissIndex, *idMapping, *bi
 
 func (ce *cacheEntry) close() {
 	go func() {
-		ce.index.close()
+		if ce.index != nil {
+			ce.index.close()
+		}
 		ce.mapping = nil
 	}()
 }
@@ -357,7 +359,7 @@ func (fi *faissIndex) validateDims(expectedDims int) bool {
 		return false
 	}
 
-	// check dims only if present
+	// check dims only if binary index is present
 	if fi.bIndex != nil {
 		if fi.bIndex.D() != expectedDims {
 			return false

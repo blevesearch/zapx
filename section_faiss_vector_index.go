@@ -57,8 +57,8 @@ const (
 
 // Vector index section implementation types
 const (
-	FaissFloatIndex uint64 = iota
-	FaissBinaryIndex
+	FaissFP32Index uint64 = iota
+	FaissBIVFIndex
 )
 
 type faissVectorIndexSection struct {
@@ -92,7 +92,7 @@ type vecIndexInfo struct {
 	vecIds            []int64
 	indexOptimizedFor string
 	indexType         uint64
-	fIndex            *faiss.IndexImpl
+	index             *faissIndex
 }
 
 // Merge merges vector indexes from multiple segments into a single index.
@@ -153,6 +153,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			newIndexInfo := &vecIndexInfo{
 				indexOptimizedFor: index.VectorIndexOptimizationsReverseLookup[int(indexOptimizationTypeInt)],
 				vecIds:            make([]int64, 0, numVecs),
+				index:             &faissIndex{},
 			}
 			for vecID := 0; vecID < int(numVecs); vecID++ {
 				docID, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
@@ -313,7 +314,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		}
 		indexDataCap += indexReconsLen
 		// update the index currently being processed to store the faiss index.
-		currVecIndex.fIndex = faissIndex
+		currVecIndex.index.fIndex = faissIndex
 	}
 	// not a valid merge operation as there are no valid indexes to merge.
 	if !validMerge {
@@ -334,7 +335,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 			return seg.ErrClosed
 		}
 		currNumVecs := len(currVecIndex.vecIds)
-		currFaissIndex := currVecIndex.fIndex
+		currFaissIndex := currVecIndex.index.fIndex
 		// reconstruct the vectors only if present, it could be that
 		// some of the indexes had all of their vectors updated/deleted.
 		if currNumVecs > 0 && currFaissIndex != nil {
@@ -364,7 +365,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	freeReconstructedIndexes(vecIndexes)
 	// create the faiss index to hold the merged data, and add the
 	// reconstructed vectors into it.
-	fIndexBytes, err := makeFaissFloatIndex(indexData, metric, indexOptimizedFor, dims, nvecs)
+	fIndexBytes, err := makeFaissFloatIndex(indexData, metric, indexOptimizedFor,
+		dims, nvecs)
 	if err != nil {
 		return err
 	}
@@ -386,8 +388,11 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	// write the vector index data
 	_, err = w.Write(fIndexBytes)
 
-	if indexType == FaissBinaryIndex {
-		bIndexBytes, err := makeFaissBinaryIndex(indexData, indexOptimizedFor, dims, nvecs)
+	if indexType == FaissBIVFIndex {
+		// create the binary index to hold the merged data, and
+		// add the reconstructed vectors into it.
+		bIndexBytes, err := makeFaissBinaryIndex(indexData, indexOptimizedFor,
+			dims, nvecs)
 		if err != nil {
 			return err
 		}
@@ -408,31 +413,46 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	return err
 }
 
-func makeFaissFloatIndex(vecs []float32, metric int, indexOptimizedFor string, dims int, nvecs int) ([]byte, error) {
+// returns the serialized faiss index bytes for the given vector data and index config.
+func makeFaissFloatIndex(vecs []float32, metric int, indexOptimizedFor string,
+	dims int, nvecs int) ([]byte, error) {
 
 	nlist := determineCentroids(nvecs)
 	description, indexClass := determineFloatIndexToUse(nvecs, nlist, indexOptimizedFor)
-	nprobe := calculateNprobe(nlist, indexOptimizedFor)
 
 	index, err := faiss.IndexFactory(dims, description, metric)
 	if err != nil {
 		return nil, err
 	}
+	// ensure the faiss index is closed after use
 	defer index.Close()
 
+	// if we are using an IVF index, set the direct map and train it
 	if indexClass == IndexTypeIVF {
+		// the direct map maintained in the IVF index is essential for the
+		// reconstruction of vectors based on the sequential vector IDs in the
+		// future merges use direct map type 1 -> array based direct map, since
+		// we have sequential vector IDs starting from 0 to N-1.
 		err = index.SetDirectMap(1)
 		if err != nil {
 			return nil, err
 		}
 
+		// calculate nprobe using a heuristic.
+		nprobe := calculateNprobe(nlist, indexOptimizedFor)
 		index.SetNProbe(nprobe)
 
+		// train the vector index, essentially performs k-means clustering to partition
+		// the data space of indexData such that during the search time, we probe
+		// only a subset of vectors -> non-exhaustive search. could be a time
+		// consuming step when the indexData is large.
 		err = index.Train(vecs)
 		if err != nil {
 			return nil, err
 		}
 	}
+	// add the vectors to the index using sequential vector IDs starting
+	// from 0 to N-1
 	err = index.Add(vecs)
 	if err != nil {
 		return nil, err
@@ -447,6 +467,8 @@ func makeFaissFloatIndex(vecs []float32, metric int, indexOptimizedFor string, d
 	return indexBytes, nil
 }
 
+// converts float32 vectors into binary format based on the sign bit
+// of the float32 values.
 func convertToBinary(vecs []float32, dims int) []uint8 {
 	nvecs := len(vecs) / dims
 	packed := make([]uint8, 0, nvecs*(dims+7)/8)
@@ -482,6 +504,8 @@ func convertToBinary(vecs []float32, dims int) []uint8 {
 	return packed
 }
 
+// returns the index description string and index type constant for the binary
+// index to be created based on the number of vectors and centroids.
 func determineBinaryIndexToUse(nvecs, nlist int) (string, int) {
 	switch {
 	case nvecs >= 1000:
@@ -491,35 +515,51 @@ func determineBinaryIndexToUse(nvecs, nlist int) (string, int) {
 	}
 }
 
+// returns the index type constant for the vector index to be created based on the
+// index optimization type specified in the field mapping.
 func determineIndexTypeFromOptimization(indexOptimizedFor string) uint64 {
 	if indexOptimizedFor == index.IndexOptimizedWithBivfFlat {
-		return FaissBinaryIndex
+		return FaissBIVFIndex
 	}
-	return FaissFloatIndex
+	return FaissFP32Index
 }
 
-func makeFaissBinaryIndex(vecs []float32, indexOptimizedFor string, dims int, nvecs int) ([]byte, error) {
+// returns the serialized faiss binary index bytes for the given vector data and index config.
+func makeFaissBinaryIndex(vecs []float32, indexOptimizedFor string, dims int,
+	nvecs int) ([]byte, error) {
 
 	nlist := determineCentroids(nvecs)
 	description, indexClass := determineBinaryIndexToUse(nvecs, nlist)
-	nprobe := calculateNprobe(nlist, indexOptimizedFor)
 
 	index, err := faiss.BinaryIndexFactory(dims, description)
 	if err != nil {
 		return nil, err
 	}
+	// ensure the faiss index is closed after use
 	defer index.Close()
 
+	// convert the float32 vectors into binary format
 	bvecs := convertToBinary(vecs, dims)
 
+	// if we are using an IVF index, set the direct map and train it
 	if indexClass == IndexTypeIVF {
+		// the direct map maintained in the IVF index is essential for the
+		// reconstruction of vectors based on the sequential vector IDs in the
+		// future merges use direct map type 1 -> array based direct map, since
+		// we have sequential vector IDs starting from 0 to N-1.
 		err = index.SetDirectMap(1)
 		if err != nil {
 			return nil, err
 		}
 
+		// calculate nprobe using a heuristic.
+		nprobe := calculateNprobe(nlist, indexOptimizedFor)
 		index.SetNProbe(nprobe)
 
+		// train the vector index, essentially performs k-means clustering to partition
+		// the data space of indexData such that during the search time, we probe
+		// only a subset of vectors -> non-exhaustive search. could be a time
+		// consuming step when the indexData is large.
 		err = index.Train(bvecs)
 		if err != nil {
 			return nil, err
@@ -543,8 +583,8 @@ func makeFaissBinaryIndex(vecs []float32, indexOptimizedFor string, dims int, nv
 // freeReconstructedIndexes closes all faiss indexes in the provided slice.
 func freeReconstructedIndexes(indexes []*vecIndexInfo) {
 	for _, entry := range indexes {
-		if entry.fIndex != nil {
-			entry.fIndex.Close()
+		if entry.index != nil {
+			entry.index.close()
 		}
 	}
 }
@@ -619,7 +659,8 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 			// use the same FAISS metric for inner product and cosine similarity
 			metric = faiss.MetricInnerProduct
 		}
-		fIndexBytes, err := makeFaissFloatIndex(content.vectors, metric, content.optimizedFor, len(content.vecDocIDs), nvecs)
+		fIndexBytes, err := makeFaissFloatIndex(content.vectors, metric, content.optimizedFor,
+			len(content.vecDocIDs), nvecs)
 		if err != nil {
 			return err
 		}
@@ -685,8 +726,9 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 		if err != nil {
 			return err
 		}
-		if indexType == FaissBinaryIndex {
-			bIndexBytes, err := makeFaissBinaryIndex(content.vectors, content.optimizedFor, content.dimension, nvecs)
+		if indexType == FaissBIVFIndex {
+			bIndexBytes, err := makeFaissBinaryIndex(content.vectors, content.optimizedFor,
+				content.dimension, nvecs)
 			if err != nil {
 				return err
 			}

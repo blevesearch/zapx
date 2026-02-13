@@ -157,6 +157,8 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		return v.Search(qVector, k, params)
 	}
 
+	// If a binary index is present and is not an IVF index,
+	// then we can perform the search directly on the binary index
 	if v.index.bIndex != nil && !v.index.bIndex.IsIVFIndex() {
 		rs, err := v.searchWithIDs(qVector, k, includeBM, params)
 		if err != nil {
@@ -166,8 +168,8 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		return getPostingsList(rs), nil
 	}
 
-	// If the index is not an IVF index, then the search can be
-	// performed directly, using the Flat index.
+	// If a binary index is not present and the FAISS index is not an IVF index,
+	// then we can perform the search directly on the FAISS index
 	if v.index.bIndex == nil && !v.index.fIndex.IsIVFIndex() {
 		// perform search with included IDs in the bitmap
 		rs, err := v.searchWithIDs(qVector, k, includeBM, params)
@@ -179,9 +181,11 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	}
 
 	// Getting the IVF index parameters, nprobe and nlist, set at index time.
-	nprobe, nlist := v.index.fIndex.IVFParams()
+	var nprobe, nlist int
 	if v.index.bIndex != nil {
 		nprobe, nlist = v.index.bIndex.IVFParams()
+	} else {
+		nprobe, nlist = v.index.fIndex.IVFParams()
 	}
 
 	// Create a FAISS selector based on the include bitmap.
@@ -235,14 +239,16 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	var binaryCentroidDistances []int32
 	if v.index.bIndex != nil {
 		eligibleCentroidIDs, binaryCentroidDistances, err =
-			v.index.bIndex.ObtainClustersWithDistancesFromIVFIndex(convertToBinary(qVector, len(qVector)), centroidSelector, int64(centroidCount))
+			v.index.bIndex.ObtainClustersWithDistancesFromIVFIndex(convertToBinary(qVector, len(qVector)),
+				centroidSelector, int64(centroidCount))
 		centroidDistances = make([]float32, len(binaryCentroidDistances))
 		for i, dist := range binaryCentroidDistances {
 			centroidDistances[i] = float32(dist)
 		}
 	} else {
 		eligibleCentroidIDs, centroidDistances, err =
-			v.index.fIndex.ObtainClustersWithDistancesFromIVFIndex(qVector, centroidSelector, int64(centroidCount))
+			v.index.fIndex.ObtainClustersWithDistancesFromIVFIndex(qVector, centroidSelector,
+				int64(centroidCount))
 	}
 	if err != nil {
 		return nil, err
@@ -408,6 +414,8 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 	return rs, nil
 }
 
+// searchWithoutIDs performs a search on the vector index to retrieve the top K documents
+// while excluding any vector IDs specified in the exclude bitmap.
 func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64,
 	exclude *bitmap, params json.RawMessage) (resultSet, error) {
 	var binQVector []byte
@@ -434,7 +442,10 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64,
 			}
 
 			if v.index.bIndex != nil {
-				_, binIDs, err := v.index.bIndex.SearchWithSelector(binQVector, binaryOversampleValue*k, sel, params)
+				// search the binary index with oversampling and then do a re-ranking on the
+				// FAISS index to get the top K results
+				_, binIDs, err := v.index.bIndex.SearchWithSelector(binQVector, binaryOversampleValue*k,
+					sel, params)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -443,6 +454,8 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64,
 					return nil, nil, err
 				}
 
+				// quick select algorithm for inplace partial sorting to get top K results
+				// based on distances/scores
 				scores, labels := TopNIDsByDistance(distances, binIDs, int(k))
 				return scores, labels, nil
 			} else {
@@ -506,7 +519,10 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include *
 			}
 
 			if v.index.bIndex != nil {
-				_, binIDs, err := v.index.bIndex.SearchWithSelector(binQVector, binaryOversampleValue*k, sel, params)
+				// search the binary index with oversampling and then do a re-ranking on the
+				// FAISS index to get the top K results
+				_, binIDs, err := v.index.bIndex.SearchWithSelector(binQVector, binaryOversampleValue*k,
+					sel, params)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -515,6 +531,8 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include *
 					return nil, nil, err
 				}
 
+				// quick select algorithm for inplace partial sorting to get top K results
+				// based on distances/scores
 				scores, labels := TopNIDsByDistance(distances, binIDs, int(k))
 				return scores, labels, nil
 			} else {
@@ -553,8 +571,8 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include *
 // It takes into account the eligible centroid IDs and ensures that at least centroidsToProbe are probed.
 // If after a few iterations we haven't found enough documents, it dynamically increases the number of
 // clusters searched (up to the number of eligible centroids) to ensure we can find k unique documents.
-func (v *vectorIndexWrapper) searchClustersFromIVFIndex(eligibleCentroidIDs []int64, centroidDis []float32, binCentroidDis []int32, centroidsToProbe int,
-	qVector []float32, k int64, include *bitmap, params json.RawMessage) (
+func (v *vectorIndexWrapper) searchClustersFromIVFIndex(eligibleCentroidIDs []int64, centroidDis []float32,
+	binCentroidDis []int32, centroidsToProbe int, qVector []float32, k int64, include *bitmap, params json.RawMessage) (
 	resultSet, error) {
 	var binQVector []byte
 	if v.index.bIndex != nil {
@@ -577,18 +595,21 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(eligibleCentroidIDs []in
 				defer sel.Delete()
 			}
 			if v.index.bIndex != nil {
-				_, binIds, err := v.index.bIndex.SearchClustersFromIVFIndex(eligibleCentroidIDs, binCentroidDis, centroidsToProbe,
-					binQVector, k, sel, params)
+				// search the binary index without oversampling, since we are already searching a
+				// limited number of centroids specified by centroidsToProbe
+				_, binIds, err := v.index.bIndex.SearchClustersFromIVFIndex(eligibleCentroidIDs, binCentroidDis,
+					centroidsToProbe, binQVector, k, sel, params)
 				if err != nil {
 					return nil, nil, err
 				}
+
+				// reranking is still necessary since hamming distance has a lot of collisions
 				distances, err := v.index.fIndex.DistCompute(qVector, binIds)
 				if err != nil {
 					return nil, nil, err
 				}
 
-				scores, labels := TopNIDsByDistance(distances, binIds, int(k))
-				return scores, labels, nil
+				return distances, binIds, nil
 			} else {
 				return v.index.fIndex.SearchClustersFromIVFIndex(eligibleCentroidIDs, centroidDis, centroidsToProbe,
 					qVector, k, sel, params)

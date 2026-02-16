@@ -55,10 +55,12 @@ const (
 	IndexTypeIVF
 )
 
+type faissIndexType uint64
+
 // Vector index section implementation types
 const (
-	FaissFP32Index uint64 = iota
-	FaissBIVFIndex
+	faissFP32Index faissIndexType = iota
+	faissBIVFIndex
 )
 
 type faissVectorIndexSection struct {
@@ -91,7 +93,7 @@ type vecIndexInfo struct {
 	indexSize         uint64
 	vecIds            []int64
 	indexOptimizedFor string
-	indexType         uint64
+	indexType         faissIndexType
 	index             *faissIndex
 }
 
@@ -183,7 +185,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			// record the start offset and size of the vector index
 			newIndexInfo.startOffset = pos
 			newIndexInfo.indexSize = indexSize
-			newIndexInfo.indexType = indexType
+			newIndexInfo.indexType = faissIndexType(indexType)
 			vecSegs = append(vecSegs, sb)
 			indexes = append(indexes, newIndexInfo)
 			pos += int(indexSize)
@@ -275,7 +277,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	// that they are extracted from the field mapping info.
 	var dims, metric, indexDataCap, reconsCap int
 	var indexOptimizedFor string
-	var indexType uint64
+	var indexType faissIndexType
 	var validMerge bool
 	for segI, segBase := range sbs {
 		// Considering merge operations on vector indexes are expensive, it is
@@ -365,7 +367,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	freeReconstructedIndexes(vecIndexes)
 	// create the faiss index to hold the merged data, and add the
 	// reconstructed vectors into it.
-	fIndexBytes, err := makeFaissFloatIndex(indexData, metric, indexOptimizedFor,
+	fIndexBytes, err := makeFaissFP32Index(indexData, metric, indexOptimizedFor,
 		dims, nvecs)
 	if err != nil {
 		return err
@@ -388,7 +390,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	// write the vector index data
 	_, err = w.Write(fIndexBytes)
 
-	if indexType == FaissBIVFIndex {
+	if indexType == faissBIVFIndex {
 		// create the binary index to hold the merged data, and
 		// add the reconstructed vectors into it.
 		bIndexBytes, err := makeFaissBinaryIndex(indexData, indexOptimizedFor,
@@ -414,11 +416,11 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 }
 
 // returns the serialized faiss index bytes for the given vector data and index config.
-func makeFaissFloatIndex(vecs []float32, metric int, indexOptimizedFor string,
+func makeFaissFP32Index(vecs []float32, metric int, indexOptimizedFor string,
 	dims int, nvecs int) ([]byte, error) {
 
 	nlist := determineCentroids(nvecs)
-	description, indexClass := determineFloatIndexToUse(nvecs, nlist, indexOptimizedFor)
+	description, indexClass := determineFP32IndexToUse(nvecs, nlist, indexOptimizedFor)
 
 	index, err := faiss.IndexFactory(dims, description, metric)
 	if err != nil {
@@ -517,11 +519,11 @@ func determineBinaryIndexToUse(nvecs, nlist int) (string, int) {
 
 // returns the index type constant for the vector index to be created based on the
 // index optimization type specified in the field mapping.
-func determineIndexTypeFromOptimization(indexOptimizedFor string) uint64 {
+func determineIndexTypeFromOptimization(indexOptimizedFor string) faissIndexType {
 	if indexOptimizedFor == index.IndexOptimizedWithBivfFlat {
-		return FaissBIVFIndex
+		return faissBIVFIndex
 	}
-	return FaissFP32Index
+	return faissFP32Index
 }
 
 // returns the serialized faiss binary index bytes for the given vector data and index config.
@@ -617,7 +619,7 @@ func determineCentroids(nvecs int) int {
 
 // determineIndexToUse returns a description string for the index and quantizer type,
 // and an index type constant.
-func determineFloatIndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, int) {
+func determineFP32IndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, int) {
 	switch indexOptimizedFor {
 	case index.IndexOptimizedWithBivfFlat:
 		return "Flat", IndexTypeFlat
@@ -659,7 +661,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 			// use the same FAISS metric for inner product and cosine similarity
 			metric = faiss.MetricInnerProduct
 		}
-		fIndexBytes, err := makeFaissFloatIndex(content.vectors, metric, content.optimizedFor,
+		fIndexBytes, err := makeFaissFP32Index(content.vectors, metric, content.optimizedFor,
 			content.dimension, nvecs)
 		if err != nil {
 			return err
@@ -726,7 +728,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 		if err != nil {
 			return err
 		}
-		if indexType == FaissBIVFIndex {
+		if indexType == faissBIVFIndex {
 			bIndexBytes, err := makeFaissBinaryIndex(content.vectors, content.optimizedFor,
 				content.dimension, nvecs)
 			if err != nil {

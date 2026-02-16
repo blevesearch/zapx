@@ -147,7 +147,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	}
 	pos += int(indexSize)
 
-	if indexType == uint64(FaissBIVFIndex) {
+	if faissIndexType(indexType) == faissBIVFIndex {
 		// read the faiss binary index size
 		binSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 		pos += n

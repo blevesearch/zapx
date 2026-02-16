@@ -456,7 +456,7 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64,
 
 				// quick select algorithm for inplace partial sorting to get top K results
 				// based on distances/scores
-				scores, labels := TopNIDsByDistance(distances, binIDs, int(k))
+				scores, labels := topNIDsByDistance(distances, binIDs, int(k))
 				return scores, labels, nil
 			} else {
 				return v.index.fIndex.SearchWithoutIDs(qVector, k, sel, params)
@@ -533,7 +533,7 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include *
 
 				// quick select algorithm for inplace partial sorting to get top K results
 				// based on distances/scores
-				scores, labels := TopNIDsByDistance(distances, binIDs, int(k))
+				scores, labels := topNIDsByDistance(distances, binIDs, int(k))
 				return scores, labels, nil
 			} else {
 				return v.index.fIndex.SearchWithIDs(qVector, k, sel, params)
@@ -1020,7 +1020,13 @@ func (m *idMapping) vecsForDoc(docID uint32) ([]uint32, bool) {
 // Quick Select
 // ------------------------------------------------------------------------------
 
-func TopNIDsByDistance(dist []float32, ids []int64, n int) ([]float32, []int64) {
+// topNIDsByDistance performs an in-place Quickselect on the dist slice (while
+// keeping ids aligned with their corresponding distances) to find the N largest
+// distances without fully sorting the data. It partitions the array such that
+// the element at index len(dist)-n is the pivot separating the top-N largest
+// values from the rest, and then returns the last N elements of both dist and
+// ids (unordered)
+func topNIDsByDistance(dist []float32, ids []int64, n int) ([]float32, []int64) {
 	if n <= 0 || n > len(dist) {
 		return nil, nil
 	}

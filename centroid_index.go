@@ -35,7 +35,7 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (*faiss.IndexImpl, error
 	optType, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
-	if index.VectorIndexOptimizationsReverseLookup[optType] != index.IndexOptimizedFastMerge {
+	if index.VectorIndexOptimizationsReverseLookup[int(optType)] != index.IndexOptimizedFastMerge {
 		return nil, fmt.Errorf("unsupported vector index optimization type: %d", optType)
 	}
 	numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])

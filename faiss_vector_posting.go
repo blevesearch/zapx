@@ -303,7 +303,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 	optType, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
-	if index.VectorIndexOptimizationsReverseLookup[optType] == index.IndexOptimizedFastMerge {
+	if index.VectorIndexOptimizationsReverseLookup[int(optType)] == index.IndexOptimizedFastMerge {
 		return nil, fmt.Errorf("centroid index is not supported for search")
 
 	}

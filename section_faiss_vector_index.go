@@ -197,11 +197,11 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		}
 
 		// use this with index optimization type
-		callback, _ := vo.config["getCentroidIndexCallback"]
+		callback, _ := vo.config[index.CentroidIndexCallback]
 		var centroidIndex *faiss.IndexImpl
-		training, ok := vo.config["training"]
-		pretraining := ok && training.(bool)
-		if callback != nil && !pretraining {
+		tf, ok := vo.config[index.TrainingKey]
+		training := ok && tf.(bool)
+		if callback != nil && !training {
 			centroidIndex, err = callback.(func(field string) (*faiss.IndexImpl, error))(fieldName)
 			if err != nil {
 				return err

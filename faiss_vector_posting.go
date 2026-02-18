@@ -19,13 +19,11 @@ package zap
 
 import (
 	"encoding/binary"
-	"fmt"
 	"math"
 	"reflect"
 
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
-	index "github.com/blevesearch/bleve_index_api"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 
@@ -294,19 +292,12 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 	// the below loop loads the following:
 	// 1. doc values(first 2 iterations) - adhering to the sections format. never
 	// valid values for vector section
-	for i := 0; i < 2; i++ {
+	// 2. index optimization type.
+	for i := 0; i < 3; i++ {
 		_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
 	}
 
-	// index optimization type
-	optType, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += uint64(n)
-
-	if index.VectorIndexOptimizationsReverseLookup[int(optType)] == index.IndexOptimizedFastMerge {
-		return nil, fmt.Errorf("centroid index is not supported for search")
-
-	}
 	// create the vector index wrapper by loading (or creating) the vector index
 	// and the vector to docID mapping
 	var err error

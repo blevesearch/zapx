@@ -414,8 +414,12 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex *faiss.Inde
 		}
 		// read the serialized index bytes
 		indexBytes := segBase.mem[currVecIndex.startOffset : currVecIndex.startOffset+int(currVecIndex.indexSize)]
+		ioFlags := faissIOFlags
+		if centroidIndex == nil {
+			ioFlags |= faissIOFlagsReadOnly
+		}
 		// reconstruct the faiss index from the bytes
-		faissIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faissIOFlags)
+		faissIndex, err := faiss.ReadIndexFromBuffer(indexBytes, ioFlags)
 		if err != nil {
 			freeReconstructedIndexes(vecIndexes)
 			return err

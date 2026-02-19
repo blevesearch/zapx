@@ -38,6 +38,9 @@ func init() {
 	faiss.SetOMPThreads(defaultFaissOMPThreads)
 }
 
+// the threshold of vector count above which SQ8 quantization is applied
+const sq8Threshold = 10000
+
 const (
 	// Set the default number of OMP threads to be used by FAISS
 	// to 1 since openMP does not support goroutine based threading well.
@@ -116,6 +119,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		}
 		indexes = indexes[:0] // resizing the slices
 		vecSegs = vecSegs[:0]
+		fastMerge := true
 		vecToDocID = vecToDocID[:0]
 		for segI, sb := range segments {
 			if isClosed(closeCh) {
@@ -167,6 +171,10 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 					// This accounts only for valid vector IDs, so deleted
 					// ones won't be reconstructed in the final index.
 					newIndexInfo.vecIds = append(newIndexInfo.vecIds, int64(vecID))
+
+					// note: in case of update or delete scenarios, fallback to
+					// naive merge for now
+					fastMerge = false
 				}
 			}
 			if len(newIndexInfo.vecIds) == 0 {
@@ -196,12 +204,19 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			return err
 		}
 
-		// use this with index optimization type
 		callback, _ := vo.config[index.CentroidIndexCallback]
 		var centroidIndex *faiss.IndexImpl
 		tf, ok := vo.config[index.TrainingKey]
 		training := ok && tf.(bool)
-		if callback != nil && !training {
+		// if we don't have a callback registered - because the fastmerge isn't supported
+		//   for this index
+		// if the training flag is set - we're in the training phase of index creation
+		//   where you want to be able to reconstruct the vectors for training
+		// if the fastMerge flag is false - in case of updates/deletes, where we
+		//   currently don't handle the data drift situation in an intelligent way
+		//
+		// then, fallback to naive merging
+		if callback != nil && !training && !fastMerge {
 			centroidIndex, err = callback.(func(field string) (*faiss.IndexImpl, error))(fieldName)
 			if err != nil {
 				return err
@@ -294,13 +309,15 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 			nprobe = 1
 		}
 	}
+	// note: for IndexOptimizedFastMerge, the nprobe value still favors recall
 	return nprobe
 }
 
+// todo: need to detect and handle data drift in a more intelligent way
 func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex *faiss.IndexImpl,
 	vecIndexes []*vecIndexInfo, w *CountHashWriter, closeCh chan struct{}) error {
 	defer freeReconstructedIndexes(vecIndexes)
-	var mergeCandidates []int
+	finalMergeCandidate := -1
 	var indexOptimizedFor string
 	var dims, metric, nvecs, reconsCap int
 	var trained bool
@@ -310,10 +327,15 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex *faiss.IndexImpl,
 		}
 		if len(vecIndexes[i].vecIds) == 0 {
 			continue
-		} else if len(vecIndexes[i].vecIds) >= 10000 {
-			// merging only IVFSQ8 indexes
+		} else if len(vecIndexes[i].vecIds) >= sq8Threshold {
+			// merging only the large indexes (IVFSQ8 family)
 			// all IVF<same class> indexes are eligible for merging
-			mergeCandidates = append(mergeCandidates, i)
+			//
+			// try to seek the pointer in the vecIndexes list to a point after
+			// which all indexes are not eligible for fast merge.
+			if i > finalMergeCandidate {
+				finalMergeCandidate = i
+			}
 		} else {
 			indexReconsLen := len(vecIndexes[i].vecIds) * vecIndexes[i].faissIndex.D()
 			if indexReconsLen > reconsCap {
@@ -352,17 +374,22 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex *faiss.IndexImpl,
 				return err
 			}
 		}
-		var j int
+
 		for i := 0; i < len(vecIndexes); i++ {
 			if isClosed(closeCh) {
 				return seg.ErrClosed
 			}
-			if j < len(mergeCandidates) && i == mergeCandidates[j] {
+			// note: the merge candidates are almost always in descending order of size
+			// chances are they'll be the first "n" indexes in the vecIndexes list
+			//
+			// the reasoning is that scorch passes this as a sorted list and at this
+			// point we can be sure of no updates/deletes -> the candidates will be
+			// in a continuous block from the beginning.
+			if i <= finalMergeCandidate {
 				err = faissIndex.MergeFrom(vecIndexes[i].faissIndex, faissIndex.Ntotal())
 				if err != nil {
 					return err
 				}
-				j++
 			} else {
 				// reconstruction will be done on IVFFlat and Flat indexes
 				neededReconsLen := len(vecIndexes[i].vecIds) * faissIndex.D()
@@ -388,8 +415,6 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex *faiss.IndexImpl,
 	return v.flushVectorIndex(mergedIndexBytes, w)
 }
 
-// todo: naive implementation. need to keep in mind the perf implications and improve on this.
-// perhaps, parallelized merging can help speed things up over here.
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex *faiss.IndexImpl, sbs []*SegmentBase,
 	vecIndexes []*vecIndexInfo, w *CountHashWriter, closeCh chan struct{}) error {
 	// safe to assume that all the indexes are of the same config values, given
@@ -464,7 +489,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex *faiss.Inde
 
 	// hardcoded - refactor later
 	// fast merge only applicable for IVFSQ8 class indexes
-	if totalVecs >= 10000 && centroidIndex != nil {
+	if totalVecs >= sq8Threshold && centroidIndex != nil {
 		return v.fastMergeIndexes(centroidIndex, vecIndexes, w, closeCh)
 	}
 
@@ -615,7 +640,7 @@ func determineIndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, in
 		}
 	}
 	switch {
-	case nvecs >= 10000:
+	case nvecs >= sq8Threshold:
 		return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF
 	case nvecs >= 1000:
 		return fmt.Sprintf("IVF%d,Flat", nlist), IndexTypeIVF

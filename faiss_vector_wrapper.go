@@ -313,7 +313,24 @@ func (v *vectorIndexWrapper) ObtainKCentroidCardinalitiesFromIVFIndex(limit int,
 		return nil, nil
 	}
 
-	cardinalities, centroids, err := v.index.fIndex.ObtainKCentroidCardinalitiesFromIVFIndex(limit, descending)
+	var cardinalities []uint64
+	var centroids [][]float32
+	var err error
+	if v.index.bIndex != nil && v.index.bIndex.IsIVFIndex() {
+		var bCentroids [][]uint8
+		cardinalities, bCentroids, err = v.index.bIndex.ObtainKCentroidCardinalitiesFromIVFIndex(limit, descending)
+		if bCentroids != nil {
+			centroids = make([][]float32, len(bCentroids))
+			for i := range bCentroids {
+				centroids[i] = make([]float32, len(bCentroids[i]))
+				for j := range bCentroids[i] {
+					centroids[i][j] = float32(bCentroids[i][j])
+				}
+			}
+		}
+	} else {
+		cardinalities, centroids, err = v.index.fIndex.ObtainKCentroidCardinalitiesFromIVFIndex(limit, descending)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -444,7 +461,7 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64,
 			if v.index.bIndex != nil {
 				// search the binary index with oversampling and then do a re-ranking on the
 				// FAISS index to get the top K results
-				_, binIDs, err := v.index.bIndex.SearchWithSelector(binQVector, binaryOversampleValue*k,
+				_, binIDs, err := v.index.bIndex.SearchWithoutIDs(binQVector, binaryOversampleValue*k,
 					sel, params)
 				if err != nil {
 					return nil, nil, err
@@ -521,7 +538,7 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include *
 			if v.index.bIndex != nil {
 				// search the binary index with oversampling and then do a re-ranking on the
 				// FAISS index to get the top K results
-				_, binIDs, err := v.index.bIndex.SearchWithSelector(binQVector, binaryOversampleValue*k,
+				_, binIDs, err := v.index.bIndex.SearchWithIDs(binQVector, binaryOversampleValue*k,
 					sel, params)
 				if err != nil {
 					return nil, nil, err

@@ -113,7 +113,6 @@ func TestChunkedContentCoder(t *testing.T) {
 }
 
 func TestChunkedContentCoders(t *testing.T) {
-
 	tests := []struct {
 		maxDocNum  uint64
 		chunkSize  uint64

@@ -142,7 +142,6 @@ func (c *chunkedContentCoder) writeChunkMeta() ([]byte, error) {
 }
 
 func (c *chunkedContentCoder) flushContents() error {
-
 	var metaData []byte
 	var err error
 	// Meta data is only needed if we have more than 1 doc in the chunk,

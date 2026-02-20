@@ -37,7 +37,7 @@ func init() {
 type docNumTermsVisitor func(docNum uint64, terms []byte) error
 
 type docVisitState struct {
-	dvrs    map[uint16]*docValueReader
+	dvrs    []*docValueReader
 	segment *SegmentBase
 
 	bytesRead uint64
@@ -68,12 +68,13 @@ func (d *docVisitState) ResetBytesRead(val uint64) {
 
 type docValueReader struct {
 	field          string
+	indexOptions   index.FieldIndexingOptions
 	curChunkNum    uint64
 	chunkOffsets   []uint64
 	dvDataLoc      uint64
-	curChunkHeader []MetaData
-	curChunkData   []byte // compressed data cache
-	uncompressed   []byte // temp buf for snappy decompression
+	curChunkHeader []MetaData // Only populated when chunking is enabled
+	curChunkData   []byte     // compressed data cache
+	uncompressed   []byte     // temp buf for snappy decompression
 
 	bytesRead uint64
 }
@@ -92,6 +93,7 @@ func (di *docValueReader) cloneInto(rv *docValueReader) *docValueReader {
 	}
 
 	rv.field = di.field
+	rv.indexOptions = di.indexOptions
 	rv.curChunkNum = math.MaxUint64
 	rv.chunkOffsets = di.chunkOffsets // immutable, so it's sharable
 	rv.dvDataLoc = di.dvDataLoc
@@ -134,6 +136,7 @@ func (sb *SegmentBase) loadFieldDocValueReader(field string,
 	fdvIter := &docValueReader{
 		curChunkNum:  math.MaxUint64,
 		field:        field,
+		indexOptions: sb.fieldsOptions[field],
 		chunkOffsets: make([]uint64, int(numChunks)),
 	}
 
@@ -177,6 +180,14 @@ func (di *docValueReader) loadDvChunk(chunkNumber uint64, s *SegmentBase) error 
 	destChunkDataLoc += start
 	curChunkEnd += end
 
+	// if skip chunking is enabled, each chunk has 1 document's docValues
+	if di.indexOptions.SkipDVChunking() {
+		di.curChunkData = s.mem[destChunkDataLoc:curChunkEnd]
+		di.curChunkNum = chunkNumber
+		di.uncompressed = di.uncompressed[:0]
+		return nil
+	}
+
 	// read the number of docs reside in the chunk
 	numDocs, read := binary.Uvarint(s.mem[destChunkDataLoc : destChunkDataLoc+binary.MaxVarintLen64])
 	if read <= 0 {
@@ -212,16 +223,33 @@ func (di *docValueReader) iterateAllDocValues(s *SegmentBase, visitor docNumTerm
 		if err != nil {
 			return err
 		}
-		if di.curChunkData == nil || len(di.curChunkHeader) == 0 {
+
+		// if chunkdate is missing or chunk header is missing (when chunking is enabled), ignore chunk
+		if di.curChunkData == nil || (len(di.curChunkHeader) == 0 && !di.indexOptions.SkipDVChunking()) {
 			continue
 		}
 
-		// uncompress the already loaded data
-		uncompressed, err := snappy.Decode(di.uncompressed[:cap(di.uncompressed)], di.curChunkData)
-		if err != nil {
-			return err
+		var uncompressed []byte
+		if di.indexOptions.SkipDVCompression() {
+			uncompressed = di.curChunkData
+		} else {
+			// uncompress the already loaded data
+			uncompressed, err = snappy.Decode(di.uncompressed[:cap(di.uncompressed)], di.curChunkData)
+			if err != nil {
+				return err
+			}
 		}
 		di.uncompressed = uncompressed
+
+		// if chunking is skipped, then all docValues
+		// for the chunk belong to a single docNum
+		if di.indexOptions.SkipDVCompression() {
+			err = visitor(uint64(i), uncompressed)
+			if err != nil {
+				return err
+			}
+			continue
+		}
 
 		start := uint64(0)
 		for _, entry := range di.curChunkHeader {
@@ -239,10 +267,18 @@ func (di *docValueReader) iterateAllDocValues(s *SegmentBase, visitor docNumTerm
 
 func (di *docValueReader) visitDocValues(docNum uint64,
 	visitor index.DocValueVisitor) error {
-	// binary search the term locations for the docNum
-	start, end := di.getDocValueLocs(docNum)
-	if start == math.MaxUint64 || end == math.MaxUint64 || start == end {
-		return nil
+
+	var start, end uint64
+	if di.indexOptions.SkipDVChunking() {
+		// docNum directly maps to the chunk number
+		start = 0
+		end = uint64(len(di.curChunkData))
+	} else {
+		// binary search the term locations for the docNum
+		start, end = di.getDocValueLocs(docNum)
+		if start == math.MaxUint64 || end == math.MaxUint64 || start == end {
+			return nil
+		}
 	}
 
 	var uncompressed []byte
@@ -251,10 +287,14 @@ func (di *docValueReader) visitDocValues(docNum uint64,
 	if len(di.uncompressed) > 0 {
 		uncompressed = di.uncompressed
 	} else {
-		// uncompress the already loaded data
-		uncompressed, err = snappy.Decode(di.uncompressed[:cap(di.uncompressed)], di.curChunkData)
-		if err != nil {
-			return err
+		if di.indexOptions.SkipDVCompression() {
+			uncompressed = di.curChunkData
+		} else {
+			// uncompress the already loaded data
+			uncompressed, err = snappy.Decode(di.uncompressed[:cap(di.uncompressed)], di.curChunkData)
+			if err != nil {
+				return err
+			}
 		}
 		di.uncompressed = uncompressed
 	}
@@ -262,7 +302,7 @@ func (di *docValueReader) visitDocValues(docNum uint64,
 	// pick the terms for the given docNum
 	uncompressed = uncompressed[start:end]
 	for {
-		i := bytes.Index(uncompressed, termSeparatorSplitSlice)
+		i := bytes.IndexByte(uncompressed, index.DocValueTermSeparator)
 		if i < 0 {
 			break
 		}
@@ -300,19 +340,10 @@ func (sb *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
 		}
 	}
 
-	var fieldIDPlus1 uint16
+	var initDvReaders bool
 	if dvs.dvrs == nil {
-		dvs.dvrs = make(map[uint16]*docValueReader, len(fields))
-		for _, field := range fields {
-			if fieldIDPlus1, ok = sb.fieldsMap[field]; !ok {
-				continue
-			}
-			fieldID := fieldIDPlus1 - 1
-			if dvIter, exists := sb.fieldDvReaders[SectionInvertedTextIndex][fieldID]; exists &&
-				dvIter != nil {
-				dvs.dvrs[fieldID] = dvIter.cloneInto(dvs.dvrs[fieldID])
-			}
-		}
+		dvs.dvrs = make([]*docValueReader, len(sb.fieldsInv))
+		initDvReaders = true
 	}
 
 	// find the chunkNumber where the docValues are stored
@@ -321,14 +352,31 @@ func (sb *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
 	if err != nil {
 		return nil, err
 	}
-	docInChunk := localDocNum / chunkFactor
-	var dvr *docValueReader
+	var fieldIDPlus1, fieldID uint16
+	var dvr, dvIter *docValueReader
+	var docInChunk uint64
 	for _, field := range fields {
 		if fieldIDPlus1, ok = sb.fieldsMap[field]; !ok {
 			continue
 		}
-		fieldID := fieldIDPlus1 - 1
-		if dvr, ok = dvs.dvrs[fieldID]; ok && dvr != nil {
+		fieldID = fieldIDPlus1 - 1
+
+		if sb.fieldsOptions[field].SkipDVChunking() {
+			docInChunk = localDocNum
+		} else {
+			docInChunk = localDocNum / chunkFactor
+		}
+
+		// initialize the docValueReader for the field if needed
+		if initDvReaders {
+			dvIter = sb.fieldDvReaders[SectionInvertedTextIndex][fieldID]
+			if dvIter != nil {
+				dvs.dvrs[fieldID] = dvIter.cloneInto(dvs.dvrs[fieldID])
+			}
+		}
+
+		dvr = dvs.dvrs[fieldID]
+		if dvr != nil {
 			// check if the chunk is already loaded
 			if docInChunk != dvr.curChunkNumber() {
 				err := dvr.loadDvChunk(docInChunk, sb)

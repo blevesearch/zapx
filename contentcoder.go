@@ -30,11 +30,6 @@ func init() {
 	reflectStaticSizeMetaData = int(reflect.TypeOf(md).Size())
 }
 
-var (
-	termSeparator           byte = 0xff
-	termSeparatorSplitSlice      = []byte{termSeparator}
-)
-
 type chunkedContentCoder struct {
 	bytesWritten uint64 // moved to top to correct alignment issues on ARM, 386 and 32-bit MIPS.
 
@@ -47,6 +42,7 @@ type chunkedContentCoder struct {
 
 	w                io.Writer
 	progressiveWrite bool
+	skipCompression  bool
 
 	chunkMeta    []MetaData
 	chunkMetaBuf bytes.Buffer
@@ -63,7 +59,7 @@ type MetaData struct {
 // newChunkedContentCoder returns a new chunk content coder which
 // packs data into chunks based on the provided chunkSize
 func newChunkedContentCoder(chunkSize uint64, maxDocNum uint64,
-	w io.Writer, progressiveWrite bool,
+	w io.Writer, progressiveWrite bool, skipCompression bool,
 ) *chunkedContentCoder {
 	total := maxDocNum/chunkSize + 1
 	rv := &chunkedContentCoder{
@@ -72,6 +68,7 @@ func newChunkedContentCoder(chunkSize uint64, maxDocNum uint64,
 		chunkMeta:        make([]MetaData, 0, total),
 		w:                w,
 		progressiveWrite: progressiveWrite,
+		skipCompression:  skipCompression,
 	}
 
 	return rv
@@ -118,28 +115,51 @@ func (c *chunkedContentCoder) getBytesWritten() uint64 {
 	return c.bytesWritten
 }
 
-func (c *chunkedContentCoder) flushContents() error {
+func (c *chunkedContentCoder) writeChunkMeta() ([]byte, error) {
+
 	// flush the contents, with meta information at first
 	buf := make([]byte, binary.MaxVarintLen64)
+	var metaData []byte
 	n := binary.PutUvarint(buf, uint64(len(c.chunkMeta)))
 	_, err := c.chunkMetaBuf.Write(buf[:n])
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// write out the metaData slice
 	for _, meta := range c.chunkMeta {
 		_, err := writeUvarints(&c.chunkMetaBuf, meta.DocNum, meta.DocDvOffset)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	// write the metadata to final data
-	metaData := c.chunkMetaBuf.Bytes()
-	c.final = append(c.final, c.chunkMetaBuf.Bytes()...)
+	metaData = c.chunkMetaBuf.Bytes()
+	c.final = append(c.final, metaData...)
+
+	return metaData, nil
+}
+
+func (c *chunkedContentCoder) flushContents() error {
+	var metaData []byte
+	var err error
+	// Meta data is only needed if we have more than 1 doc in the chunk,
+	// otherwise we can just write the doc value directly
+	if c.chunkSize != 1 {
+		metaData, err = c.writeChunkMeta()
+		if err != nil {
+			return err
+		}
+	}
+
 	// write the compressed data to the final data
-	c.compressed = snappy.Encode(c.compressed[:cap(c.compressed)], c.chunkBuf.Bytes())
+	if c.skipCompression {
+		c.compressed = c.chunkBuf.Bytes()
+	} else {
+		c.compressed = snappy.Encode(c.compressed[:cap(c.compressed)], c.chunkBuf.Bytes())
+	}
+
 	c.incrementBytesWritten(uint64(len(c.compressed)))
 	c.final = append(c.final, c.compressed...)
 

@@ -389,6 +389,9 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	}
 	// write the vector index data
 	_, err = w.Write(fIndexBytes)
+	if err != nil {
+		return err
+	}
 
 	if indexType == faissBIVFIndex {
 		// create the binary index to hold the merged data, and

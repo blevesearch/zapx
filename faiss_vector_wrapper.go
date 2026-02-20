@@ -753,6 +753,56 @@ func getPostingsList(rs resultSet) segment.VecPostingsList {
 }
 
 // ------------------------------------------------------------------------------
+// faissIndex wrapper
+// ------------------------------------------------------------------------------
+
+type faissIndex struct {
+	fIndex *faiss.IndexImpl
+	bIndex *faiss.BinaryIndexImpl
+}
+
+func (fi *faissIndex) close() {
+	if fi.fIndex != nil {
+		fi.fIndex.Close()
+	}
+	if fi.bIndex != nil {
+		fi.bIndex.Close()
+	}
+}
+
+func (fi *faissIndex) size() (indexSize uint64) {
+	if fi.fIndex != nil {
+		indexSize += fi.fIndex.Size()
+	}
+	if fi.bIndex != nil {
+		indexSize += fi.bIndex.Size()
+	}
+	return indexSize
+}
+
+// ValidateDims validates the dimensions of the faiss index
+// against the expected query dimensions.
+func (fi *faissIndex) validateDims(expectedDims int) bool {
+	// check dims for float index
+	if fi.fIndex != nil {
+		if fi.fIndex.D() != expectedDims {
+			return false
+		}
+	} else {
+		// float index is mandatory
+		return false
+	}
+
+	// check dims only if binary index is present
+	if fi.bIndex != nil {
+		if fi.bIndex.D() != expectedDims {
+			return false
+		}
+	}
+	return true
+}
+
+// ------------------------------------------------------------------------------
 // ResultSet
 // ------------------------------------------------------------------------------
 

@@ -69,7 +69,7 @@ func (*ZapPlugin) open(path string, config map[string]interface{}) (segment.Segm
 			vecIndexCache:  newVectorIndexCache(),
 			synIndexCache:  newSynonymIndexCache(),
 			nstIndexCache:  newNestedIndexCache(),
-			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
+			fieldDvReaders: make([][]*docValueReader, len(segmentSections)),
 			config:         config,
 		},
 		f:    f,
@@ -124,8 +124,8 @@ type SegmentBase struct {
 	numDocs             uint64
 	storedIndexOffset   uint64
 	sectionsIndexOffset uint64
-	fieldDvReaders      []map[uint16]*docValueReader // naive chunk cache per field; section->field->reader
-	fieldDvNames        []string                     // field names cached in fieldDvReaders
+	fieldDvReaders      [][]*docValueReader // naive chunk cache per field; section->fieldID->reader
+	fieldDvNames        []string            // field names cached in fieldDvReaders
 	size                uint64
 
 	// index update specific tracking
@@ -817,7 +817,7 @@ func (sb *SegmentBase) loadDvReaders() error {
 				}
 				if fieldDvReader != nil {
 					if sb.fieldDvReaders[secID] == nil {
-						sb.fieldDvReaders[secID] = make(map[uint16]*docValueReader)
+						sb.fieldDvReaders[secID] = make([]*docValueReader, len(sb.fieldsInv))
 					}
 					sb.fieldDvReaders[secID][uint16(fieldID)] = fieldDvReader
 					sb.fieldDvNames = append(sb.fieldDvNames, sb.fieldsInv[fieldID])

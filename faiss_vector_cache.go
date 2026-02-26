@@ -92,7 +92,7 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uin
 		return entry.load(except)
 	}
 	// still not present, create and cache it
-	return vc.createAndCacheLOCKED(fieldID, mem, numDocs, except)
+	return vc.createAndCacheLOCKED(fieldID, indexType, mem, numDocs, except)
 }
 
 // Rebuilding the cache on a miss.
@@ -160,8 +160,8 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		pos += int(binSize)
 	}
 	// update the cache
-	vc.insertLOCKED(fieldID, index, mapping)
-	return index, mapping, getExcludedVectors(mapping, except), nil
+	vc.insertLOCKED(fieldID, container, mapping)
+	return container, mapping, getExcludedVectors(mapping, except), nil
 }
 
 func (vc *vectorIndexCache) insertLOCKED(fieldID uint16,
@@ -176,7 +176,7 @@ func (vc *vectorIndexCache) insertLOCKED(fieldID uint16,
 	// this makes the average to be kept above the threshold value for a
 	// longer time and thereby the index to be resident in the cache
 	// for longer time.
-	vc.cache[fieldID] = createCacheEntry(index, mapping, 0.4)
+	vc.cache[fieldID] = createCacheEntry(container, mapping, 0.4)
 }
 
 func (vc *vectorIndexCache) incHit(fieldID uint16) {
@@ -270,8 +270,8 @@ func (e *ewma) add(val uint64) {
 
 func createCacheEntry(index *faissIndex, mapping *idMapping, alpha float64) *cacheEntry {
 	ce := &cacheEntry{
-		index:   index,
-		mapping: mapping,
+		container: container,
+		mapping:   mapping,
 		tracker: &ewma{
 			alpha:  alpha,
 			sample: 1,
@@ -308,7 +308,7 @@ func (ce *cacheEntry) decRef() {
 func (ce *cacheEntry) load(except *roaring.Bitmap) (*faissIndex, *idMapping, *bitmap, error) {
 	ce.incHit()
 	ce.addRef()
-	return ce.index, ce.mapping, getExcludedVectors(ce.mapping, except), nil
+	return ce.container, ce.mapping, getExcludedVectors(ce.mapping, except), nil
 }
 
 func (ce *cacheEntry) close() {

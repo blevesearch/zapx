@@ -38,8 +38,18 @@ func init() {
 	reflectStaticSizeSegmentBase = int(unsafe.Sizeof(sb))
 }
 
+// OpenUsing returns a zap impl of a segment which tracks some config values during
+// the its lifetime.
+func (z *ZapPlugin) OpenUsing(path string, config map[string]interface{}) (segment.Segment, error) {
+	return z.open(path, config)
+}
+
 // Open returns a zap impl of a segment
-func (*ZapPlugin) Open(path string) (segment.Segment, error) {
+func (z *ZapPlugin) Open(path string) (segment.Segment, error) {
+	return z.open(path, nil)
+}
+
+func (*ZapPlugin) open(path string, config map[string]interface{}) (segment.Segment, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -59,7 +69,8 @@ func (*ZapPlugin) Open(path string) (segment.Segment, error) {
 			vecIndexCache:  newVectorIndexCache(),
 			synIndexCache:  newSynonymIndexCache(),
 			nstIndexCache:  newNestedIndexCache(),
-			fieldDvReaders: make([]map[uint16]*docValueReader, len(segmentSections)),
+			fieldDvReaders: make([][]*docValueReader, len(segmentSections)),
+			config:         config,
 		},
 		f:    f,
 		mm:   mm,
@@ -113,12 +124,13 @@ type SegmentBase struct {
 	numDocs             uint64
 	storedIndexOffset   uint64
 	sectionsIndexOffset uint64
-	fieldDvReaders      []map[uint16]*docValueReader // naive chunk cache per field; section->field->reader
-	fieldDvNames        []string                     // field names cached in fieldDvReaders
+	fieldDvReaders      [][]*docValueReader // naive chunk cache per field; section->fieldID->reader
+	fieldDvNames        []string            // field names cached in fieldDvReaders
 	size                uint64
 
 	// index update specific tracking
 	updatedFields map[string]*index.UpdateFieldInfo
+	config        map[string]interface{} // config for the segment
 
 	// section-specific caches
 	invIndexCache *invertedIndexCache
@@ -805,7 +817,7 @@ func (sb *SegmentBase) loadDvReaders() error {
 				}
 				if fieldDvReader != nil {
 					if sb.fieldDvReaders[secID] == nil {
-						sb.fieldDvReaders[secID] = make(map[uint16]*docValueReader)
+						sb.fieldDvReaders[secID] = make([]*docValueReader, len(sb.fieldsInv))
 					}
 					sb.fieldDvReaders[secID][uint16(fieldID)] = fieldDvReader
 					sb.fieldDvNames = append(sb.fieldDvNames, sb.fieldsInv[fieldID])

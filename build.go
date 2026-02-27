@@ -168,7 +168,7 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		fieldDvReaders:      make([][]*docValueReader, len(segmentSections)),
 		updatedFields:       make(map[string]*index.UpdateFieldInfo),
 		invIndexCache:       newInvertedIndexCache(),
-		vecIndexCache:       newVectorIndexCache(),
+		vecIndexCache:       newVectorIndexCache(config),
 		synIndexCache:       newSynonymIndexCache(),
 		nstIndexCache:       newNestedIndexCache(),
 		// following fields gets populated by loadFields

@@ -45,12 +45,17 @@ const (
 	// Divide the estimated nprobe with this value to optimize
 	// for latency.
 	nprobeLatencyOptimization = 2
+	// Config flat to mmap BIVF backing index
+	MMapBIVF = "mmap_bivf"
 )
 
 // Vector index types currently supported.
 const (
 	// IndexTypeFlat is a flat index type for exact search.
 	IndexTypeFlat = iota
+	// IndexTypeSQ is a scalar quantized flat index that requires training
+	// but no direct map
+	IndexTypeSQ
 	// IndexTypeIVF is an IVF index type for approximate search.
 	IndexTypeIVF
 )
@@ -451,6 +456,9 @@ func makeFaissFP32Index(vecs []float32, metric int, indexOptimizedFor string,
 		// the data space of indexData such that during the search time, we probe
 		// only a subset of vectors -> non-exhaustive search. could be a time
 		// consuming step when the indexData is large.
+
+	}
+	if indexClass == IndexTypeSQ || indexClass == IndexTypeIVF {
 		err = index.Train(vecs)
 		if err != nil {
 			return nil, err
@@ -625,7 +633,12 @@ func determineCentroids(nvecs int) int {
 func determineFP32IndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, int) {
 	switch indexOptimizedFor {
 	case index.IndexOptimizedWithBivfFlat:
-		return "Flat", IndexTypeFlat
+		switch {
+		case nvecs >= 1000:
+			return "SQ8", IndexTypeSQ
+		default:
+			return "Flat", IndexTypeFlat
+		}
 	case index.IndexOptimizedForMemoryEfficient:
 		switch {
 		case nvecs >= 1000:

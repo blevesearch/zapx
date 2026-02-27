@@ -66,7 +66,7 @@ func (*ZapPlugin) open(path string, config map[string]interface{}) (segment.Segm
 			fieldsMap:      make(map[string]uint16),
 			fieldsOptions:  make(map[string]index.FieldIndexingOptions),
 			invIndexCache:  newInvertedIndexCache(),
-			vecIndexCache:  newVectorIndexCache(),
+			vecIndexCache:  newVectorIndexCache(config),
 			synIndexCache:  newSynonymIndexCache(),
 			nstIndexCache:  newNestedIndexCache(),
 			fieldDvReaders: make([][]*docValueReader, len(segmentSections)),

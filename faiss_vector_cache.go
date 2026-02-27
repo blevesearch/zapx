@@ -30,10 +30,11 @@ import (
 
 // -----------------------------------------------------------------------------
 
-func newVectorIndexCache() *vectorIndexCache {
+func newVectorIndexCache(config map[string]interface{}) *vectorIndexCache {
 	return &vectorIndexCache{
 		cache:   make(map[uint16]*cacheEntry),
 		closeCh: make(chan struct{}),
+		config:  config,
 	}
 }
 
@@ -42,6 +43,9 @@ type vectorIndexCache struct {
 	m        sync.RWMutex
 	cache    map[uint16]*cacheEntry
 	isClosed bool
+
+	// segment level config for fine tuning cache
+	config map[string]interface{}
 }
 
 // Clear clears the entire vector index cache.
@@ -140,8 +144,15 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	}
 	pos += n
 	index = &faissIndex{}
+
+	// mmap optimization is set for bivf indexes only when the config is set to true
+	ioFlags := faissIOFlagsNoMmap
+	if faissIndexType(indexType) != faissBIVFIndex || vc.config[MMapBIVF] == true {
+		ioFlags = faissIOFlags
+	}
+
 	// read the serialized vector index
-	index.fIndex, err = faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faissIOFlags)
+	index.fIndex, err = faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], ioFlags)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("faiss index load error: %v", err)
 	}

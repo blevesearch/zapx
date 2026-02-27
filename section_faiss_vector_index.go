@@ -531,7 +531,7 @@ func determineBinaryIndexToUse(nvecs, nlist int) (string, int) {
 // returns the index type constant for the vector index to be created based on the
 // index optimization type specified in the field mapping.
 func determineIndexTypeFromOptimization(indexOptimizedFor string) faissIndexType {
-	if indexOptimizedFor == index.IndexOptimizedWithBivfFlat {
+	if indexOptimizedFor == index.IndexOptimizedWithBivfSQ8 {
 		return faissBIVFIndex
 	}
 	return faissFP32Index
@@ -632,7 +632,7 @@ func determineCentroids(nvecs int) int {
 // and an index type constant.
 func determineFP32IndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, int) {
 	switch indexOptimizedFor {
-	case index.IndexOptimizedWithBivfFlat:
+	case index.IndexOptimizedWithBivfSQ8:
 		switch {
 		case nvecs >= 1000:
 			return "SQ8", IndexTypeSQ

@@ -635,7 +635,7 @@ func determineFP32IndexToUse(nvecs, nlist int, indexOptimizedFor string) (string
 	case index.IndexOptimizedWithBivfSQ8:
 		switch {
 		case nvecs >= 1000:
-			return "SQ8", IndexTypeSQ
+			return "Flat", IndexTypeFlat
 		default:
 			return "Flat", IndexTypeFlat
 		}

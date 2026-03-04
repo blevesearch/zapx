@@ -531,8 +531,7 @@ func determineBinaryIndexToUse(nvecs, nlist int) (string, int) {
 // returns the index type constant for the vector index to be created based on the
 // index optimization type specified in the field mapping.
 func determineIndexTypeFromOptimization(indexOptimizedFor string) faissIndexType {
-	if indexOptimizedFor == index.IndexOptimizedWithBivfForLatency ||
-		indexOptimizedFor == index.IndexOptimizedWithBivfForDisk {
+	if index.OptimizationRequiresBinaryIndex(indexOptimizedFor) {
 		return faissBIVFIndex
 	}
 	return faissFP32Index

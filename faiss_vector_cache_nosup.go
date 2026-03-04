@@ -20,7 +20,7 @@ package zap
 type vectorIndexCache struct {
 }
 
-func newVectorIndexCache(_ map[string]interface{}) *vectorIndexCache {
+func newVectorIndexCache() *vectorIndexCache {
 	return nil
 }
 

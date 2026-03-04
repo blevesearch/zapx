@@ -20,5 +20,3 @@ package zap
 import faiss "github.com/blevesearch/go-faiss"
 
 const faissIOFlags = faiss.IOFlagReadMmap | faiss.IOFlagSkipPrefetch
-
-const faissIOFlagsNoMmap = faiss.IOFlagReadOnly

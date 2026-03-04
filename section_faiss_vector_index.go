@@ -531,7 +531,8 @@ func determineBinaryIndexToUse(nvecs, nlist int) (string, int) {
 // returns the index type constant for the vector index to be created based on the
 // index optimization type specified in the field mapping.
 func determineIndexTypeFromOptimization(indexOptimizedFor string) faissIndexType {
-	if indexOptimizedFor == index.IndexOptimizedWithBivfSQ8 {
+	if indexOptimizedFor == index.IndexOptimizedWithBivfForLatency ||
+		indexOptimizedFor == index.IndexOptimizedWithBivfForDisk {
 		return faissBIVFIndex
 	}
 	return faissFP32Index
@@ -631,29 +632,23 @@ func determineCentroids(nvecs int) int {
 // determineIndexToUse returns a description string for the index and quantizer type,
 // and an index type constant.
 func determineFP32IndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, int) {
+	if nvecs < 1000 {
+		return "Flat", IndexTypeFlat
+	}
+
 	switch indexOptimizedFor {
-	case index.IndexOptimizedWithBivfSQ8:
-		switch {
-		case nvecs >= 1000:
-			return "SQ8", IndexTypeSQ
-		default:
-			return "Flat", IndexTypeFlat
-		}
+	case index.IndexOptimizedWithBivfForLatency:
+		return "Flat", IndexTypeFlat
+	case index.IndexOptimizedWithBivfForDisk:
+		return "SQ8", IndexTypeSQ
 	case index.IndexOptimizedForMemoryEfficient:
-		switch {
-		case nvecs >= 1000:
-			return fmt.Sprintf("IVF%d,SQ4", nlist), IndexTypeIVF
-		default:
-			return "Flat", IndexTypeFlat
-		}
+		return fmt.Sprintf("IVF%d,SQ4", nlist), IndexTypeIVF
 	default:
 		switch {
 		case nvecs >= 10000:
 			return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF
-		case nvecs >= 1000:
-			return fmt.Sprintf("IVF%d,Flat", nlist), IndexTypeIVF
 		default:
-			return "Flat", IndexTypeFlat
+			return fmt.Sprintf("IVF%d,Flat", nlist), IndexTypeIVF
 		}
 	}
 }

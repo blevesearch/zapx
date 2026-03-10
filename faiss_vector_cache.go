@@ -140,6 +140,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	}
 	pos += n
 	index = &faissIndex{}
+
 	// read the serialized vector index
 	index.fIndex, err = faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faissIOFlags)
 	if err != nil {

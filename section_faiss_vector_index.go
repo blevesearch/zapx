@@ -45,12 +45,17 @@ const (
 	// Divide the estimated nprobe with this value to optimize
 	// for latency.
 	nprobeLatencyOptimization = 2
+	// Config flat to mmap BIVF backing index
+	MMapBIVF = "mmap_bivf"
 )
 
 // Vector index types currently supported.
 const (
 	// IndexTypeFlat is a flat index type for exact search.
 	IndexTypeFlat = iota
+	// IndexTypeSQ is a scalar quantized flat index that requires training
+	// but no direct map
+	IndexTypeSQ
 	// IndexTypeIVF is an IVF index type for approximate search.
 	IndexTypeIVF
 )
@@ -451,6 +456,9 @@ func makeFaissFP32Index(vecs []float32, metric int, indexOptimizedFor string,
 		// the data space of indexData such that during the search time, we probe
 		// only a subset of vectors -> non-exhaustive search. could be a time
 		// consuming step when the indexData is large.
+
+	}
+	if indexClass == IndexTypeSQ || indexClass == IndexTypeIVF {
 		err = index.Train(vecs)
 		if err != nil {
 			return nil, err
@@ -523,7 +531,7 @@ func determineBinaryIndexToUse(nvecs, nlist int) (string, int) {
 // returns the index type constant for the vector index to be created based on the
 // index optimization type specified in the field mapping.
 func determineIndexTypeFromOptimization(indexOptimizedFor string) faissIndexType {
-	if indexOptimizedFor == index.IndexOptimizedWithBivfFlat {
+	if index.OptimizationRequiresBinaryIndex(indexOptimizedFor) {
 		return faissBIVFIndex
 	}
 	return faissFP32Index
@@ -623,24 +631,23 @@ func determineCentroids(nvecs int) int {
 // determineIndexToUse returns a description string for the index and quantizer type,
 // and an index type constant.
 func determineFP32IndexToUse(nvecs, nlist int, indexOptimizedFor string) (string, int) {
-	switch indexOptimizedFor {
-	case index.IndexOptimizedWithBivfFlat:
+	if nvecs < 1000 {
 		return "Flat", IndexTypeFlat
+	}
+
+	switch indexOptimizedFor {
+	case index.IndexOptimizedWithBivfForLatency:
+		return "Flat", IndexTypeFlat
+	case index.IndexOptimizedWithBivfForDisk:
+		return "SQ8", IndexTypeSQ
 	case index.IndexOptimizedForMemoryEfficient:
-		switch {
-		case nvecs >= 1000:
-			return fmt.Sprintf("IVF%d,SQ4", nlist), IndexTypeIVF
-		default:
-			return "Flat", IndexTypeFlat
-		}
+		return fmt.Sprintf("IVF%d,SQ4", nlist), IndexTypeIVF
 	default:
 		switch {
 		case nvecs >= 10000:
 			return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF
-		case nvecs >= 1000:
-			return fmt.Sprintf("IVF%d,Flat", nlist), IndexTypeIVF
 		default:
-			return "Flat", IndexTypeFlat
+			return fmt.Sprintf("IVF%d,Flat", nlist), IndexTypeIVF
 		}
 	}
 }

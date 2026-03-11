@@ -4,8 +4,8 @@ go 1.24.0
 
 require (
 	github.com/RoaringBitmap/roaring/v2 v2.14.4
-	github.com/blevesearch/bleve_index_api v1.3.2
-	github.com/blevesearch/go-faiss v1.0.27
+	github.com/blevesearch/bleve_index_api v1.3.3-0.20260311083042-62a5343ee2d1
+	github.com/blevesearch/go-faiss v1.0.28-0.20260311083224-baa72a4cd87f
 	github.com/blevesearch/mmap-go v1.2.0
 	github.com/blevesearch/scorch_segment_api/v2 v2.4.1
 	github.com/blevesearch/vellum v1.2.0

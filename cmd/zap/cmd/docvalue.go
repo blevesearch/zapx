@@ -238,6 +238,10 @@ func loadFieldData(data []byte, pos uint64, fieldID uint64, sectionMap map[uint1
 
 	pos += fieldNameLen
 
+	// field options
+	_, sz = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(sz)
+
 	fieldNumSections, sz := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(sz)
 
@@ -257,6 +261,12 @@ func getSectionFields(data []byte, pos uint64) ([]string, []map[uint16]uint64, e
 	var err error
 	var fieldSectionMap []map[uint16]uint64
 	var fieldInv []string
+
+	// account for overflow
+	seek := pos + binary.MaxVarintLen64
+	if seek > uint64(len(data)) {
+		seek = uint64(len(data))
+	}
 
 	// read the number of fields
 	numFields, sz := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])

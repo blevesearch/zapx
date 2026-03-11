@@ -297,6 +297,11 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 		_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
 	}
+	// float index type is necessary for vector index
+	indexType := FloatFaissIndex
+	if sb.fieldsOptions[field].UseGPU() {
+		indexType |= GPUFaissIndex
+	}
 	// create the vector index wrapper by loading (or creating) the vector index
 	// and the vector to docID mapping
 	var err error

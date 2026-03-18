@@ -257,7 +257,8 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 
 			postItr = postings.iterator(true, true, true, postItr)
 
-			// can only safely copy data if all segments have same fields
+			// can only safely copy data if all segments have same fields and all have an empty
+			// writer id (i.e. no callbacks)
 			if fieldsSame && copyFlag && w.id == "" {
 				// can optimize by copying freq/norm/loc bytes directly
 				lastDocNum, lastFreq, lastNorm, err = mergeTermFreqNormLocsByCopying(

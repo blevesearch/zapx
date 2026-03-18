@@ -152,14 +152,6 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			// read the number of vectors
 			numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
-			// read the length of the vector to docID map (unused for now)
-			mapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-			pos += n
-			buf, err := sb.fileReader.process(sb.mem[pos : pos+int(mapLen)])
-			if err != nil {
-				return err
-			}
-			pos += int(mapLen)
 			// track the valid vectors to be reconstructed for this segment
 			// during the merge operation.
 			newIndexInfo := &vecIndexInfo{
@@ -167,6 +159,14 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 				vecIds:            make([]int64, 0, numVecs),
 				index:             &faissIndex{},
 			}
+			// read the length of the docID list
+			listLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+			buf, err := sb.fileReader.process(sb.mem[pos : pos+int(listLen)])
+			if err != nil {
+				return err
+			}
+			pos += int(listLen)
 			bufPos := 0
 			bufLen := len(buf)
 			for vecID := 0; vecID < int(numVecs); vecID++ {
@@ -252,20 +252,17 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *fileWriter,
 	for _, docID := range vecToDocID {
 		n = binary.PutUvarint(buf[bufPos:], docID)
 		bufPos += n
-		if err != nil {
-			return err
-		}
 	}
-	buf = w.process(buf)
+	buf = w.process(buf[:bufPos])
 
-	// write the size of the vector to docID map (unused for now)
-	n = binary.PutUvarint(tempBuf, uint64(bufPos))
+	// write the size of the vector to docID map
+	n = binary.PutUvarint(tempBuf, uint64(len(buf)))
 	_, err = w.Write(tempBuf[:n])
 	if err != nil {
 		return err
 	}
 	// write the vecID -> docID mapping
-	_, err = w.Write(buf[:bufPos])
+	_, err = w.Write(buf)
 	if err != nil {
 		return err
 	}
@@ -394,6 +391,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	if err != nil {
 		return err
 	}
+	fIndexBytes = w.process(fIndexBytes)
 
 	// get a temporary buffer for writing out the index
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
@@ -423,6 +421,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		if err != nil {
 			return err
 		}
+		bIndexBytes = w.process(bIndexBytes)
 
 		// write the length of the serialized binary vector index bytes
 		n = binary.PutUvarint(tempBuf, uint64(len(bIndexBytes)))
@@ -727,20 +726,17 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *fileWriter) error {
 		for _, docID := range content.vecDocIDs {
 			n = binary.PutUvarint(buf[bufPos:], uint64(docID))
 			bufPos += n
-			if err != nil {
-				return err
-			}
 		}
-		buf = w.process(buf)
+		buf = w.process(buf[:bufPos])
 
-		// write the size of the vector to docID map (unused for now)
-		n = binary.PutUvarint(tempBuf, uint64(bufPos))
+		// write the size of the vector to docID map
+		n = binary.PutUvarint(tempBuf, uint64(len(buf)))
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
 			return err
 		}
 		// write the vecID -> docID mapping
-		_, err = w.Write(buf[:bufPos])
+		_, err = w.Write(buf)
 		if err != nil {
 			return err
 		}

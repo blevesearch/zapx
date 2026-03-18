@@ -180,9 +180,13 @@ func (di *docValueReader) loadDvChunk(chunkNumber uint64, s *SegmentBase) error 
 	destChunkDataLoc += start
 	curChunkEnd += end
 
+	var err error
 	// if skip chunking is enabled, each chunk has 1 document's docValues
 	if di.indexOptions.SkipDVChunking() {
-		di.curChunkData = s.mem[destChunkDataLoc:curChunkEnd]
+		di.curChunkData, err = s.fileReader.process(s.mem[destChunkDataLoc:curChunkEnd])
+		if err != nil {
+			return err
+		}
 		di.curChunkNum = chunkNumber
 		di.uncompressed = di.uncompressed[:0]
 		return nil
@@ -208,7 +212,6 @@ func (di *docValueReader) loadDvChunk(chunkNumber uint64, s *SegmentBase) error 
 		offset += uint64(read)
 	}
 
-	var err error
 	compressedDataLoc := chunkMetaLoc + offset
 	dataLength := curChunkEnd - compressedDataLoc
 	di.incrementBytesRead(uint64(dataLength + offset))

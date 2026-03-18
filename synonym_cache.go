@@ -77,7 +77,7 @@ func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte, r 
 	pos += uint64(read)
 	fstBytes, err := r.process(mem[pos : pos+vellumLen])
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	fst, err := vellum.Load(fstBytes)
 	if err != nil {

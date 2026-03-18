@@ -146,7 +146,6 @@ func TestFileCallbacks(t *testing.T) {
 
 	TestVecPostingsIterator(t)
 	TestVectorSegment(t)
-	TestHashCode(t)
 	TestPersistedVectorSegment(t)
 	TestValidVectorMerge(t)
 

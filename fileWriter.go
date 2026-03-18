@@ -107,7 +107,6 @@ func (w *fileWriter) Sum32() uint32 {
 type fileReader struct {
 	processor func(data []byte) ([]byte, error)
 	id        string
-	context   []byte
 }
 
 func NewFileReader(id string, context []byte) (*fileReader, error) {

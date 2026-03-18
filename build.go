@@ -157,7 +157,8 @@ func persistStoredFieldValues(fieldID int,
 }
 
 func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64,
-	storedIndexOffset uint64, sectionsIndexOffset uint64, writerId string, config map[string]interface{}) (*SegmentBase, error) {
+	storedIndexOffset uint64, sectionsIndexOffset uint64, writerId string,
+	config map[string]interface{}) (*SegmentBase, error) {
 	sb := &SegmentBase{
 		mem:                 mem,
 		memCRC:              memCRC,

@@ -45,7 +45,7 @@ func (sc *invertedIndexCache) Clear() {
 // - A Vellum FST (Finite State Transducer) representing the TermDictionary.
 // This function returns the loaded or newly created FST, and the number of bytes read from the provided memory slice,
 // if the cache was created.
-func (sc *invertedIndexCache) loadOrCreate(fieldID uint16, mem []byte) (*vellum.FST, uint64, error) {
+func (sc *invertedIndexCache) loadOrCreate(fieldID uint16, mem []byte, fr *fileReader) (*vellum.FST, uint64, error) {
 	sc.m.RLock()
 	entry, ok := sc.cache[fieldID]
 	if ok {
@@ -63,18 +63,21 @@ func (sc *invertedIndexCache) loadOrCreate(fieldID uint16, mem []byte) (*vellum.
 		return entry.load()
 	}
 
-	return sc.createAndCacheLOCKED(fieldID, mem)
+	return sc.createAndCacheLOCKED(fieldID, mem, fr)
 }
 
 // createAndCacheLOCKED creates the inverted index cache for the specified fieldID and caches it.
-func (sc *invertedIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte) (*vellum.FST, uint64, error) {
+func (sc *invertedIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte, fr *fileReader) (*vellum.FST, uint64, error) {
 	var pos uint64
 	vellumLen, read := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	if vellumLen == 0 || read <= 0 {
 		return nil, 0, fmt.Errorf("vellum length is 0")
 	}
 	pos += uint64(read)
-	fstBytes := mem[pos : pos+vellumLen]
+	fstBytes, err := fr.process(mem[pos : pos+vellumLen])
+	if err != nil {
+		return nil, 0, fmt.Errorf("error processing vellum bytes: %v", err)
+	}
 	fst, err := vellum.Load(fstBytes)
 	if err != nil {
 		return nil, 0, fmt.Errorf("vellum err: %v", err)

@@ -91,12 +91,6 @@ func (*ZapPlugin) open(path string, config map[string]interface{}) (segment.Segm
 		return nil, err
 	}
 
-	rv.fileReader, err = NewFileReader(rv.writerId, []byte(rv.path))
-	if err != nil {
-		_ = rv.Close()
-		return nil, err
-	}
-
 	err = rv.loadFields()
 	if err != nil {
 		_ = rv.Close()
@@ -256,7 +250,7 @@ func (s *Segment) loadConfig() error {
 	storedIndexOffset := sectionsIndexOffset - 8
 	numDocsOffset := storedIndexOffset - 8
 
-	// read offsets for the writer id length (unused for now)
+	// read offsets for the writer id length
 	idLenOffset := numDocsOffset - 4
 
 	// read 32-bit crc
@@ -280,7 +274,7 @@ func (s *Segment) loadConfig() error {
 	// read 64-bit num docs
 	s.numDocs = binary.BigEndian.Uint64(s.mm[numDocsOffset : numDocsOffset+8])
 
-	// read the length of the id (unused for now)
+	// read the length of the id
 	idLen := binary.BigEndian.Uint32(s.mm[idLenOffset : idLenOffset+4])
 	idOffset := idLenOffset - int(idLen)
 	s.writerId = string(s.mm[idOffset : idOffset+int(idLen)])
@@ -391,7 +385,7 @@ func (sb *SegmentBase) loadField(fieldID uint16, pos uint64) ([]uint64, error) {
 
 	fieldName, err := sb.fileReader.process(sb.mem[pos : pos+fieldNameLen])
 	if err != nil {
-		return err
+		return nil, err
 	}
 	pos += fieldNameLen
 
@@ -451,11 +445,7 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 		}
 		dictLoc, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
-		fstBytes, err := sb.fileReader.process(sb.mem[dictLoc:])
-		if err != nil {
-			return nil, fmt.Errorf("dictionary for field %s err: %v", field, err)
-		}
-		fst, bytesRead, err := sb.invIndexCache.loadOrCreate(rv.fieldID, fstBytes)
+		fst, bytesRead, err := sb.invIndexCache.loadOrCreate(rv.fieldID, sb.mem[dictLoc:], sb.fileReader)
 		if err != nil {
 			return nil, fmt.Errorf("dictionary for field %s err: %v", field, err)
 		}

@@ -111,7 +111,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		return nil, nil, nil, nil
 	}
 	pos += n
-	// read the length of the docID list (unused for now)
+	// read the length of the docID list
 	listLen, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	if n <= 0 {
 		return nil, nil, nil, fmt.Errorf("could not read docID list length")
@@ -165,8 +165,12 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		binSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
 
+		buf, err = r.process(mem[pos : pos+int(binSize)])
+		if err != nil {
+			return nil, nil, nil, err
+		}
 		// read the serialized binary vector index
-		index.bIndex, err = faiss.ReadBinaryIndexFromBuffer(mem[pos:pos+int(binSize)], faissIOFlags)
+		index.bIndex, err = faiss.ReadBinaryIndexFromBuffer(buf, faissIOFlags)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("faiss binary index load error: %v", err)
 		}

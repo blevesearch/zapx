@@ -147,7 +147,7 @@ func (c *chunkedIntCoder) Write(w io.Writer) (int, error) {
 	// process each chunk if needed and update the chunk offsets
 	if fw, ok := w.(*fileWriter); ok && fw != nil {
 		var prevOffset int
-		processedBuf := make([]byte, 0, 64)
+		processedBuf := make([]byte, 0)
 		for i := 0; i < len(chunkOffsets); i++ {
 			if chunkOffsets[i] == uint64(prevOffset) {
 				continue

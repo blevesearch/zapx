@@ -16,19 +16,26 @@ package zap
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	index "github.com/blevesearch/bleve_index_api"
 )
 
+// getTempPath returns a cross-platform temporary file path for testing
+func getTempPath(filename string) string {
+	return filepath.Join(os.TempDir(), filename)
+}
+
 func TestBuild(t *testing.T) {
-	_ = os.RemoveAll("/tmp/scorch.zap")
+	tmpPath := getTempPath("scorch.zap")
+	_ = os.RemoveAll(tmpPath)
 
 	sb, _, err := buildTestSegment()
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = PersistSegmentBase(sb, "/tmp/scorch.zap")
+	err = PersistSegmentBase(sb, tmpPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,28 +55,28 @@ func buildTestSegment() (*SegmentBase, uint64, error) {
 		doc,
 	}
 
-	seg, size, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode)
+	seg, size, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode, nil)
 	return seg.(*SegmentBase), size, err
 }
 
 func buildTestSegmentMulti() (*SegmentBase, uint64, error) {
 	results := buildTestAnalysisResultsMulti()
 
-	seg, size, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode)
+	seg, size, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode, nil)
 	return seg.(*SegmentBase), size, err
 }
 
 func buildTestSegmentMultiWithChunkFactor(chunkFactor uint32) (*SegmentBase, uint64, error) {
 	results := buildTestAnalysisResultsMulti()
 
-	seg, size, err := zapPlugin.newWithChunkMode(results, chunkFactor)
+	seg, size, err := zapPlugin.newWithChunkMode(results, chunkFactor, nil)
 	return seg.(*SegmentBase), size, err
 }
 
 func buildTestSegmentMultiWithDifferentFields(includeDocA, includeDocB bool) (*SegmentBase, uint64, error) {
 	results := buildTestAnalysisResultsMultiWithDifferentFields(includeDocA, includeDocB)
 
-	seg, size, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode)
+	seg, size, err := zapPlugin.newWithChunkMode(results, DefaultChunkMode, nil)
 	return seg.(*SegmentBase), size, err
 }
 
@@ -152,7 +159,7 @@ func buildTestSegmentWithDefaultFieldMapping(chunkFactor uint32) (
 		doc,
 	}
 
-	sb, _, err := zapPlugin.newWithChunkMode(results, chunkFactor)
+	sb, _, err := zapPlugin.newWithChunkMode(results, chunkFactor, nil)
 
 	return sb.(*SegmentBase), fields, err
 }

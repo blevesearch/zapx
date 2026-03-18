@@ -17,7 +17,7 @@ package cmd
 import (
 	"fmt"
 
-	zap "github.com/blevesearch/zapx/v16"
+	zap "github.com/blevesearch/zapx/v17"
 	"github.com/spf13/cobra"
 )
 
@@ -32,7 +32,7 @@ var fieldsCmd = &cobra.Command{
 		}
 
 		data := segment.Data()
-		pos := segment.FieldsIndexOffset()
+		pos := segment.SectionsIndexOffset()
 		if pos == 0 {
 			// this is the case only for older file formats
 			return fmt.Errorf("file format not supported")

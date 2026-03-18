@@ -23,7 +23,8 @@ import (
 	"sort"
 	"strconv"
 
-	zap "github.com/blevesearch/zapx/v16"
+	index "github.com/blevesearch/bleve_index_api"
+	zap "github.com/blevesearch/zapx/v17"
 	"github.com/golang/snappy"
 	"github.com/spf13/cobra"
 )
@@ -168,13 +169,10 @@ func dumpDocValueResults(data []byte, args []string, field string, id int, field
 		return err
 	}
 
-	var termSeparator byte = 0xff
-	var termSeparatorSplitSlice = []byte{termSeparator}
-
 	// pick the terms for the given docNum
 	uncompressed = uncompressed[start:end]
 	for {
-		i := bytes.Index(uncompressed, termSeparatorSplitSlice)
+		i := bytes.IndexByte(uncompressed, index.DocValueTermSeparator)
 		if i < 0 {
 			break
 		}
@@ -193,7 +191,7 @@ func docValueCmd(cmd *cobra.Command, args []string) error {
 
 	data := segment.Data()
 	// iterate through fields index
-	pos := segment.FieldsIndexOffset()
+	pos := segment.SectionsIndexOffset()
 	if pos == 0 {
 		// this is the case only for older file formats
 		return fmt.Errorf("file format not supported")

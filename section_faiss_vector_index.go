@@ -652,9 +652,9 @@ func determineFP32IndexToUse(nvecs, nlist int, indexOptimizedFor string) (string
 	}
 
 	switch indexOptimizedFor {
-	case index.IndexOptimizedWithBivfForLatency:
+	case index.IndexBIVFWithBackingFlat:
 		return "Flat", IndexTypeFlat
-	case index.IndexOptimizedWithBivfForDisk:
+	case index.IndexBIVFWithBackingSQ8:
 		return "SQ8", IndexTypeSQ
 	case index.IndexOptimizedForMemoryEfficient:
 		return fmt.Sprintf("IVF%d,SQ4", nlist), IndexTypeIVF

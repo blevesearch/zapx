@@ -65,7 +65,7 @@ func (vc *vectorIndexCache) Clear() {
 
 // loadOrCreate obtains the vector index from the cache or creates it if it's not present.
 func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uint32, except *roaring.Bitmap) (
-	index *faissIndex, mapping *idMapping, exclude *bitmap, err error) {
+	index faissIndex, mapping *idMapping, exclude *bitmap, err error) {
 	// first try to read from the cache with a read lock
 	vc.m.RLock()
 	if vc.isClosed {
@@ -97,7 +97,7 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uin
 
 // Rebuilding the cache on a miss.
 func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
-	numDocs uint32, except *roaring.Bitmap) (index *faissIndex,
+	numDocs uint32, except *roaring.Bitmap) (index faissIndex,
 	mapping *idMapping, exclude *bitmap, err error) {
 	// if the cache doesn't have the entry, construct the vector to doc id map and
 	// the vector index out of the mem bytes and update the cache under lock.
@@ -139,10 +139,10 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		return nil, nil, nil, fmt.Errorf("could not read faiss index size")
 	}
 	pos += n
-	index = &faissIndex{}
 
+	var rv faissIndex
 	// read the serialized vector index
-	index.fIndex, err = faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faissIOFlags)
+	fIndex, err := faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faissIOFlags)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("faiss index load error: %v", err)
 	}
@@ -154,19 +154,28 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		pos += n
 
 		// read the serialized binary vector index
-		index.bIndex, err = faiss.ReadBinaryIndexFromBuffer(mem[pos:pos+int(binSize)], faissIOFlags)
+		bIndex, err := faiss.ReadBinaryIndexFromBuffer(mem[pos:pos+int(binSize)], faissIOFlags)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("faiss binary index load error: %v", err)
 		}
 		pos += int(binSize)
+		rv, err = newFaissBinaryIndex(bIndex, fIndex)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("faiss binary index creation error: %v", err)
+		}
+	} else {
+		rv, err = newFaissFloat32Index(fIndex)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("faiss float32 index creation error: %v", err)
+		}
 	}
 	// update the cache
-	vc.insertLOCKED(fieldID, index, mapping)
-	return index, mapping, getExcludedVectors(mapping, except), nil
+	vc.insertLOCKED(fieldID, rv, mapping)
+	return rv, mapping, getExcludedVectors(mapping, except), nil
 }
 
 func (vc *vectorIndexCache) insertLOCKED(fieldID uint16,
-	index *faissIndex, mapping *idMapping) {
+	index faissIndex, mapping *idMapping) {
 	// the first time we've hit the cache, try to spawn a monitoring routine
 	// which will reconcile the moving averages for all the fields being hit
 	if len(vc.cache) == 0 {
@@ -269,7 +278,7 @@ func (e *ewma) add(val uint64) {
 
 // -----------------------------------------------------------------------------
 
-func createCacheEntry(index *faissIndex, mapping *idMapping, alpha float64) *cacheEntry {
+func createCacheEntry(index faissIndex, mapping *idMapping, alpha float64) *cacheEntry {
 	ce := &cacheEntry{
 		index:   index,
 		mapping: mapping,
@@ -290,7 +299,7 @@ type cacheEntry struct {
 	// threshold we close/cleanup only if the live refs to the cache entry is 0.
 	refs int64
 
-	index   *faissIndex
+	index   faissIndex
 	mapping *idMapping
 }
 
@@ -306,7 +315,7 @@ func (ce *cacheEntry) decRef() {
 	atomic.AddInt64(&ce.refs, -1)
 }
 
-func (ce *cacheEntry) load(except *roaring.Bitmap) (*faissIndex, *idMapping, *bitmap, error) {
+func (ce *cacheEntry) load(except *roaring.Bitmap) (faissIndex, *idMapping, *bitmap, error) {
 	ce.incHit()
 	ce.addRef()
 	return ce.index, ce.mapping, getExcludedVectors(ce.mapping, except), nil

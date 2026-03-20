@@ -33,17 +33,12 @@ func initFileCallbacks(t *testing.T) {
 		panic("Failed to generate random key: " + err.Error())
 	}
 
-	WriterHook = func(context interface{}) (string, func(data []byte) []byte, error) {
+	WriterHook = func(context []byte) (string, func(data []byte) []byte, error) {
 
 		if context == nil {
 			return "", func(data []byte) []byte {
 				return data
 			}, nil
-		}
-
-		_, ok := context.([]byte)
-		if !ok {
-			return "", nil, fmt.Errorf("invalid context type")
 		}
 
 		block, err := aes.NewCipher(key)
@@ -78,7 +73,7 @@ func initFileCallbacks(t *testing.T) {
 		return keyId, writerCallback, nil
 	}
 
-	ReaderHook = func(id string, context interface{}) (func(data []byte) ([]byte, error), error) {
+	ReaderHook = func(id string, context []byte) (func(data []byte) ([]byte, error), error) {
 
 		if id == "" {
 			return func(data []byte) ([]byte, error) {
@@ -88,11 +83,6 @@ func initFileCallbacks(t *testing.T) {
 
 		if id != keyId {
 			return nil, fmt.Errorf("unknown callback ID: %s", id)
-		}
-
-		_, ok := context.([]byte)
-		if !ok {
-			return nil, fmt.Errorf("invalid context type")
 		}
 
 		block, err := aes.NewCipher(key)

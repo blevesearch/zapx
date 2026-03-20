@@ -14,11 +14,6 @@
 
 package zap
 
-import (
-	"crypto/rand"
-	"fmt"
-)
-
 // This file provides a mechanism for users of zap to provide callbacks
 // that can process data before it is written to disk, and after it is read
 // from disk.  This can be used for things like encryption, compression, etc.
@@ -45,10 +40,10 @@ import (
 // within initFileCallbacks.
 
 // Default no-op implementation. Is called before writing any user data to a file.
-var WriterHook func(context interface{}) (string, func(data []byte) []byte, error)
+var WriterHook func(context []byte) (string, func(data []byte) []byte, error)
 
 // Default no-op implementation. Is called after reading any user data from a file.
-var ReaderHook func(id string, context interface{}) (func(data []byte) ([]byte, error), error)
+var ReaderHook func(id string, context []byte) (func(data []byte) ([]byte, error), error)
 
 // fileWriter wraps a CountHashWriter and applies a user provided
 // writer callback to the data being written.
@@ -66,7 +61,7 @@ func NewFileWriterEmpty(c *CountHashWriter) *fileWriter {
 	return rv
 }
 
-func NewFileWriter(c *CountHashWriter, context interface{}) (*fileWriter, error) {
+func NewFileWriter(c *CountHashWriter, context []byte) (*fileWriter, error) {
 	rv := &fileWriter{
 		c: c,
 	}
@@ -132,25 +127,4 @@ func (r *fileReader) process(data []byte) ([]byte, error) {
 		return r.processor(data)
 	}
 	return data, nil
-}
-
-func newContext() ([]byte, error) {
-	context := make([]byte, 8)
-	_, err := rand.Read(context)
-	if err != nil {
-		return nil, err
-	}
-	return context, nil
-}
-
-func getIdContext(data []byte) (string, []byte, error) {
-	if len(data) == 0 {
-		return "", nil, nil
-	}
-
-	if len(data) < 8 {
-		return "", nil, fmt.Errorf("length should be greater than 8")
-	}
-
-	return string(data[0 : len(data)-8]), data[len(data)-8:], nil
 }

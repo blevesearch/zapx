@@ -102,6 +102,9 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			break
 		}
 	}
+	if w.id != "" {
+		copyFlag = false
+	}
 
 	// these int coders are initialized with chunk size 1024
 	// however this will be reset to the correct chunk size
@@ -259,7 +262,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 
 			// can only safely copy data if all segments have same fields and all have an empty
 			// writer id (i.e. no callbacks)
-			if fieldsSame && copyFlag && w.id == "" {
+			if fieldsSame && copyFlag {
 				// can optimize by copying freq/norm/loc bytes directly
 				lastDocNum, lastFreq, lastNorm, err = mergeTermFreqNormLocsByCopying(
 					term, postItr, newDocNums[itrI], newRoaring,

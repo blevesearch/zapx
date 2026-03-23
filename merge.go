@@ -450,12 +450,15 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 
 	// copying data from segments is only possible when
 	// there are no writer callbacks across all segments
-	copyFlag := false
+	copyFlag := true
 	for _, segment := range segments {
 		if segment.writerId != "" {
-			copyFlag = true
+			copyFlag = false
 			break
 		}
+	}
+	if w.id != "" {
+		copyFlag = false
 	}
 
 	var posBuf []uint64
@@ -480,7 +483,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 		// segments and there are no deletions, via byte-copying
 		// of stored docs bytes directly to the writer
 		// cannot copy directly if fields might have been deleted
-		if fieldsSame && (dropsI == nil || dropsI.GetCardinality() == 0) && copyFlag && w.id == "" {
+		if fieldsSame && (dropsI == nil || dropsI.GetCardinality() == 0) && copyFlag {
 			err := segment.copyStoredDocs(newDocNum, docNumOffsets, w)
 			if err != nil {
 				return 0, nil, err

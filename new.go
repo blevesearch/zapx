@@ -402,8 +402,11 @@ func (s *interim) writeStoredFields() (
 		s.incrementBytesWritten(uint64(len(compressed)))
 		docStoredOffsets[docNum] = uint64(s.w.Count())
 
+		combined := make([]byte, len(idFieldVal)+len(compressed))
+		copy(combined, idFieldVal)
+		copy(combined[len(idFieldVal):], compressed)
 		bufMeta := s.w.process(metaBytes)
-		bufCompressed := s.w.process(append(idFieldVal, compressed...))
+		bufCompressed := s.w.process(combined)
 
 		_, err = writeUvarints(s.w,
 			uint64(len(bufMeta)),

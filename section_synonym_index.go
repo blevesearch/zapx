@@ -530,6 +530,9 @@ func writeSynTermMap(synTermMap map[uint32]string, w *fileWriter, bufMaxVarintLe
 	}
 	n := binary.PutUvarint(bufMaxVarintLen64, uint64(len(synTermMap)))
 	_, err := w.Write(bufMaxVarintLen64[:n])
+	if err != nil {
+		return err
+	}
 
 	lenTerms := 0
 	for _, term := range synTermMap {

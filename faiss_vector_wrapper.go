@@ -983,7 +983,7 @@ type vectorSet struct {
 }
 
 func newVectorSet(dim int, data []float32) (*vectorSet, error) {
-	if len(data) != dim || dim <= 0 {
+	if len(data) == 0 || dim <= 0 || len(data)%dim != 0 {
 		return nil, fmt.Errorf("invalid vector data: dims %d, data length %d", dim, len(data))
 	}
 	nvecs := len(data) / dim

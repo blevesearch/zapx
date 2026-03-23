@@ -364,12 +364,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 	freeReconstructedIndexes(reconsIndexes)
 	// create the faiss index to hold the merged data, and add the
 	// reconstructed vectors into it.
-	config := &faissIndexConfig{
-		indexType:        faissFP32Index,
-		optimizationType: indexOptimizedFor,
-		numVecs:          nvecs,
-		metricType:       metric,
-	}
+	config := newFaissIndexConfig(faissFP32Index, indexOptimizedFor, dims, metric, nvecs)
 	vecSet, err := newVectorSet(dims, indexData)
 	if err != nil {
 		return err
@@ -401,12 +396,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
 		// create the binary index to hold the merged data, and
 		// add the reconstructed vectors into it.
 		vecSet.binarize()
-		config := &faissIndexConfig{
-			indexType:        faissBIVFIndex,
-			optimizationType: indexOptimizedFor,
-			numVecs:          nvecs,
-			metricType:       metric,
-		}
+		config := newFaissIndexConfig(faissBIVFIndex, indexOptimizedFor, dims, metric, nvecs)
 		bIndexBytes, err := makeFaissIndex(vecSet, config)
 		if err != nil {
 			return err
@@ -583,12 +573,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 		}
 		// create the faiss float32 index for the vectors associated with this field and get the
 		// serialized index bytes to be written out to the segment.
-		config := &faissIndexConfig{
-			indexType:        faissFP32Index,
-			optimizationType: content.optimizedFor,
-			numVecs:          nvecs,
-			metricType:       metric,
-		}
+		config := newFaissIndexConfig(faissFP32Index, content.optimizedFor, content.dimension, metric, nvecs)
 		fIndexBytes, err := makeFaissIndex(vecSet, config)
 		if err != nil {
 			return err
@@ -659,12 +644,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 			// binarize the vector data in the vector set.
 			vecSet.binarize()
 			// bivf config
-			config := &faissIndexConfig{
-				indexType:        faissBIVFIndex,
-				optimizationType: content.optimizedFor,
-				numVecs:          nvecs,
-				metricType:       metric,
-			}
+			config := newFaissIndexConfig(faissBIVFIndex, content.optimizedFor, content.dimension, metric, nvecs)
 			bIndexBytes, err := makeFaissIndex(vecSet, config)
 			if err != nil {
 				return err
@@ -812,6 +792,16 @@ type faissIndexConfig struct {
 	metricType       int
 	numVecs          int
 	optimizationType string
+}
+
+func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimension, metricType, numVecs int) *faissIndexConfig {
+	return &faissIndexConfig{
+		indexType:        idxType,
+		dimension:        dimension,
+		metricType:       metricType,
+		numVecs:          numVecs,
+		optimizationType: optimizationType,
+	}
 }
 
 // Factory function to create a faissIndex for the given index config.

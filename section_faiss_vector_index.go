@@ -351,20 +351,20 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex *faiss.IndexImpl,
 				finalMergeCandidate = i
 			}
 		} else {
-			indexReconsLen := len(vecIndexes[i].vecIds) * vecIndexes[i].faissIndex.D()
+			indexReconsLen := len(vecIndexes[i].vecIds) * vecIndexes[i].index.fIndex.D()
 			if indexReconsLen > reconsCap {
 				reconsCap = indexReconsLen
 			}
 		}
 		nvecs += len(vecIndexes[i].vecIds)
 		indexOptimizedFor = vecIndexes[i].indexOptimizedFor
-		dims = vecIndexes[i].faissIndex.D()
-		metric = int(vecIndexes[i].faissIndex.MetricType())
+		dims = vecIndexes[i].index.fIndex.D()
+		metric = int(vecIndexes[i].index.fIndex.MetricType())
 
 	}
 
 	nlist := centroidIndex.Nlist()
-	indexDescription, indexClass := determineIndexToUse(nvecs, nlist, indexOptimizedFor)
+	indexDescription, indexClass := determineFP32IndexToUse(nvecs, nlist, indexOptimizedFor)
 	faissIndex, err := faiss.IndexFactory(dims, indexDescription, metric)
 	if err != nil {
 		return err
@@ -400,7 +400,7 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex *faiss.IndexImpl,
 			// point we can be sure of no updates/deletes -> the candidates will be
 			// in a continuous block from the beginning.
 			if i <= finalMergeCandidate {
-				err = faissIndex.MergeFrom(vecIndexes[i].faissIndex, faissIndex.Ntotal())
+				err = faissIndex.MergeFrom(vecIndexes[i].index.fIndex, faissIndex.Ntotal())
 				if err != nil {
 					return err
 				}
@@ -408,7 +408,7 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex *faiss.IndexImpl,
 				// reconstruction will be done on IVFFlat and Flat indexes
 				neededReconsLen := len(vecIndexes[i].vecIds) * faissIndex.D()
 				reconsVecs = reconsVecs[:neededReconsLen]
-				reconsVecs, err := vecIndexes[i].faissIndex.ReconstructBatch(vecIndexes[i].vecIds, reconsVecs)
+				reconsVecs, err := vecIndexes[i].index.fIndex.ReconstructBatch(vecIndexes[i].vecIds, reconsVecs)
 				if err != nil {
 					return err
 				}

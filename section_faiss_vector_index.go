@@ -439,7 +439,6 @@ func makeFaissIndex(vecs *vectorSet, config *faissIndexConfig) ([]byte, error) {
 		nlist := determineCentroids(config.numVecs)
 		// calculate nprobe using a heuristic.
 		nprobe := calculateNprobe(nlist, config.optimizationType)
-		// calculate nprobe using a heuristic.
 		ivfIndex.setNProbe(nprobe)
 		// train the vector index, essentially performs k-means clustering to partition
 		// the data space of indexData such that during the search time, we probe

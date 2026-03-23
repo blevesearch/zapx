@@ -70,18 +70,31 @@ func (b *faissBinaryIndex) searchWithoutIDs(qVector *vectorSet, k int64, selecto
 	// FAISS index to get the top K results
 	// first binarize the query vector if not already done
 	qVector.binarize()
-	_, binIDs, err := b.binary.SearchWithoutIDs(qVector.binaryData, binaryOversampleValue*k,
+	binDis, binIDs, err := b.binary.SearchWithoutIDs(qVector.binaryData, binaryOversampleValue*k,
 		selector, params)
 	if err != nil {
 		return nil, nil, err
 	}
-	distances, err := b.backing.DistCompute(qVector.floatData, binIDs)
-	if err != nil {
-		return nil, nil, err
+	var scores []float32
+	var labels []int64
+	// if we have a backing index for re-ranking, compute the distances/scores for the
+	// retrieved binary IDs and then get the top K results based on those distances/scores.
+	if b.backing != nil {
+		distances, err := b.backing.DistCompute(qVector.floatData, binIDs)
+		if err != nil {
+			return nil, nil, err
+		}
+		// quick select algorithm for inplace partial sorting to get top K results
+		// based on distances/scores
+		scores, labels = topNIDsByDistance(distances, binIDs, int(k))
+	} else {
+		// if we don't have a backing index for re-ranking, we retun the top K results based on the binary distances.
+		scores = make([]float32, k)
+		for i, d := range binDis[:k] {
+			scores[i] = float32(d)
+		}
+		labels = binIDs[:k]
 	}
-	// quick select algorithm for inplace partial sorting to get top K results
-	// based on distances/scores
-	scores, labels := topNIDsByDistance(distances, binIDs, int(k))
 	return scores, labels, nil
 }
 
@@ -90,18 +103,31 @@ func (b *faissBinaryIndex) searchWithIDs(qVector *vectorSet, k int64, selector f
 	// FAISS index to get the top K results
 	// first binarize the query vector if not already done
 	qVector.binarize()
-	_, binIDs, err := b.binary.SearchWithIDs(qVector.binaryData, binaryOversampleValue*k,
+	binDis, binIDs, err := b.binary.SearchWithIDs(qVector.binaryData, binaryOversampleValue*k,
 		selector, params)
 	if err != nil {
 		return nil, nil, err
 	}
-	distances, err := b.backing.DistCompute(qVector.floatData, binIDs)
-	if err != nil {
-		return nil, nil, err
+	var scores []float32
+	var labels []int64
+	// if we have a backing index for re-ranking, compute the distances/scores for the
+	// retrieved binary IDs and then get the top K results based on those distances/scores.
+	if b.backing != nil {
+		distances, err := b.backing.DistCompute(qVector.floatData, binIDs)
+		if err != nil {
+			return nil, nil, err
+		}
+		// quick select algorithm for inplace partial sorting to get top K results
+		// based on distances/scores
+		scores, labels = topNIDsByDistance(distances, binIDs, int(k))
+	} else {
+		// if we don't have a backing index for re-ranking, we retun the top K results based on the binary distances.
+		scores = make([]float32, k)
+		for i, d := range binDis[:k] {
+			scores[i] = float32(d)
+		}
+		labels = binIDs[:k]
 	}
-	// quick select algorithm for inplace partial sorting to get top K results
-	// based on distances/scores
-	scores, labels := topNIDsByDistance(distances, binIDs, int(k))
 	return scores, labels, nil
 }
 
@@ -177,27 +203,44 @@ func (b *faissBinaryIndex) searchQuantizer(qVector *vectorSet, centroidSelector 
 }
 
 func (b *faissBinaryIndex) searchClusters(eligibleCentroidIDs []int64, centroidDis []float32,
-	centroidsToProbe int, qVecSet *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
+	centroidsToProbe int, qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
+	// binarize the query vector if not already done
+	qVector.binarize()
+	// convert the float distances to binary distances for the binary index search
+	binaryCentroidDis := make([]int32, len(centroidDis))
+	for i, d := range centroidDis {
+		binaryCentroidDis[i] = int32(d)
+	}
 	// search the binary index without oversampling, since we are already searching a
 	// limited number of centroids specified by centroidsToProbe
-	// binarize the query vector if not already done
-	qVecSet.binarize()
-	// convert the float distances to binary distances for the binary index search
-	binDis := make([]int32, len(centroidDis))
-	for i, d := range centroidDis {
-		binDis[i] = int32(d)
-	}
-	_, binIds, err := b.binary.SearchClustersFromIVFIndex(eligibleCentroidIDs, binDis,
-		centroidsToProbe, qVecSet.binaryData, k, selector, params)
+	binDis, binIDs, err := b.binary.SearchClustersFromIVFIndex(eligibleCentroidIDs, binaryCentroidDis,
+		centroidsToProbe, qVector.binaryData, k, selector, params)
 	if err != nil {
 		return nil, nil, err
 	}
-	// reranking is still necessary since hamming distance has a lot of collisions
-	distances, err := b.backing.DistCompute(qVecSet.floatData, binIds)
-	if err != nil {
-		return nil, nil, err
+	var scores []float32
+	var labels []int64
+	// if we have a backing index for re-ranking, compute the distances/scores for the
+	// retrieved binary IDs and then get the top K results based on those distances/scores.
+	if b.backing != nil {
+		// reranking is still necessary since hamming distance has a lot of collisions
+		distances, err := b.backing.DistCompute(qVector.floatData, binIDs)
+		if err != nil {
+			return nil, nil, err
+		}
+		// quick select algorithm for inplace partial sorting to get top K results
+		// based on distances/scores
+		scores, labels = topNIDsByDistance(distances, binIDs, int(k))
+	} else {
+		// if we don't have a backing index for re-ranking, we
+		// return the top K results based on the binary distances.
+		scores = make([]float32, k)
+		for i, d := range binDis[:k] {
+			scores[i] = float32(d)
+		}
+		labels = binIDs[:k]
 	}
-	return distances, binIds, nil
+	return scores, labels, nil
 }
 
 func (b *faissBinaryIndex) setDirectMap(directMapType int) error {

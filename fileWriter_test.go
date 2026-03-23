@@ -30,7 +30,7 @@ func initFileCallbacks(t *testing.T) {
 	keyId := "test-key-id"
 
 	if _, err := rand.Read(key); err != nil {
-		panic("Failed to generate random key: " + err.Error())
+		t.Errorf("Failed to generate random key: %s", err.Error())
 	}
 
 	WriterHook = func(context []byte) (string, func(data []byte) []byte, error) {
@@ -43,17 +43,17 @@ func initFileCallbacks(t *testing.T) {
 
 		block, err := aes.NewCipher(key)
 		if err != nil {
-			panic("Failed to create AES cipher: " + err.Error())
+			t.Errorf("Failed to create AES cipher: %s", err.Error())
 		}
 
 		aesgcm, err := cipher.NewGCM(block)
 		if err != nil {
-			panic("Failed to create AES GCM: " + err.Error())
+			t.Errorf("Failed to create AES GCM: %s", err.Error())
 		}
 
 		nonce := make([]byte, 12)
 		if _, err := rand.Read(nonce); err != nil {
-			panic("Failed to generate random nonce: " + err.Error())
+			t.Errorf("Failed to generate random nonce: %s", err.Error())
 		}
 
 		writerCallback := func(data []byte) []byte {
@@ -87,12 +87,12 @@ func initFileCallbacks(t *testing.T) {
 
 		block, err := aes.NewCipher(key)
 		if err != nil {
-			panic("Failed to create AES cipher: " + err.Error())
+			t.Errorf("Failed to create AES cipher: %s", err.Error())
 		}
 
 		aesgcm, err := cipher.NewGCM(block)
 		if err != nil {
-			panic("Failed to create AES GCM: " + err.Error())
+			t.Errorf("Failed to create AES GCM: %s", err.Error())
 		}
 
 		readerCallback := func(data []byte) ([]byte, error) {

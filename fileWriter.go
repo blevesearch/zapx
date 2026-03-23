@@ -29,15 +29,8 @@ package zap
 // when creating a reader.  This allows the reader to determine which
 // callback to use for a given file.
 
-// Additionaly, if the writer callback needs a unique counter or nonce
-// per write, the CounterGetter can be used to provide that.  The counter
-// is passed to the writer callback along with the data to be written.
-// The counter is not passed to the reader callback, as it is assumed that
-// the reader callback can determine the correct counter to use based
-// on the data being read.
-
 // An example implementation using AES-GCM is provided in callbacks_test.go
-// within initFileCallbacks.
+// within initFileCallbacks().
 
 // Default no-op implementation. Is called before writing any user data to a file.
 var WriterHook func(context []byte) (string, func(data []byte) []byte, error)
@@ -82,7 +75,6 @@ func (w *fileWriter) Write(data []byte) (int, error) {
 }
 
 // process applies the writer callback to the data, if one is set
-// and increments the counter if one is set.
 func (w *fileWriter) process(data []byte) []byte {
 	if w.processor != nil {
 		return w.processor(data)
@@ -105,7 +97,6 @@ type fileReader struct {
 }
 
 func NewFileReader(id string, context []byte) (*fileReader, error) {
-
 	rv := &fileReader{
 		id: id,
 	}

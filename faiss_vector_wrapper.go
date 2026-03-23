@@ -67,7 +67,7 @@ func (v *vectorIndexWrapper) Search(qVector []float32, k int64, params json.RawM
 		// vector index not found, so return empty postings list
 		return emptyVecPostingsList, nil
 	}
-	if !(v.index.dim() == len(qVector)) {
+	if v.index.dim() != len(qVector) {
 		// dimensionality mismatch, so return empty postings list
 		return emptyVecPostingsList, nil
 	}
@@ -105,7 +105,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		// vector index not found, so return empty postings list
 		return emptyVecPostingsList, nil
 	}
-	if !(v.index.dim() == len(qVector)) {
+	if v.index.dim() != len(qVector) {
 		// dimensionality mismatch, so return empty postings list
 		return emptyVecPostingsList, nil
 	}

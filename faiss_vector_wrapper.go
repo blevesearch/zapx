@@ -41,12 +41,14 @@ const (
 	// up to the total number of eligible centroids available
 	nprobeIncreaseThreshold = 2
 
+	// binaryOversampleValue is the multiplier used to determine how many additional vectors to retrieve
+	// from the binary index as an oversampling strategy to improve recall.
 	binaryOversampleValue = 4
 )
 
 // vectorIndexWrapper conforms to scorch_segment_api's VectorIndex interface
 type vectorIndexWrapper struct {
-	index        *faissIndex
+	index        faissIndex
 	mapping      *idMapping
 	exclude      *bitmap
 	fieldID      uint16
@@ -61,17 +63,14 @@ type vectorIndexWrapper struct {
 }
 
 func (v *vectorIndexWrapper) Search(qVector []float32, k int64, params json.RawMessage) (segment.VecPostingsList, error) {
-
 	if v.index == nil {
 		// vector index not found, so return empty postings list
 		return emptyVecPostingsList, nil
 	}
-
-	if !v.index.validateDims(len(qVector)) {
+	if !(v.index.dim() == len(qVector)) {
 		// dimensionality mismatch, so return empty postings list
 		return emptyVecPostingsList, nil
 	}
-
 	// check if number of docs or number of vectors is zero
 	if v.mapping == nil || v.mapping.numVectors() == 0 || v.mapping.numDocuments() == 0 {
 		// no vectors or no documents indexed, so return empty postings list
@@ -82,8 +81,12 @@ func (v *vectorIndexWrapper) Search(qVector []float32, k int64, params json.RawM
 		// all vectors excluded, so return empty postings list
 		return emptyVecPostingsList, nil
 	}
-
-	rs, err := v.searchWithoutIDs(qVector, k, v.exclude, params)
+	// create a vector set using the query vector
+	qVecSet, err := newVectorSet(len(qVector), qVector)
+	if err != nil {
+		return nil, err
+	}
+	rs, err := v.searchWithoutIDs(qVecSet, k, v.exclude, params)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +105,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 		// vector index not found, so return empty postings list
 		return emptyVecPostingsList, nil
 	}
-	if !v.index.validateDims(len(qVector)) {
+	if !(v.index.dim() == len(qVector)) {
 		// dimensionality mismatch, so return empty postings list
 		return emptyVecPostingsList, nil
 	}
@@ -156,38 +159,25 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	if numSelected == v.mapping.numVectors() {
 		return v.Search(qVector, k, params)
 	}
-
-	// If a binary index is present and is not an IVF index,
-	// then we can perform the search directly on the binary index
-	if v.index.bIndex != nil && !v.index.bIndex.IsIVFIndex() {
-		rs, err := v.searchWithIDs(qVector, k, includeBM, params)
+	// get a vector set using the query vector
+	qVecSet, err := newVectorSet(len(qVector), qVector)
+	if err != nil {
+		return nil, err
+	}
+	// try to cast the index to an IVF index
+	ivfPtr := v.index.castIVF()
+	if ivfPtr == nil {
+		// perform search with included IDs in the bitmap, since
+		// this is not an IVF index
+		rs, err := v.searchWithIDs(qVecSet, k, includeBM, params)
 		if err != nil {
 			return nil, err
 		}
 		// populate the postings list from the result set
 		return getPostingsList(rs), nil
 	}
-
-	// If a binary index is not present and the FAISS index is not an IVF index,
-	// then we can perform the search directly on the FAISS index
-	if v.index.bIndex == nil && !v.index.fIndex.IsIVFIndex() {
-		// perform search with included IDs in the bitmap
-		rs, err := v.searchWithIDs(qVector, k, includeBM, params)
-		if err != nil {
-			return nil, err
-		}
-		// populate the postings list from the result set
-		return getPostingsList(rs), nil
-	}
-
 	// Getting the IVF index parameters, nprobe and nlist, set at index time.
-	var nprobe, nlist int
-	if v.index.bIndex != nil {
-		nprobe, nlist = v.index.bIndex.IVFParams()
-	} else {
-		nprobe, nlist = v.index.fIndex.IVFParams()
-	}
-
+	nprobe, nlist := ivfPtr.ivfParams()
 	// Create a FAISS selector based on the include bitmap.
 	includeSelector, err := getIncludeSelector(includeBM)
 	if err != nil {
@@ -199,14 +189,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// Determining which clusters, identified by centroid ID,
 	// have at least one eligible vector and hence, ought to be
 	// probed.
-	var clusterVectorCounts []int64
-	if v.index.bIndex != nil {
-		clusterVectorCounts, err =
-			v.index.bIndex.ObtainClusterVectorCountsFromIVFIndex(includeSelector, nlist)
-	} else {
-		clusterVectorCounts, err =
-			v.index.fIndex.ObtainClusterVectorCountsFromIVFIndex(includeSelector, nlist)
-	}
+	clusterVectorCounts, err := ivfPtr.clusterVectorCounts(includeSelector, nlist)
 	if err != nil {
 		return nil, err
 	}
@@ -234,22 +217,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	defer centroidSelector.Delete()
 	// Search the coarse quantizer to order the centroids based on proximity
 	// to the query vector.
-	var eligibleCentroidIDs []int64
-	var centroidDistances []float32
-	var binaryCentroidDistances []int32
-	if v.index.bIndex != nil {
-		eligibleCentroidIDs, binaryCentroidDistances, err =
-			v.index.bIndex.ObtainClustersWithDistancesFromIVFIndex(convertToBinary(qVector, len(qVector)),
-				centroidSelector, int64(centroidCount))
-		centroidDistances = make([]float32, len(binaryCentroidDistances))
-		for i, dist := range binaryCentroidDistances {
-			centroidDistances[i] = float32(dist)
-		}
-	} else {
-		eligibleCentroidIDs, centroidDistances, err =
-			v.index.fIndex.ObtainClustersWithDistancesFromIVFIndex(qVector, centroidSelector,
-				int64(centroidCount))
-	}
+	eligibleCentroidIDs, centroidDistances, err := ivfPtr.searchQuantizer(qVecSet, centroidSelector, int64(centroidCount))
 	if err != nil {
 		return nil, err
 	}
@@ -289,8 +257,8 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// unless overridden dynamically, either by the search parameters
 	// or by the deduplication logic in searchClustersFromIVFIndex.
 	rs, err := v.searchClustersFromIVFIndex(
-		eligibleCentroidIDs, centroidDistances, binaryCentroidDistances, centroidsToProbe,
-		qVector, k, includeBM, params)
+		eligibleCentroidIDs, centroidDistances, centroidsToProbe,
+		qVecSet, k, includeBM, params)
 	if err != nil {
 		return nil, err
 	}
@@ -309,28 +277,14 @@ func (v *vectorIndexWrapper) Size() uint64 {
 
 func (v *vectorIndexWrapper) ObtainKCentroidCardinalitiesFromIVFIndex(limit int, descending bool) (
 	[]index.CentroidCardinality, error) {
-	if v.index.fIndex == nil || !v.index.fIndex.IsIVFIndex() {
+	if v.index == nil {
 		return nil, nil
 	}
-
-	var cardinalities []uint64
-	var centroids [][]float32
-	var err error
-	if v.index.bIndex != nil && v.index.bIndex.IsIVFIndex() {
-		var bCentroids [][]uint8
-		cardinalities, bCentroids, err = v.index.bIndex.ObtainKCentroidCardinalitiesFromIVFIndex(limit, descending)
-		if bCentroids != nil {
-			centroids = make([][]float32, len(bCentroids))
-			for i := range bCentroids {
-				centroids[i] = make([]float32, len(bCentroids[i]))
-				for j := range bCentroids[i] {
-					centroids[i][j] = float32(bCentroids[i][j])
-				}
-			}
-		}
-	} else {
-		cardinalities, centroids, err = v.index.fIndex.ObtainKCentroidCardinalitiesFromIVFIndex(limit, descending)
+	var ivfIdx faissIndexIVF
+	if ivfIdx = v.index.castIVF(); ivfIdx == nil {
+		return nil, nil
 	}
+	cardinalities, centroids, err := ivfIdx.centroidCardinalities(limit, descending)
 	if err != nil {
 		return nil, err
 	}
@@ -365,7 +319,7 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 	// we have multi-vector documents leading to duplicates in docIDs retrieved
 	numIter := 0
 	// get the metric type of the index to help with deduplication logic
-	metricType := v.index.fIndex.MetricType()
+	metricType := v.index.metricType()
 	// we keep searching until we have k unique docIDs or we have exhausted the vector index
 	// or we have reached the maximum number of deduplication iterations allowed
 	for numIter < maxMultiVectorDocSearchRetries && rs.size() < k && !exhausted {
@@ -433,13 +387,8 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 
 // searchWithoutIDs performs a search on the vector index to retrieve the top K documents
 // while excluding any vector IDs specified in the exclude bitmap.
-func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64,
+func (v *vectorIndexWrapper) searchWithoutIDs(qVector *vectorSet, k int64,
 	exclude *bitmap, params json.RawMessage) (resultSet, error) {
-	var binQVector []byte
-	if v.index.bIndex != nil {
-		binQVector = convertToBinary(qVector, len(qVector))
-	}
-
 	return v.docSearch(k, v.sb.numDocs,
 		func() ([]float32, []int64, error) {
 			// build the FAISS selector based on the exclude bitmap, if any.
@@ -457,28 +406,7 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64,
 			if sel != nil {
 				defer sel.Delete()
 			}
-
-			if v.index.bIndex != nil {
-				// search the binary index with oversampling and then do a re-ranking on the
-				// FAISS index to get the top K results
-				_, binIDs, err := v.index.bIndex.SearchWithoutIDs(binQVector, binaryOversampleValue*k,
-					sel, params)
-				if err != nil {
-					return nil, nil, err
-				}
-				distances, err := v.index.fIndex.DistCompute(qVector, binIDs)
-				if err != nil {
-					return nil, nil, err
-				}
-
-				// quick select algorithm for inplace partial sorting to get top K results
-				// based on distances/scores
-				scores, labels := topNIDsByDistance(distances, binIDs, int(k))
-				return scores, labels, nil
-			} else {
-				return v.index.fIndex.SearchWithoutIDs(qVector, k, sel, params)
-			}
-
+			return v.index.searchWithoutIDs(qVector, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
@@ -513,12 +441,7 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64,
 // searchWithIDs performs a search on the vector index to retrieve the top K documents while only
 // considering the vector IDs specified in the include bitmap.
 // NOTE: The include bitmap must NOT be nil and must have at least one vector ID set.
-func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include *bitmap, params json.RawMessage) (resultSet, error) {
-	var binQVector []byte
-	if v.index.bIndex != nil {
-		binQVector = convertToBinary(qVector, len(qVector))
-	}
-
+func (v *vectorIndexWrapper) searchWithIDs(vecSet *vectorSet, k int64, include *bitmap, params json.RawMessage) (resultSet, error) {
 	return v.docSearch(k, v.sb.numDocs,
 		func() ([]float32, []int64, error) {
 			// build the FAISS selector based on the include bitmap.
@@ -534,27 +457,7 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include *
 			if sel != nil {
 				defer sel.Delete()
 			}
-
-			if v.index.bIndex != nil {
-				// search the binary index with oversampling and then do a re-ranking on the
-				// FAISS index to get the top K results
-				_, binIDs, err := v.index.bIndex.SearchWithIDs(binQVector, binaryOversampleValue*k,
-					sel, params)
-				if err != nil {
-					return nil, nil, err
-				}
-				distances, err := v.index.fIndex.DistCompute(qVector, binIDs)
-				if err != nil {
-					return nil, nil, err
-				}
-
-				// quick select algorithm for inplace partial sorting to get top K results
-				// based on distances/scores
-				scores, labels := topNIDsByDistance(distances, binIDs, int(k))
-				return scores, labels, nil
-			} else {
-				return v.index.fIndex.SearchWithIDs(qVector, k, sel, params)
-			}
+			return v.index.searchWithIDs(vecSet, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
@@ -589,12 +492,10 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include *
 // If after a few iterations we haven't found enough documents, it dynamically increases the number of
 // clusters searched (up to the number of eligible centroids) to ensure we can find k unique documents.
 func (v *vectorIndexWrapper) searchClustersFromIVFIndex(eligibleCentroidIDs []int64, centroidDis []float32,
-	binCentroidDis []int32, centroidsToProbe int, qVector []float32, k int64, include *bitmap, params json.RawMessage) (
+	centroidsToProbe int, qVecSet *vectorSet, k int64, include *bitmap, params json.RawMessage) (
 	resultSet, error) {
-	var binQVector []byte
-	if v.index.bIndex != nil {
-		binQVector = convertToBinary(qVector, len(qVector))
-	}
+	// get ivf index pointer, should not be nil at this point since this method is only called after confirming its an ivf index
+	ivfPtr := v.index.castIVF()
 	var totalEligibleCentroids = len(eligibleCentroidIDs)
 	return v.docSearch(k, v.sb.numDocs,
 		func() ([]float32, []int64, error) {
@@ -611,26 +512,8 @@ func (v *vectorIndexWrapper) searchClustersFromIVFIndex(eligibleCentroidIDs []in
 			if sel != nil {
 				defer sel.Delete()
 			}
-			if v.index.bIndex != nil {
-				// search the binary index without oversampling, since we are already searching a
-				// limited number of centroids specified by centroidsToProbe
-				_, binIds, err := v.index.bIndex.SearchClustersFromIVFIndex(eligibleCentroidIDs, binCentroidDis,
-					centroidsToProbe, binQVector, k, sel, params)
-				if err != nil {
-					return nil, nil, err
-				}
-
-				// reranking is still necessary since hamming distance has a lot of collisions
-				distances, err := v.index.fIndex.DistCompute(qVector, binIds)
-				if err != nil {
-					return nil, nil, err
-				}
-
-				return distances, binIds, nil
-			} else {
-				return v.index.fIndex.SearchClustersFromIVFIndex(eligibleCentroidIDs, centroidDis, centroidsToProbe,
-					qVector, k, sel, params)
-			}
+			return ivfPtr.searchClusters(eligibleCentroidIDs, centroidDis, centroidsToProbe,
+				qVecSet, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
@@ -750,56 +633,6 @@ func getPostingsList(rs resultSet) segment.VecPostingsList {
 		rv.postings.Add(code)
 	})
 	return rv
-}
-
-// ------------------------------------------------------------------------------
-// faissIndex wrapper
-// ------------------------------------------------------------------------------
-
-type faissIndex struct {
-	fIndex *faiss.IndexImpl
-	bIndex *faiss.BinaryIndexImpl
-}
-
-func (fi *faissIndex) close() {
-	if fi.fIndex != nil {
-		fi.fIndex.Close()
-	}
-	if fi.bIndex != nil {
-		fi.bIndex.Close()
-	}
-}
-
-func (fi *faissIndex) size() (indexSize uint64) {
-	if fi.fIndex != nil {
-		indexSize += fi.fIndex.Size()
-	}
-	if fi.bIndex != nil {
-		indexSize += fi.bIndex.Size()
-	}
-	return indexSize
-}
-
-// ValidateDims validates the dimensions of the faiss index
-// against the expected query dimensions.
-func (fi *faissIndex) validateDims(expectedDims int) bool {
-	// check dims for float index
-	if fi.fIndex != nil {
-		if fi.fIndex.D() != expectedDims {
-			return false
-		}
-	} else {
-		// float index is mandatory
-		return false
-	}
-
-	// check dims only if binary index is present
-	if fi.bIndex != nil {
-		if fi.bIndex.D() != expectedDims {
-			return false
-		}
-	}
-	return true
 }
 
 // ------------------------------------------------------------------------------
@@ -1129,4 +962,76 @@ func topNIDsByDistance(dist []float32, ids []int64, n int) ([]float32, []int64) 
 
 	// Return top-N IDs (unordered)
 	return dist[target:], ids[target:]
+}
+
+// -----------------------------------------------------------------------------
+// vectorSet
+// -----------------------------------------------------------------------------
+type vectorSet struct {
+	// dimensionality of each vector
+	dim int
+	// number of vectors represented
+	nvecs int
+	// float vectors stored in row-major format,
+	// i.e. for N vectors of D dimensions,
+	// the length of this slice is N*D,
+	floatData []float32
+	// row-major binary representation of the float vectors,
+	// where each bit represents the sign bit
+	// of the corresponding float value.
+	binaryData []uint8
+}
+
+func newVectorSet(dim int, data []float32) (*vectorSet, error) {
+	if len(data) != dim || dim <= 0 {
+		return nil, fmt.Errorf("invalid vector data: dims %d, data length %d", dim, len(data))
+	}
+	nvecs := len(data) / dim
+	return &vectorSet{
+		dim:       dim,
+		nvecs:     nvecs,
+		floatData: data,
+	}, nil
+}
+
+// converts float32 vectors into binary format based on the sign bit
+// of the float32 values.
+func convertToBinary(vecs []float32, dims int) []uint8 {
+	nvecs := len(vecs) / dims
+	packed := make([]uint8, 0, nvecs*(dims+7)/8)
+	var cur uint8
+	var count int
+	for i := 0; i < nvecs; i++ {
+		count = 0
+		for j := 0; j < dims; j++ {
+			value := vecs[i*dims+j]
+			// Apply the threshold: convert the float32 to 1 or 0 based on threshold
+			if value >= 0.0 {
+				// Shift the bit into the correct position in the byte
+				cur |= (1 << (7 - count))
+			}
+			count++
+			// When we have 8 bits, store the byte and reset for the next byte
+			if count == 8 {
+				packed = append(packed, cur)
+				cur = 0
+				count = 0
+			}
+		}
+		// If there are any remaining bits, pack them into a byte and append
+		if count > 0 {
+			cur <<= (8 - count)
+			packed = append(packed, cur)
+		}
+	}
+	return packed
+}
+
+func (v *vectorSet) binarize() {
+	// if binaryData is already populated, no need to convert again
+	if v.binaryData != nil {
+		return
+	}
+	// convert the floatData to binary format and store in binaryData
+	v.binaryData = convertToBinary(v.floatData, v.dim)
 }

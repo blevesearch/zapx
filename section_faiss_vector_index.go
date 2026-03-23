@@ -436,7 +436,7 @@ func makeFaissIndex(vecs *vectorSet, config *faissIndexConfig) ([]byte, error) {
 	// ensure the faiss index is closed after use
 	defer index.close()
 	// if we are using an IVF index, set the direct map and train it
-	if ivfIndex, ok := index.castIVF(); ok {
+	if ivfIndex := index.castIVF(); ivfIndex != nil {
 		// the direct map maintained in the IVF index is essential for the
 		// reconstruction of vectors based on the sequential vector IDs in the
 		// future merges use direct map type 1 -> array based direct map, since
@@ -459,7 +459,7 @@ func makeFaissIndex(vecs *vectorSet, config *faissIndexConfig) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-	} else if sqIndex, ok := index.castSQ(); ok {
+	} else if sqIndex := index.castSQ(); sqIndex != nil {
 		err = sqIndex.train(vecs)
 		if err != nil {
 			return nil, err

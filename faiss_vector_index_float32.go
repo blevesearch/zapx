@@ -1,0 +1,132 @@
+//  Copyright (c) 2026 Couchbase, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// 		http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//go:build vectors
+// +build vectors
+
+package zap
+
+import (
+	"encoding/json"
+
+	faiss "github.com/blevesearch/go-faiss"
+)
+
+// ---------------------------------
+// Faiss Float32 Index
+// ---------------------------------
+type faissFloat32Index struct {
+	idx *faiss.IndexImpl
+}
+
+func newFaissFloat32Index(idx *faiss.IndexImpl) (index faissIndex, err error) {
+	if idx == nil {
+		return nil, ErrNilIndex
+	}
+	return &faissFloat32Index{
+		idx: idx,
+	}, nil
+}
+
+func (f *faissFloat32Index) add(vecs *vectorSet) error {
+	return f.idx.Add(vecs.floatData)
+}
+
+func (f *faissFloat32Index) close() {
+	f.idx.Close()
+}
+
+func (f *faissFloat32Index) dim() int {
+	return f.idx.D()
+}
+
+func (f *faissFloat32Index) metricType() int {
+	return f.idx.MetricType()
+}
+
+func (f *faissFloat32Index) searchWithoutIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
+	return f.idx.SearchWithoutIDs(qVector.floatData, k, selector, params)
+}
+
+func (f *faissFloat32Index) searchWithIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
+	return f.idx.SearchWithIDs(qVector.floatData, k, selector, params)
+}
+
+func (f *faissFloat32Index) serialize() ([]byte, error) {
+	return faiss.WriteIndexIntoBuffer(f.idx)
+}
+
+func (f *faissFloat32Index) size() uint64 {
+	return f.idx.Size()
+}
+
+// -----------------------------------------------------------------
+// casting methods to access index-specific operations below
+// -----------------------------------------------------------------
+func (f *faissFloat32Index) castIVF() faissIndexIVF {
+	if f.idx.IsIVFIndex() {
+		// return f itself, as the IVF interface is implemented by the same
+		// struct as the non-IVF interface in go-faiss.
+		return f
+	}
+	// not an IVF index, return nil.
+	return nil
+}
+
+func (f *faissFloat32Index) castSQ() faissIndexSQ {
+	if f.idx.IsSQIndex() {
+		// return f itself, as the SQ interface is implemented by the same
+		// struct as the non-SQ interface in go-faiss.
+		return f
+	}
+	// not an SQ index, return nil.
+	return nil
+}
+
+// -----------------------------------------------------------------
+// IVF-Index specific operations
+// -----------------------------------------------------------------
+func (f *faissFloat32Index) clusterVectorCounts(sel faiss.Selector, nlist int) ([]int64, error) {
+	return f.idx.ObtainClusterVectorCountsFromIVFIndex(sel, nlist)
+}
+
+func (f *faissFloat32Index) centroidCardinalities(limit int, descending bool) ([]uint64, [][]float32, error) {
+	return f.idx.ObtainKCentroidCardinalitiesFromIVFIndex(limit, descending)
+}
+
+func (f *faissFloat32Index) ivfParams() (nprobe, nlist int) {
+	return f.idx.IVFParams()
+}
+
+func (f *faissFloat32Index) searchQuantizer(qVector *vectorSet, centroidSelector faiss.Selector, centroidCount int64) ([]int64, []float32, error) {
+	return f.idx.ObtainClustersWithDistancesFromIVFIndex(qVector.floatData, centroidSelector, centroidCount)
+}
+
+func (f *faissFloat32Index) searchClusters(eligibleCentroidIDs []int64, centroidDis []float32,
+	centroidsToProbe int, qVecSet *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
+	return f.idx.SearchClustersFromIVFIndex(eligibleCentroidIDs, centroidDis, centroidsToProbe, qVecSet.floatData, k, selector, params)
+}
+
+func (f *faissFloat32Index) setDirectMap(directMapType int) error {
+	return f.idx.SetDirectMap(directMapType)
+}
+
+func (f *faissFloat32Index) setNProbe(nprobe int32) {
+	f.idx.SetNProbe(nprobe)
+}
+
+func (f *faissFloat32Index) train(trainingData *vectorSet) error {
+	// train the index using the floatData from the vectorSet
+	return f.idx.Train(trainingData.floatData)
+}

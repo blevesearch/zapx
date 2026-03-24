@@ -1035,3 +1035,15 @@ func (v *vectorSet) binarize() {
 	// convert the floatData to binary format and store in binaryData
 	v.binaryData = convertToBinary(v.floatData, v.dim)
 }
+
+func (v *vectorSet) mergeWith(other *vectorSet) {
+	// sanity check to ensure the two vector sets are compatible for merging
+	if v.dim != other.dim {
+		return
+	}
+	// merge the float data
+	v.floatData = append(v.floatData, other.floatData...)
+	v.nvecs += other.nvecs
+	// invalidate the binary data as the float data has changed
+	v.binaryData = nil
+}

@@ -168,7 +168,7 @@ type coalesceQueue struct {
 	stopCh chan struct{}
 	// queue of pending batch requests that are waiting to be processed.
 	queue []*batchRequest
-
+	// timer for automatically triggering the execution of a batch of requests when the earliest deadline is reached.
 	timer *time.Timer
 }
 
@@ -185,6 +185,9 @@ func newCoalesceQueue(idx faissIndex) *coalesceQueue {
 
 func (q *coalesceQueue) stop() {
 	close(q.stopCh)
+	if q.timer != nil {
+		q.timer.Stop()
+	}
 }
 
 func (q *coalesceQueue) monitor() {

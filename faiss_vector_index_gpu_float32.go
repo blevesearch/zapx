@@ -151,11 +151,10 @@ func (f *faissGPUFloat32Index) train(trainingData *vectorSet) error {
 		return f.cpuIdx.Train(trainingData.floatData)
 	}
 
-	err := f.gpuIdx.Train(trainingData.floatData)
-	if err != nil {
+	if err := f.gpuIdx.Train(trainingData.floatData); err != nil {
 		return err
 	}
-	return f.syncGPUToCPU()
+	return nil
 }
 
 // syncGPUToCPU clones the current GPU index state back to the CPU index,
@@ -169,7 +168,9 @@ func (f *faissGPUFloat32Index) syncGPUToCPU() error {
 	if err != nil {
 		return err
 	}
-	f.cpuIdx.Close()
+
+	oldCPUIdx := f.cpuIdx
 	f.cpuIdx = cpuIdx
+	oldCPUIdx.Close()
 	return nil
 }

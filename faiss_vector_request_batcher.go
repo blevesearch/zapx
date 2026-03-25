@@ -35,32 +35,23 @@ var (
 	errBatcherStopped error = errors.New("batcher has been stopped")
 )
 
-// The requestBatcher interface defines the contract for a component that batches search requests to a Faiss index.
-type requestBatcher interface {
-	// search executes a search request against the Faiss index,
-	// potentially batching it with other requests for improved performance.
-	search(qVector *vectorSet, k int64) ([]float32, []int64, error)
-	// stop signals the batcher to stop processing requests and clean up any resources.
-	stop()
-}
-
 // The requestBatcher is responsible for batching search requests to a Faiss index.
 // It will accumulate incoming search requests and execute them in batches to improve performance.
 // The batcher will use the provided Faiss index to perform the searches, and it
 // will manage the batching logic, including timing and concurrency control.
-type batcher struct {
+type requestBatcher struct {
 	// the coalesce queue that manages the batching of incoming search requests.
 	cq *coalesceQueue
 }
 
-func newRequestBatcher(idx faissIndex) requestBatcher {
-	b := &batcher{
+func newRequestBatcher(idx faissIndex) *requestBatcher {
+	b := &requestBatcher{
 		cq: newCoalesceQueue(idx),
 	}
 	return b
 }
 
-func (b *batcher) search(qVector *vectorSet, k int64) ([]float32, []int64, error) {
+func (b *requestBatcher) search(qVector *vectorSet, k int64) ([]float32, []int64, error) {
 	// create a new batch request for this search query.
 	req, respCh := newBatchRequest(qVector, k)
 	// check if the batcher has been stopped before processing the search request.
@@ -75,7 +66,7 @@ func (b *batcher) search(qVector *vectorSet, k int64) ([]float32, []int64, error
 	return resp.distances, resp.ids, resp.err
 }
 
-func (b *batcher) stop() {
+func (b *requestBatcher) stop() {
 	b.cq.stop()
 }
 

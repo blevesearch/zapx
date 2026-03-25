@@ -64,7 +64,8 @@ func (vc *vectorIndexCache) Clear() {
 }
 
 // loadOrCreate obtains the vector index from the cache or creates it if it's not present.
-func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uint32, except *roaring.Bitmap) (
+// useGPU indicates whether the field mapping requires GPU acceleration for this index.
+func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uint32, except *roaring.Bitmap, useGPU bool) (
 	index faissIndex, mapping *idMapping, exclude *bitmap, err error) {
 	// first try to read from the cache with a read lock
 	vc.m.RLock()
@@ -92,12 +93,12 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uin
 		return entry.load(except)
 	}
 	// still not present, create and cache it
-	return vc.createAndCacheLOCKED(fieldID, mem, numDocs, except)
+	return vc.createAndCacheLOCKED(fieldID, mem, numDocs, except, useGPU)
 }
 
 // Rebuilding the cache on a miss.
 func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
-	numDocs uint32, except *roaring.Bitmap) (index faissIndex,
+	numDocs uint32, except *roaring.Bitmap, useGPU bool) (index faissIndex,
 	mapping *idMapping, exclude *bitmap, err error) {
 	// if the cache doesn't have the entry, construct the vector to doc id map and
 	// the vector index out of the mem bytes and update the cache under lock.
@@ -164,9 +165,20 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 			return nil, nil, nil, fmt.Errorf("faiss binary index creation error: %v", err)
 		}
 	} else {
-		rv, err = newFaissFloat32Index(fIndex)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("faiss float32 index creation error: %v", err)
+		if useGPU {
+			rv, err = newFaissGPUFloat32Index(fIndex)
+			if err != nil {
+				// GPU not available or clone failed, fall back to CPU-only index
+				rv, err = newFaissFloat32Index(fIndex)
+				if err != nil {
+					return nil, nil, nil, fmt.Errorf("faiss float32 index creation error: %v", err)
+				}
+			}
+		} else {
+			rv, err = newFaissFloat32Index(fIndex)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("faiss float32 index creation error: %v", err)
+			}
 		}
 	}
 	// update the cache

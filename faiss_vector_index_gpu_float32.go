@@ -35,14 +35,13 @@ type faissGPUFloat32Index struct {
 	gpuIdx *faiss.GPUIndexImpl
 }
 
+// if cloning to GPU fails, we still allow searches to happen on CPU only
 func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl) (faissIndex, error) {
 	if cpuIdx == nil {
 		return nil, ErrNilIndex
 	}
-	gpuIdx, err := faiss.CloneToGPU(cpuIdx)
-	if err != nil {
-		return nil, err
-	}
+	// TODO: log GPU clone errors in some way?
+	gpuIdx, _ := faiss.CloneToGPU(cpuIdx)
 	return &faissGPUFloat32Index{
 		cpuIdx: cpuIdx,
 		gpuIdx: gpuIdx,
@@ -50,6 +49,10 @@ func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl) (faissIndex, error) {
 }
 
 func (f *faissGPUFloat32Index) add(vecs *vectorSet) error {
+	if f.gpuIdx == nil {
+		return f.cpuIdx.Add(vecs.floatData)
+	}
+
 	err := f.gpuIdx.Add(vecs.floatData)
 	if err != nil {
 		return err
@@ -58,7 +61,9 @@ func (f *faissGPUFloat32Index) add(vecs *vectorSet) error {
 }
 
 func (f *faissGPUFloat32Index) close() {
-	f.gpuIdx.Close()
+	if f.gpuIdx != nil {
+		f.gpuIdx.Close()
+	}
 	f.cpuIdx.Close()
 }
 
@@ -71,7 +76,7 @@ func (f *faissGPUFloat32Index) metricType() int {
 }
 
 func (f *faissGPUFloat32Index) searchWithoutIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
-	if selector == nil && len(params) == 0 {
+	if f.gpuIdx != nil && selector == nil && len(params) == 0 {
 		// no selector and no params, use GPU for unfiltered search
 		return f.gpuIdx.Search(qVector.floatData, k)
 	}
@@ -142,6 +147,10 @@ func (f *faissGPUFloat32Index) setNProbe(nprobe int32) {
 }
 
 func (f *faissGPUFloat32Index) train(trainingData *vectorSet) error {
+	if f.gpuIdx == nil {
+		return f.cpuIdx.Train(trainingData.floatData)
+	}
+
 	err := f.gpuIdx.Train(trainingData.floatData)
 	if err != nil {
 		return err
@@ -152,6 +161,10 @@ func (f *faissGPUFloat32Index) train(trainingData *vectorSet) error {
 // syncGPUToCPU clones the current GPU index state back to the CPU index,
 // replacing the old CPU index.
 func (f *faissGPUFloat32Index) syncGPUToCPU() error {
+	if f.gpuIdx == nil {
+		return nil
+	}
+
 	cpuIdx, err := faiss.CloneToCPU(f.gpuIdx)
 	if err != nil {
 		return err

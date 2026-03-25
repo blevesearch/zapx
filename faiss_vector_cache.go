@@ -168,11 +168,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		if useGPU {
 			rv, err = newFaissGPUFloat32Index(fIndex)
 			if err != nil {
-				// GPU not available or clone failed, fall back to CPU-only index
-				rv, err = newFaissFloat32Index(fIndex)
-				if err != nil {
-					return nil, nil, nil, fmt.Errorf("faiss float32 index creation error: %v", err)
-				}
+				return nil, nil, nil, fmt.Errorf("faiss float32 index creation error: %v", err)
 			}
 		} else {
 			rv, err = newFaissFloat32Index(fIndex)

@@ -831,13 +831,7 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 			return nil, err
 		}
 		if cfg.useGPU {
-			gpuIdx, err := newFaissGPUFloat32Index(idx)
-			// if no error, return the GPU index, else default to CPU index
-			if err != nil {
-				return gpuIdx, nil
-			} else {
-				return newFaissFloat32Index(idx)
-			}
+			return newFaissGPUFloat32Index(idx)
 		}
 		return newFaissFloat32Index(idx)
 	case faissBIVFIndex:

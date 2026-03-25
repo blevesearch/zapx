@@ -5,6 +5,7 @@ package zap
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"math/rand"
 	"os"
@@ -801,4 +802,79 @@ func TestValidVectorMerge(t *testing.T) {
 	defer func() {
 		_ = os.RemoveAll(mergedSegPath1)
 	}()
+}
+
+// TestSearchWithFilterAllVectorDocsEligible verifies that SearchWithFilter does
+// not panic when the pre-filter matches every document that has a vector while
+// the segment also contains non-vector documents.
+//
+// With numEligible < sb.numDocs the full-selectivity short-circuit is missed,
+// the exclusion path is chosen (ratio == 1.0 > 0.5), and without the fix the
+// resulting empty ineligibleVectorIDs slice causes a panic in go-faiss.
+// >= 1000 vectors are required to trigger the IVF code path.
+func TestSearchWithFilterAllVectorDocsEligible(t *testing.T) {
+	const (
+		numVecDocs    = 1000
+		numNonVecDocs = 5
+		dims          = 3
+		fieldName     = "vec"
+	)
+
+	docs := make([]index.Document, 0, numVecDocs+numNonVecDocs)
+	for i := 0; i < numNonVecDocs; i++ {
+		id := fmt.Sprintf("nonvec-%d", i)
+		docs = append(docs, newStubDocument(id, []*stubField{
+			newStubFieldSplitString("_id", nil, id, true, false, false),
+		}, "_all"))
+	}
+	rng := rand.New(rand.NewSource(42))
+	for i := 0; i < numVecDocs; i++ {
+		id := fmt.Sprintf("vec-%d", i)
+		vec := make([]float32, dims)
+		for j := range vec {
+			vec[j] = rng.Float32()
+		}
+		docs = append(docs, newVecStubDocument(id, []index.Field{
+			newStubFieldSplitString("_id", nil, id, true, false, false),
+			newStubFieldVec(fieldName, vec, dims, "l2", index.IndexField),
+		}))
+	}
+
+	vecSegPlugin := &ZapPlugin{}
+	seg, _, err := vecSegPlugin.New(docs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "./test-seg-filter-bug"
+	if up, ok := seg.(segment.UnpersistedSegment); ok {
+		if err = up.Persist(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	segOnDisk, err := vecSegPlugin.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = segOnDisk.Close()
+		_ = os.RemoveAll(path)
+	}()
+
+	// All vector docs are eligible, but non-vector docs are excluded,
+	// so numEligible < sb.numDocs and the full-selectivity path is not taken.
+	eligible := make([]uint64, numVecDocs)
+	for i := range eligible {
+		eligible[i] = uint64(numNonVecDocs + i)
+	}
+
+	vecSeg := segOnDisk.(segment.VectorSegment)
+	vecIdx, err := vecSeg.InterpretVectorIndex(fieldName, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer vecIdx.Close()
+
+	if _, err = vecIdx.SearchWithFilter(make([]float32, dims), 5, eligible, nil); err != nil {
+		t.Fatal(err)
+	}
 }

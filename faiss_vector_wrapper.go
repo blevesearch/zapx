@@ -1036,6 +1036,17 @@ func (v *vectorSet) binarize() {
 	v.binaryData = convertToBinary(v.floatData, v.dim)
 }
 
+func (v *vectorSet) clone() *vectorSet {
+	// create a new vectorSet with the same dimensions and number of vectors
+	clone := &vectorSet{
+		dim:        v.dim,
+		nvecs:      v.nvecs,
+		floatData:  slices.Clone(v.floatData),
+		binaryData: slices.Clone(v.binaryData),
+	}
+	return clone
+}
+
 func (v *vectorSet) mergeWith(other *vectorSet) {
 	// sanity check to ensure the two vector sets are compatible for merging
 	if v.dim != other.dim {

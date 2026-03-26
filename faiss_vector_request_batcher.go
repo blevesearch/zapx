@@ -100,6 +100,9 @@ func (r *batchRequest) mergeWith(other *batchRequest) {
 	if !r.canMerge(other) {
 		return
 	}
+	// since we are merging the query vectors of two requests, we need to clone
+	// the original query vector to avoid mutating the original request's query vector when we merge.
+	r.qVector = r.qVector.clone()
 	// merge the query vectors of the two requests by concatenating them together.
 	r.qVector.mergeWith(other.qVector)
 	// append the response channels from the other request to this request, so that when the search results are ready,

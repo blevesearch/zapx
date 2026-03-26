@@ -1,4 +1,4 @@
-//  Copyright (c) 2025 Couchbase, Inc.
+//  Copyright (c) 2026 Couchbase, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -43,17 +43,17 @@ func initFileCallbacks(t *testing.T) {
 
 		block, err := aes.NewCipher(key)
 		if err != nil {
-			t.Errorf("Failed to create AES cipher: %s", err.Error())
+			return "", nil, fmt.Errorf("Failed to create AES cipher: %s", err.Error())
 		}
 
 		aesgcm, err := cipher.NewGCM(block)
 		if err != nil {
-			t.Errorf("Failed to create AES GCM: %s", err.Error())
+			return "", nil, fmt.Errorf("Failed to create AES GCM: %s", err.Error())
 		}
 
 		nonce := make([]byte, 12)
 		if _, err := rand.Read(nonce); err != nil {
-			t.Errorf("Failed to generate random nonce: %s", err.Error())
+			return "", nil, fmt.Errorf("Failed to generate random nonce: %s", err.Error())
 		}
 
 		writerCallback := func(data []byte) []byte {
@@ -87,12 +87,12 @@ func initFileCallbacks(t *testing.T) {
 
 		block, err := aes.NewCipher(key)
 		if err != nil {
-			t.Errorf("Failed to create AES cipher: %s", err.Error())
+			return nil, fmt.Errorf("Failed to create AES cipher: %s", err.Error())
 		}
 
 		aesgcm, err := cipher.NewGCM(block)
 		if err != nil {
-			t.Errorf("Failed to create AES GCM: %s", err.Error())
+			return nil, fmt.Errorf("Failed to create AES GCM: %s", err.Error())
 		}
 
 		readerCallback := func(data []byte) ([]byte, error) {
@@ -115,6 +115,8 @@ func initFileCallbacks(t *testing.T) {
 	}
 }
 
+// Initializes encryption related file callbacks and
+// runs all file I/O related tests
 func TestFileCallbacks(t *testing.T) {
 	initFileCallbacks(t)
 

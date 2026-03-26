@@ -1,4 +1,4 @@
-//  Copyright (c) 2025 Couchbase, Inc.
+//  Copyright (c) 2026 Couchbase, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@ package zap
 // when creating a reader.  This allows the reader to determine which
 // callback to use for a given file.
 
-// An example implementation using AES-GCM is provided in callbacks_test.go
+// An example implementation using AES-GCM encryption is provided in file_io_test.go
 // within initFileCallbacks().
 
 // Default no-op implementation. Is called before writing any user data to a file.

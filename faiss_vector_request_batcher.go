@@ -24,6 +24,7 @@ import (
 
 var (
 	// adaptive batching parameters - these can be tuned based on the expected workload and latency requirements.
+
 	// MinLatencyBudget is the minimum amount of time that the batcher will wait before flushing a batch of requests.
 	MinLatencyBudget time.Duration = 10 * time.Millisecond
 	// MaxLatencyBudget is the maximum amount of time that the batcher will wait before flushing a batch of requests.
@@ -109,13 +110,22 @@ func (r *batchRequest) mergeWith(other *batchRequest) {
 func (r *batchRequest) sendResponse(distances []float32, ids []int64, err error) {
 	// we may have multiple batches merged together, so we need segregate the results for each original request
 	// and send them back to the appropriate response channels.
+	if err != nil {
+		// if there was an error during the search, send the error back to all requesters in this batch.
+		for _, respCh := range r.respCh {
+			respCh <- newBatchResponse(nil, nil, err)
+			close(respCh)
+		}
+		return
+	}
+	// if the search was successful, we need to split the combined results back into individual responses for each original request.
 	for i, respCh := range r.respCh {
 		offset := int64(i) * r.k
 		// calculate the start and end indices for the results corresponding to this response channel.
 		curDistances := distances[offset : offset+r.k]
 		curIDs := ids[offset : offset+r.k]
 		// send the results back to the requester through the response channel.
-		respCh <- newBatchResponse(curDistances, curIDs, err)
+		respCh <- newBatchResponse(curDistances, curIDs, nil)
 		// close the response channel to signal that the response has been sent and there will be no more data.
 		close(respCh)
 	}
@@ -170,10 +180,10 @@ func newCoalesceQueue(idx faissIndex) *coalesceQueue {
 }
 
 func (q *coalesceQueue) stop() {
-	close(q.stopCh)
-	if q.timer != nil {
-		q.timer.Stop()
+	if isClosed(q.stopCh) {
+		return
 	}
+	close(q.stopCh)
 }
 
 func (q *coalesceQueue) monitor() {
@@ -195,6 +205,7 @@ func (q *coalesceQueue) monitor() {
 		case <-q.stopCh:
 			// flush the queue one last time before stopping, to ensure that any pending requests are processed.
 			q.flush()
+			dequeueTimer = nil
 			return
 		}
 	}

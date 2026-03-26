@@ -21,11 +21,10 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 )
 
-func (sb *SegmentBase) GetCoarseQuantizer(field string) (*faiss.IndexImpl, error) {
+func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	fieldIDPlus1 := sb.fieldsMap[field]
 	if fieldIDPlus1 <= 0 {
 		return nil, fmt.Errorf("field %s does not exist in segment", field)
@@ -38,29 +37,26 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (*faiss.IndexImpl, error
 	}
 
 	pos := int(vectorSection)
-	// doc values
-	_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += n
-	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += n
-
-	// index optimization type
-	optType, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += n
-
-	if index.VectorIndexOptimizationsReverseLookup[int(optType)] != index.IndexOptimizedFastMerge {
-		return nil, fmt.Errorf("unsupported vector index optimization type: %d", optType)
+	// doc values and vector optimization type
+	for i := 0; i < 3; i++ {
+		_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += n
 	}
+
 	numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
+	// length of the vector to docID map
 	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
+	// vector to docID mapping
 	for i := 0; i < int(numVecs); i++ {
 		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
 	}
+
+	// type of index
 	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])

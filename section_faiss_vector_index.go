@@ -38,8 +38,8 @@ func init() {
 	faiss.SetOMPThreads(defaultFaissOMPThreads)
 }
 
-// the threshold of vector count above which SQ8 quantization is applied
-const sq8Threshold = 10000
+// the threshold of vector count above which SQ8 quantization is applied on ivf index
+const ivfSq8Threshold = 10000
 
 const (
 	// Set the default number of OMP threads to be used by FAISS
@@ -213,12 +213,9 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		if len(indexes) == 0 || len(vecToDocID) == 0 {
 			continue
 		}
-		err := vo.flushSectionMetadata(fieldID, w, vecToDocID, indexes)
-		if err != nil {
-			return err
-		}
 
-		callback, _ := vo.config[index.CentroidIndexCallback]
+		var err error
+		callback, _ := vo.config[index.TrainedIndexCallback]
 		var centroidIndex *faiss.IndexImpl
 		tf, ok := vo.config[index.TrainingKey]
 		training := ok && tf.(bool)
@@ -231,11 +228,19 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		//
 		// then, fallback to naive merging
 		if callback != nil && !training && !fastMerge {
-			centroidIndex, err = callback.(func(field string) (*faiss.IndexImpl, error))(fieldName)
+			c, err := callback.(func(field string) (interface{}, error))(fieldName)
 			if err != nil {
 				return err
 			}
+			if c != nil {
+				centroidIndex = c.(*faiss.IndexImpl)
+			}
 		}
+		err = vo.flushSectionMetadata(fieldID, w, vecToDocID, indexes)
+		if err != nil {
+			return err
+		}
+
 		err = vo.mergeAndWriteVectorIndexes(centroidIndex, vecSegs, indexes, w, closeCh)
 		if err != nil {
 			return err
@@ -323,7 +328,7 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 			nprobe = 1
 		}
 	}
-	// note: for IndexOptimizedFastMerge, the nprobe value still favors recall
+
 	return nprobe
 }
 
@@ -341,7 +346,7 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex *faiss.IndexImpl,
 		}
 		if len(vecIndexes[i].vecIds) == 0 {
 			continue
-		} else if len(vecIndexes[i].vecIds) >= sq8Threshold {
+		} else if len(vecIndexes[i].vecIds) >= ivfSq8Threshold {
 			// merging only the large indexes (IVFSQ8 family)
 			// all IVF<same class> indexes are eligible for merging
 			//
@@ -360,7 +365,6 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex *faiss.IndexImpl,
 		indexOptimizedFor = vecIndexes[i].indexOptimizedFor
 		dims = vecIndexes[i].index.fIndex.D()
 		metric = int(vecIndexes[i].index.fIndex.MetricType())
-
 	}
 
 	nlist := centroidIndex.Nlist()
@@ -456,7 +460,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex *faiss.Inde
 		indexBytes := segBase.mem[currVecIndex.startOffset : currVecIndex.startOffset+int(currVecIndex.indexSize)]
 		ioFlags := faissIOFlags
 		if centroidIndex == nil {
-			ioFlags |= faissIOFlagsReadOnly
+			ioFlags |= faiss.IOFlagReadOnly
 		}
 		// reconstruct the faiss index from the bytes
 		faissIndex, err := faiss.ReadIndexFromBuffer(indexBytes, ioFlags)
@@ -505,7 +509,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex *faiss.Inde
 
 	// hardcoded - refactor later
 	// fast merge only applicable for IVFSQ8 class indexes
-	if totalVecs >= sq8Threshold && centroidIndex != nil {
+	if totalVecs >= ivfSq8Threshold && centroidIndex != nil {
 		return v.fastMergeIndexes(centroidIndex, vecIndexes, w, closeCh)
 	}
 
@@ -819,7 +823,7 @@ func determineFP32IndexToUse(nvecs, nlist int, indexOptimizedFor string) (string
 		return fmt.Sprintf("IVF%d,SQ4", nlist), IndexTypeIVF
 	default:
 		switch {
-		case nvecs >= sq8Threshold:
+		case nvecs >= ivfSq8Threshold:
 			return fmt.Sprintf("IVF%d,SQ8", nlist), IndexTypeIVF
 		default:
 			return fmt.Sprintf("IVF%d,Flat", nlist), IndexTypeIVF

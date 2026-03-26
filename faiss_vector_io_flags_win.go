@@ -20,4 +20,3 @@ package zap
 import faiss "github.com/blevesearch/go-faiss"
 
 const faissIOFlags = faiss.IOFlagReadOnly
-const faissIOFlagsReadOnly = faiss.IOFlagReadOnly

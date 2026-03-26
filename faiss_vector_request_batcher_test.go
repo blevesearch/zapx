@@ -18,7 +18,6 @@ package zap
 
 import (
 	"encoding/json"
-	"sync"
 	"testing"
 	"time"
 
@@ -32,7 +31,6 @@ import (
 // It allows us to simulate search latency and return predefined distances and IDs for
 // search requests, without needing a real Faiss index or vector data.
 type fakeFaissIndex struct {
-	mu          sync.Mutex
 	searchDelay time.Duration
 }
 
@@ -105,29 +103,26 @@ func dummyVectorSet(dim int) (*vectorSet, error) {
 	return newVectorSet(dim, vec)
 }
 
-func BenchmarkRequestBatcherSearch(b *testing.B) {
+func BenchmarkBatchedSearch(b *testing.B) {
 	// config
 	dims := 512
 	k := 10
-	delay := 100 * time.Millisecond
+	delay := 50 * time.Millisecond
 	// impl
 	idx := newFakeFaissIndex(delay)
 	rb := newRequestBatcher(idx)
 	b.Cleanup(rb.stop)
-	b.ReportAllocs()
 	b.ResetTimer()
-	b.Run("search_parallel", func(b *testing.B) {
-		b.RunParallel(func(pb *testing.PB) {
-			for pb.Next() {
-				vecs, err := dummyVectorSet(dims)
-				if err != nil {
-					b.Fatalf("unexpected error: %v", err)
-				}
-				_, _, err = rb.search(vecs, int64(k))
-				if err != nil {
-					b.Fatalf("unexpected error: %v", err)
-				}
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			vecs, err := dummyVectorSet(dims)
+			if err != nil {
+				b.Fatalf("unexpected error: %v", err)
 			}
-		})
+			_, _, err = rb.search(vecs, int64(k))
+			if err != nil {
+				b.Fatalf("unexpected error: %v", err)
+			}
+		}
 	})
 }

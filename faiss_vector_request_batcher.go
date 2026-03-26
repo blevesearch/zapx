@@ -23,12 +23,11 @@ import (
 )
 
 var (
-	// the latency budget for processing a batch of search requests.
-	// This is the maximum amount of time that the batcher will wait before
-	// executing a batch of search requests.
-	// - Higher the latency budget, higher the throughput of the batcher, but also higher the latency for individual search requests.
-	// - Lower the latency budget, lower the throughput of the batcher, but also lower the latency for individual search requests.
-	LatencyBudget time.Duration = 250 * time.Millisecond
+	// adaptive batching parameters - these can be tuned based on the expected workload and latency requirements.
+	// MinLatencyBudget is the minimum amount of time that the batcher will wait before flushing a batch of requests.
+	MinLatencyBudget time.Duration = 10 * time.Millisecond
+	// MaxLatencyBudget is the maximum amount of time that the batcher will wait before flushing a batch of requests.
+	MaxLatencyBudget time.Duration = 250 * time.Millisecond
 )
 
 var (
@@ -75,20 +74,18 @@ func (b *requestBatcher) stop() {
 // --------------------------------------------------
 
 type batchRequest struct {
-	qVector  *vectorSet
-	k        int64
-	respCh   []chan *batchResponse
-	deadline time.Time
+	qVector *vectorSet
+	k       int64
+	respCh  []chan *batchResponse
 }
 
 func newBatchRequest(qVector *vectorSet, k int64) (*batchRequest, chan *batchResponse) {
 	// response channel for sending the search results back to the requester.
 	respChan := make(chan *batchResponse, 1)
 	return &batchRequest{
-		qVector:  qVector,
-		k:        k,
-		respCh:   []chan *batchResponse{respChan},
-		deadline: time.Now().Add(LatencyBudget),
+		qVector: qVector,
+		k:       k,
+		respCh:  []chan *batchResponse{respChan},
 	}, respChan
 }
 
@@ -107,10 +104,6 @@ func (r *batchRequest) mergeWith(other *batchRequest) {
 	// append the response channels from the other request to this request, so that when the search results are ready,
 	// we can send the results back to all requesters that were merged into this batch.
 	r.respCh = append(r.respCh, other.respCh...)
-	// retain the earliest deadline among the merged requests, so that the batch will be executed within the latency budget of all merged requests.
-	if other.deadline.Before(r.deadline) {
-		r.deadline = other.deadline
-	}
 }
 
 func (r *batchRequest) sendResponse(distances []float32, ids []int64, err error) {
@@ -161,6 +154,8 @@ type coalesceQueue struct {
 	queue []*batchRequest
 	// timer for automatically triggering the execution of a batch of requests when the earliest deadline is reached.
 	timer *time.Timer
+	// timestamp of the last time the queue was flushed.
+	lastFlush time.Time
 }
 
 func newCoalesceQueue(idx faissIndex) *coalesceQueue {
@@ -186,16 +181,17 @@ func (q *coalesceQueue) monitor() {
 	for {
 		select {
 		case req := <-q.enqueueCh:
-			// enqueue the new batch request into the coalesce queue.
+			if len(q.queue) == 0 {
+				dequeueTimer = q.startTimer()
+			}
 			q.enqueue(req)
-			// reset the dequeue timer after adding a new request.
-			dequeueTimer = q.resetTimer()
 		case <-dequeueTimer:
 			// when the timer fires, it means that at least one batch request in the queue has
 			// reached its deadline and needs to be executed.
 			q.flush()
-			// the queue is flushed after processing, so we need to reset the timer for the next batch of requests in the queue (if any).
-			dequeueTimer = q.resetTimer()
+			// the queue is flushed after processing, so set the dequeue timer to nil until we have
+			// new requests in the queue that can trigger a new timer.
+			dequeueTimer = nil
 		case <-q.stopCh:
 			// flush the queue one last time before stopping, to ensure that any pending requests are processed.
 			q.flush()
@@ -204,10 +200,31 @@ func (q *coalesceQueue) monitor() {
 	}
 }
 
+func (q *coalesceQueue) startTimer() <-chan time.Time {
+	// Calculate adaptive budget when this is the first request after a flush
+	var budget time.Duration
+	// empty queue.
+	if !q.lastFlush.IsZero() {
+		// Calculate time elapsed since last flush
+		timeSinceLastFlush := time.Since(q.lastFlush)
+		// Adaptive strategy:
+		// - If requests arrive quickly (small timeSinceLastFlush), use higher budget to batch more
+		// - If requests arrive slowly (large timeSinceLastFlush), use lower budget to reduce latency
+		budget = max(MaxLatencyBudget-timeSinceLastFlush, MinLatencyBudget)
+	} else {
+		// First request ever, use maximum budget
+		budget = MaxLatencyBudget
+	}
+	if q.timer != nil {
+		q.timer.Reset(budget)
+	} else {
+		q.timer = time.NewTimer(budget)
+	}
+	return q.timer.C
+}
+
 func (q *coalesceQueue) enqueue(req *batchRequest) {
-	// since we are adding a new request to the queue, we need to reset the timer to ensure that the
-	// batch will be executed within the latency budget of all requests in the queue.
-	// try to find an existing batch request in the queue that can be merged with this new request.
+	// Try to find an existing batch request in the queue that can be merged with this new request.
 	for _, pendingReq := range q.queue {
 		if pendingReq.canMerge(req) {
 			// if we find a compatible request, merge this new request into the existing batch request and return.
@@ -219,35 +236,16 @@ func (q *coalesceQueue) enqueue(req *batchRequest) {
 	q.queue = append(q.queue, req)
 }
 
-func (q *coalesceQueue) resetTimer() <-chan time.Time {
-	if len(q.queue) == 0 {
-		return nil
-	}
-	// find earliest deadline
-	earliest := q.queue[0].deadline
-	for _, r := range q.queue[1:] {
-		if r.deadline.Before(earliest) {
-			earliest = r.deadline
-		}
-	}
-	// calculate the duration until the earliest deadline, and reset the timer to trigger at that time.
-	d := time.Until(earliest)
-	if d < 0 {
-		d = 0
-	}
-	if q.timer != nil {
-		q.timer.Reset(d)
-	} else {
-		q.timer = time.NewTimer(d)
-	}
-	return q.timer.C
-}
-
 func (q *coalesceQueue) flush() {
 	// execute all the requests in the queue, and empty the queue afterwards.
 	for _, req := range q.queue {
 		distances, ids, err := q.idx.searchWithoutIDs(req.qVector, req.k, nil, nil)
 		req.sendResponse(distances, ids, err)
+	}
+	// update the last flush time to now, since we just processed a batch of requests.
+	q.lastFlush = time.Now()
+	if q.timer != nil {
+		q.timer.Stop()
 	}
 	// clear the queue after processing all the requests.
 	q.queue = q.queue[:0]

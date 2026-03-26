@@ -110,13 +110,7 @@ func BenchmarkRequestBatcherSearch(b *testing.B) {
 	dims := 512
 	k := 10
 	delay := 100 * time.Millisecond
-	latencyBudget := 250 * time.Millisecond
 	// impl
-	old := MaxLatencyBudget
-	MaxLatencyBudget = latencyBudget
-	b.Cleanup(func() {
-		MaxLatencyBudget = old
-	})
 	idx := newFakeFaissIndex(delay)
 	rb := newRequestBatcher(idx)
 	b.Cleanup(rb.stop)

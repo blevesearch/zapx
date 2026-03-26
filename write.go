@@ -123,18 +123,18 @@ func persistFieldsSection(fieldsInv []string,
 const FooterSize = 4 + 4 + 4 + 4 + 8 + 8 + 8
 
 func persistFooter(numDocs, storedIndexOffset, sectionsIndexOffset uint64,
-	chunkMode, crcBeforeFooter uint32, writerIn io.Writer, writerId string) error {
+	chunkMode, crcBeforeFooter uint32, writerIn io.Writer, fileWriterID string) error {
 	w := NewCountHashWriter(writerIn)
 	w.crc = crcBeforeFooter
 
 	// Write the writer id
-	_, err := w.Write([]byte(writerId))
+	_, err := w.Write([]byte(fileWriterID))
 	if err != nil {
 		return err
 	}
 
 	// Write the length of the writer id
-	err = binary.Write(w, binary.BigEndian, uint32(len(writerId)))
+	err = binary.Write(w, binary.BigEndian, uint32(len(fileWriterID)))
 	if err != nil {
 		return err
 	}

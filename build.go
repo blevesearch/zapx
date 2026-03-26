@@ -98,7 +98,8 @@ func persistSegmentBaseToWriter(sb *SegmentBase, w io.Writer) (int, error) {
 		return 0, err
 	}
 
-	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.sectionsIndexOffset, sb.chunkMode, sb.memCRC, br, sb.writerId)
+	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.sectionsIndexOffset,
+		sb.chunkMode, sb.memCRC, br, sb.fileWriterID)
 	if err != nil {
 		return 0, err
 	}
@@ -157,7 +158,7 @@ func persistStoredFieldValues(fieldID int,
 }
 
 func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64,
-	storedIndexOffset uint64, sectionsIndexOffset uint64, writerId string,
+	storedIndexOffset uint64, sectionsIndexOffset uint64, fileWriterID string,
 	config map[string]interface{}) (*SegmentBase, error) {
 	sb := &SegmentBase{
 		mem:                 mem,
@@ -176,13 +177,13 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		fieldsMap:     make(map[string]uint16),
 		fieldsOptions: make(map[string]index.FieldIndexingOptions),
 		fieldsInv:     make([]string, 0),
-		writerId:      writerId,
+		fileWriterID:  fileWriterID,
 		config:        config,
 	}
 
 	sb.updateSize()
 
-	fileReader, err := NewFileReader(sb.writerId, nil)
+	fileReader, err := NewFileReader(sb.fileWriterID, nil)
 	if err != nil {
 		return nil, err
 	}

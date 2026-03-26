@@ -452,7 +452,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 	// there are no writer callbacks across all segments
 	copyFlag := true
 	for _, segment := range segments {
-		if segment.writerId != "" {
+		if segment.fileWriterID != "" {
 			copyFlag = false
 			break
 		}

@@ -97,7 +97,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 	// there are no writer callbacks across all segments
 	copyFlag := true
 	for _, segment := range segments {
-		if segment.writerId != "" {
+		if segment.fileWriterID != "" {
 			copyFlag = false
 			break
 		}

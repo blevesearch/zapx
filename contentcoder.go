@@ -161,7 +161,7 @@ func (c *chunkedContentCoder) flushContents() error {
 	}
 
 	// process the compressed data using the callback
-	if fw, ok := c.w.(*fileWriter); ok && fw != nil {
+	if fw, ok := c.w.(*FileWriter); ok && fw != nil {
 		c.compressed = fw.process(c.compressed)
 	}
 

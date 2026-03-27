@@ -46,7 +46,7 @@ func (sc *synonymIndexCache) Clear() {
 // - A Vellum FST (Finite State Transducer) representing the thesaurus.
 // - A map associating synonym IDs to their corresponding terms.
 // This function returns the loaded or newly created tuple (FST and map).
-func (sc *synonymIndexCache) loadOrCreate(fieldID uint16, mem []byte, r *fileReader) (*vellum.FST, map[uint32][]byte, uint64, error) {
+func (sc *synonymIndexCache) loadOrCreate(fieldID uint16, mem []byte, r *FileReader) (*vellum.FST, map[uint32][]byte, uint64, error) {
 	sc.m.RLock()
 	entry, ok := sc.cache[fieldID]
 	if ok {
@@ -68,7 +68,7 @@ func (sc *synonymIndexCache) loadOrCreate(fieldID uint16, mem []byte, r *fileRea
 }
 
 // createAndCacheLOCKED creates the synonym index cache for the specified fieldID and caches it.
-func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte, r *fileReader) (*vellum.FST, map[uint32][]byte, uint64, error) {
+func (sc *synonymIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte, r *FileReader) (*vellum.FST, map[uint32][]byte, uint64, error) {
 	var pos uint64
 	vellumLen, read := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	if vellumLen == 0 || read <= 0 {

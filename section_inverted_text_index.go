@@ -68,7 +68,7 @@ func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint
 	}
 }
 
-func (i *invertedTextIndexSection) Persist(opaque map[int]resetable, w *fileWriter) error {
+func (i *invertedTextIndexSection) Persist(opaque map[int]resetable, w *FileWriter) error {
 	io := i.getInvertedIndexOpaque(opaque)
 	return io.writeDicts(w)
 }
@@ -80,7 +80,7 @@ func (i *invertedTextIndexSection) AddrForField(opaque map[int]resetable, fieldI
 
 func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
 	fieldsInv []string, fieldsMap map[string]uint16, fieldsOptions map[string]index.FieldIndexingOptions,
-	fieldsSame bool, newDocNumsIn [][]uint64, newSegDocCount uint64, chunkMode uint32, w *fileWriter,
+	fieldsSame bool, newDocNumsIn [][]uint64, newSegDocCount uint64, chunkMode uint32, w *FileWriter,
 	closeCh chan struct{}) (map[int]int, error) {
 	var bufMaxVarintLen64 []byte = make([]byte, binary.MaxVarintLen64)
 	var bufLoc []uint64
@@ -97,7 +97,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 	// there are no writer callbacks across all segments
 	copyFlag := true
 	for _, segment := range segments {
-		if segment.fileWriterID != "" {
+		if segment.fileReader.id != "" {
 			copyFlag = false
 			break
 		}
@@ -417,7 +417,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 
 func (i *invertedTextIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
 	drops []*roaring.Bitmap, fieldsInv []string, newDocNumsIn [][]uint64,
-	w *fileWriter, closeCh chan struct{}) error {
+	w *FileWriter, closeCh chan struct{}) error {
 	io := i.getInvertedIndexOpaque(opaque)
 	fieldAddrs, err := mergeAndPersistInvertedSection(segments, drops, fieldsInv,
 		io.FieldsMap, io.FieldsOptions, io.fieldsSame, newDocNumsIn, io.numDocs, io.chunkMode, w, closeCh)
@@ -452,7 +452,7 @@ func (i *invertedIndexOpaque) BytesRead() uint64 {
 
 func (i *invertedIndexOpaque) ResetBytesRead(uint64) {}
 
-func (io *invertedIndexOpaque) writeDicts(w *fileWriter) error {
+func (io *invertedIndexOpaque) writeDicts(w *FileWriter) error {
 	if len(io.results) == 0 {
 		return nil
 	}

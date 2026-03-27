@@ -81,7 +81,7 @@ func (v *faissVectorIndexSection) Process(opaque map[int]resetable, docNum uint3
 	}
 }
 
-func (v *faissVectorIndexSection) Persist(opaque map[int]resetable, w *fileWriter) error {
+func (v *faissVectorIndexSection) Persist(opaque map[int]resetable, w *FileWriter) error {
 	vo := v.getVectorIndexOpaque(opaque)
 	return vo.writeVectorIndexes(w)
 }
@@ -105,7 +105,7 @@ type vecIndexInfo struct {
 // Merge merges vector indexes from multiple segments into a single index.
 func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
 	drops []*roaring.Bitmap, fieldsInv []string,
-	newDocNumsIn [][]uint64, w *fileWriter, closeCh chan struct{}) error {
+	newDocNumsIn [][]uint64, w *FileWriter, closeCh chan struct{}) error {
 	vo := v.getVectorIndexOpaque(opaque)
 	// preallocating the space over here, if there are too many fields
 	// in the segment this will help by avoiding multiple allocation
@@ -219,7 +219,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 	return nil
 }
 
-func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *fileWriter,
+func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *FileWriter,
 	vecToDocID []uint64, indexes []*vecIndexInfo) error {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 	fieldStart := w.Count()
@@ -287,7 +287,7 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 // todo: naive implementation. need to keep in mind the perf implications and improve on this.
 // perhaps, parallelized merging can help speed things up over here.
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(sbs []*SegmentBase,
-	vecIndexes []*vecIndexInfo, w *fileWriter, closeCh chan struct{}) error {
+	vecIndexes []*vecIndexInfo, w *FileWriter, closeCh chan struct{}) error {
 	// safe to assume that all the indexes are of the same config values, given
 	// that they are extracted from the field mapping info.
 	var dims, metric, indexDataCap, reconsCap int
@@ -668,7 +668,7 @@ func determineFP32IndexToUse(nvecs, nlist int, indexOptimizedFor string) (string
 	}
 }
 
-func (vo *vectorIndexOpaque) writeVectorIndexes(w *fileWriter) error {
+func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 	// for every fieldID, contents to store over here are:
 	//    1. the serialized representation of the dense vector index.
 	//    2. its constituent metadata like:

@@ -45,7 +45,7 @@ func (sc *invertedIndexCache) Clear() {
 // - A Vellum FST (Finite State Transducer) representing the TermDictionary.
 // This function returns the loaded or newly created FST, and the number of bytes read from the provided memory slice,
 // if the cache was created.
-func (sc *invertedIndexCache) loadOrCreate(fieldID uint16, mem []byte, fr *fileReader) (*vellum.FST, uint64, error) {
+func (sc *invertedIndexCache) loadOrCreate(fieldID uint16, mem []byte, fr *FileReader) (*vellum.FST, uint64, error) {
 	sc.m.RLock()
 	entry, ok := sc.cache[fieldID]
 	if ok {
@@ -67,7 +67,7 @@ func (sc *invertedIndexCache) loadOrCreate(fieldID uint16, mem []byte, fr *fileR
 }
 
 // createAndCacheLOCKED creates the inverted index cache for the specified fieldID and caches it.
-func (sc *invertedIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte, fr *fileReader) (*vellum.FST, uint64, error) {
+func (sc *invertedIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte, fr *FileReader) (*vellum.FST, uint64, error) {
 	var pos uint64
 	vellumLen, read := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	if vellumLen == 0 || read <= 0 {

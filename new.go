@@ -106,7 +106,7 @@ type interim struct {
 
 	chunkMode uint32
 
-	w *fileWriter
+	w *FileWriter
 
 	// FieldsMap adds 1 to field id to avoid zero value issues
 	//  name -> field id + 1

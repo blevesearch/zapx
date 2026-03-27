@@ -286,7 +286,7 @@ func (so *synonymIndexOpaque) grabBuf(size int) []byte {
 	return buf[:size]
 }
 
-func (so *synonymIndexOpaque) writeThesauri(w *fileWriter) error {
+func (so *synonymIndexOpaque) writeThesauri(w *FileWriter) error {
 
 	if len(so.results) == 0 {
 		return nil
@@ -425,7 +425,7 @@ func (s *synonymIndexSection) Process(opaque map[int]resetable, docNum uint32, f
 // Persist serializes and writes the thesauri processed to the writer, along
 // with the synonym postings lists, and the synonym term map. Implements the
 // Persist API for the synonym index section.
-func (s *synonymIndexSection) Persist(opaque map[int]resetable, w *fileWriter) error {
+func (s *synonymIndexSection) Persist(opaque map[int]resetable, w *FileWriter) error {
 	so := s.getSynonymIndexOpaque(opaque)
 	return so.writeThesauri(w)
 }
@@ -452,7 +452,7 @@ func (s *synonymIndexSection) AddrForField(opaque map[int]resetable, fieldID int
 // synonym index section.
 func (s *synonymIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
 	drops []*roaring.Bitmap, fieldsInv []string, newDocNumsIn [][]uint64,
-	w *fileWriter, closeCh chan struct{}) error {
+	w *FileWriter, closeCh chan struct{}) error {
 	so := s.getSynonymIndexOpaque(opaque)
 	thesaurusAddrs, fieldIDtoThesaurusID, err := mergeAndPersistSynonymSection(segments, drops, fieldsInv, newDocNumsIn, w, closeCh)
 	if err != nil {
@@ -491,7 +491,7 @@ func encodeSynonym(synonymID uint32, docID uint32) uint64 {
 // writeSynonyms serilizes and writes the synonym postings list to the writer, by first
 // serializing the postings list to a byte slice and then writing the length
 // of the byte slice followed by the byte slice itself.
-func writeSynonyms(postings *roaring64.Bitmap, w *fileWriter, bufMaxVarintLen64 []byte) (
+func writeSynonyms(postings *roaring64.Bitmap, w *FileWriter, bufMaxVarintLen64 []byte) (
 	offset uint64, err error) {
 	termCardinality := postings.GetCardinality()
 	if termCardinality <= 0 {
@@ -524,7 +524,7 @@ func writeSynonyms(postings *roaring64.Bitmap, w *fileWriter, bufMaxVarintLen64 
 // writeSynTermMap serializes and writes the synonym term map to the writer, by first
 // writing the length of the map followed by the map entries, where each entry
 // consists of the synonym ID, the length of the term, and the term itself.
-func writeSynTermMap(synTermMap map[uint32]string, w *fileWriter, bufMaxVarintLen64 []byte) error {
+func writeSynTermMap(synTermMap map[uint32]string, w *FileWriter, bufMaxVarintLen64 []byte) error {
 	if len(synTermMap) == 0 {
 		return nil
 	}
@@ -541,16 +541,12 @@ func writeSynTermMap(synTermMap map[uint32]string, w *fileWriter, bufMaxVarintLe
 
 	buf := make([]byte, lenTerms+binary.MaxVarintLen64*(2*len(synTermMap)))
 	bufPos := 0
-
 	for sid, term := range synTermMap {
 		bufPos += binary.PutUvarint(buf[bufPos:], uint64(sid))
-
 		bufPos += binary.PutUvarint(buf[bufPos:], uint64(len(term)))
-
 		copy(buf[bufPos:], term)
 		bufPos += len(term)
 	}
-
 	buf = w.process(buf[:bufPos])
 
 	// write out the length of the map
@@ -569,7 +565,7 @@ func writeSynTermMap(synTermMap map[uint32]string, w *fileWriter, bufMaxVarintLe
 }
 
 func mergeAndPersistSynonymSection(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
-	fieldsInv []string, newDocNumsIn [][]uint64, w *fileWriter,
+	fieldsInv []string, newDocNumsIn [][]uint64, w *FileWriter,
 	closeCh chan struct{}) (map[int]int, map[uint16]int, error) {
 
 	var bufMaxVarintLen64 []byte = make([]byte, binary.MaxVarintLen64)

@@ -33,7 +33,7 @@ func writeRoaringWithLen(r *roaring.Bitmap, w io.Writer,
 
 	var tw int
 
-	if fw, ok := w.(*fileWriter); ok && fw != nil {
+	if fw, ok := w.(*FileWriter); ok && fw != nil {
 		buf = fw.process(buf)
 	}
 
@@ -56,7 +56,7 @@ func writeRoaringWithLen(r *roaring.Bitmap, w io.Writer,
 }
 
 func persistFieldsSection(fieldsInv []string,
-	fieldsOptions map[string]index.FieldIndexingOptions, w *fileWriter,
+	fieldsOptions map[string]index.FieldIndexingOptions, w *FileWriter,
 	opaque map[int]resetable) (uint64, error) {
 	var rv uint64
 	fieldsOffsets := make([]uint64, 0, len(fieldsInv))

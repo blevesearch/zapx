@@ -38,24 +38,24 @@ var WriterHook func(context []byte) (string, func(data []byte) []byte, error)
 // Default no-op implementation. Is called after reading any user data from a file.
 var ReaderHook func(id string, context []byte) (func(data []byte) ([]byte, error), error)
 
-// fileWriter wraps a CountHashWriter and applies a user provided
+// FileWriter wraps a CountHashWriter and applies a user provided
 // writer callback to the data being written.
-type fileWriter struct {
-	processor func(data []byte) []byte
+type FileWriter struct {
 	id        string
 	c         *CountHashWriter
+	processor func(data []byte) []byte
 }
 
-func NewFileWriterEmpty(c *CountHashWriter) *fileWriter {
-	rv := &fileWriter{
+func NewFileWriterEmpty(c *CountHashWriter) *FileWriter {
+	rv := &FileWriter{
 		c: c,
 	}
 
 	return rv
 }
 
-func NewFileWriter(c *CountHashWriter, context []byte) (*fileWriter, error) {
-	rv := &fileWriter{
+func NewFileWriter(c *CountHashWriter, context []byte) (*FileWriter, error) {
+	rv := &FileWriter{
 		c: c,
 	}
 
@@ -70,34 +70,34 @@ func NewFileWriter(c *CountHashWriter, context []byte) (*fileWriter, error) {
 	return rv, nil
 }
 
-func (w *fileWriter) Write(data []byte) (int, error) {
+func (w *FileWriter) Write(data []byte) (int, error) {
 	return w.c.Write(data)
 }
 
 // process applies the writer callback to the data, if one is set
-func (w *fileWriter) process(data []byte) []byte {
+func (w *FileWriter) process(data []byte) []byte {
 	if w.processor != nil {
 		return w.processor(data)
 	}
 	return data
 }
 
-func (w *fileWriter) Count() int {
+func (w *FileWriter) Count() int {
 	return w.c.Count()
 }
 
-func (w *fileWriter) Sum32() uint32 {
+func (w *FileWriter) Sum32() uint32 {
 	return w.c.Sum32()
 }
 
-// fileReader wraps a reader callback to be applied to data read from a file.
-type fileReader struct {
-	processor func(data []byte) ([]byte, error)
+// FileReader wraps a reader callback to be applied to data read from a file.
+type FileReader struct {
 	id        string
+	processor func(data []byte) ([]byte, error)
 }
 
-func NewFileReader(id string, context []byte) (*fileReader, error) {
-	rv := &fileReader{
+func NewFileReader(id string, context []byte) (*FileReader, error) {
+	rv := &FileReader{
 		id: id,
 	}
 
@@ -113,7 +113,7 @@ func NewFileReader(id string, context []byte) (*fileReader, error) {
 }
 
 // process applies the reader callback to the data, if one is set
-func (r *fileReader) process(data []byte) ([]byte, error) {
+func (r *FileReader) process(data []byte) ([]byte, error) {
 	if r.processor != nil {
 		return r.processor(data)
 	}

@@ -26,13 +26,13 @@ type chunkedIntDecoder struct {
 	curChunkBytes   []byte
 	data            []byte
 	r               *memUvarintReader
-	fr              *fileReader
+	fr              *FileReader
 
 	bytesRead uint64
 }
 
 // newChunkedIntDecoder expects an optional or reset chunkedIntDecoder for better reuse.
-func newChunkedIntDecoder(buf []byte, offset uint64, rv *chunkedIntDecoder, fr *fileReader) *chunkedIntDecoder {
+func newChunkedIntDecoder(buf []byte, offset uint64, rv *chunkedIntDecoder, fr *FileReader) *chunkedIntDecoder {
 	if rv == nil {
 		rv = &chunkedIntDecoder{startOffset: offset, data: buf}
 	} else {

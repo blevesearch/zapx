@@ -85,12 +85,6 @@ func (*ZapPlugin) open(path string, config map[string]interface{}) (segment.Segm
 		return nil, err
 	}
 
-	rv.fileReader, err = NewFileReader(rv.fileWriterID, []byte(rv.path))
-	if err != nil {
-		_ = rv.Close()
-		return nil, err
-	}
-
 	err = rv.loadFields()
 	if err != nil {
 		_ = rv.Close()
@@ -133,8 +127,9 @@ type SegmentBase struct {
 	fieldDvReaders      [][]*docValueReader // naive chunk cache per field; section->fieldID->reader
 	fieldDvNames        []string            // field names cached in fieldDvReaders
 	size                uint64
-	fileWriterID        string      // id of the writer callback used by the segment
-	fileReader          *fileReader // file reader with the same callback id
+
+	// file reader initialised with the writer callback id used by the segment
+	fileReader *FileReader
 
 	// index update specific tracking
 	updatedFields map[string]*index.UpdateFieldInfo
@@ -277,7 +272,14 @@ func (s *Segment) loadConfig() error {
 	// read the length of the id
 	idLen := binary.BigEndian.Uint32(s.mm[idLenOffset : idLenOffset+4])
 	idOffset := idLenOffset - int(idLen)
-	s.fileWriterID = string(s.mm[idOffset : idOffset+int(idLen)])
+
+	// read the file writer callback id and initialize the file reader with the same id
+	fileWriterID := string(s.mm[idOffset : idOffset+int(idLen)])
+	var err error
+	s.fileReader, err = NewFileReader(fileWriterID, []byte(s.path))
+	if err != nil {
+		return err
+	}
 
 	footerSize := FooterSize + int(idLen)
 	s.incrementBytesRead(uint64(footerSize))
@@ -926,5 +928,5 @@ func (sb *SegmentBase) countNested() uint64 {
 }
 
 func (sb *SegmentBase) CallbackId() string {
-	return sb.fileWriterID
+	return sb.fileReader.id
 }

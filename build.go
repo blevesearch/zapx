@@ -99,7 +99,7 @@ func persistSegmentBaseToWriter(sb *SegmentBase, w io.Writer) (int, error) {
 	}
 
 	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.sectionsIndexOffset,
-		sb.chunkMode, sb.memCRC, br, sb.fileWriterID)
+		sb.chunkMode, sb.memCRC, br, sb.fileReader.id)
 	if err != nil {
 		return 0, err
 	}
@@ -177,13 +177,12 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		fieldsMap:     make(map[string]uint16),
 		fieldsOptions: make(map[string]index.FieldIndexingOptions),
 		fieldsInv:     make([]string, 0),
-		fileWriterID:  fileWriterID,
 		config:        config,
 	}
 
 	sb.updateSize()
 
-	fileReader, err := NewFileReader(sb.fileWriterID, nil)
+	fileReader, err := NewFileReader(fileWriterID, nil)
 	if err != nil {
 		return nil, err
 	}

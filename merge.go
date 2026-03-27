@@ -171,7 +171,7 @@ func finalizeFieldOptions(fieldOptions map[string]index.FieldIndexingOptions,
 }
 
 func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
-	chunkMode uint32, w *fileWriter, closeCh chan struct{}) (
+	chunkMode uint32, w *FileWriter, closeCh chan struct{}) (
 	newDocNums [][]uint64, numDocs, storedIndexOffset uint64,
 	fieldsInv []string, fieldsMap map[string]uint16, sectionsIndexOffset uint64,
 	err error) {
@@ -372,7 +372,7 @@ func mergeTermFreqNormLocs(fieldsMap map[string]uint16, term []byte, postItr *Po
 
 func writePostings(postings *roaring.Bitmap, tfEncoder, locEncoder *chunkedIntCoder,
 	use1HitEncoding func(uint64) (bool, uint64, uint64),
-	w *fileWriter, bufMaxVarintLen64 []byte) (
+	w *FileWriter, bufMaxVarintLen64 []byte) (
 	offset uint64, err error) {
 	if postings == nil {
 		return 0, nil
@@ -430,7 +430,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 	fieldsMap map[string]uint16, fieldsInv []string,
 	fieldsOptions map[string]index.FieldIndexingOptions,
 	fieldsSame bool, newSegDocCount uint64,
-	w *fileWriter, closeCh chan struct{}) (uint64, [][]uint64, error) {
+	w *FileWriter, closeCh chan struct{}) (uint64, [][]uint64, error) {
 	var rv [][]uint64 // The remapped or newDocNums for each segment.
 
 	var newDocNum uint64
@@ -452,7 +452,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 	// there are no writer callbacks across all segments
 	copyFlag := true
 	for _, segment := range segments {
-		if segment.fileWriterID != "" {
+		if segment.fileReader.id != "" {
 			copyFlag = false
 			break
 		}
@@ -695,7 +695,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 // using a single Write() call for the entire set of bytes.  The
 // newDocNumOffsets is filled with the new offsets for each doc.
 func (sb *SegmentBase) copyStoredDocs(newDocNum uint64, newDocNumOffsets []uint64,
-	w *fileWriter) error {
+	w *FileWriter) error {
 	if sb.numDocs <= 0 {
 		return nil
 	}

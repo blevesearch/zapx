@@ -44,7 +44,7 @@ type requestBatcher struct {
 	cq *coalesceQueue
 }
 
-func newRequestBatcher(idx faissIndex) *requestBatcher {
+func newRequestBatcher(idx faissIndexBatch) *requestBatcher {
 	b := &requestBatcher{
 		cq: newCoalesceQueue(idx),
 	}
@@ -158,7 +158,7 @@ func newBatchResponse(distances []float32, ids []int64, err error) *batchRespons
 
 type coalesceQueue struct {
 	// the Faiss index that this coalesce queue will execute search requests against.
-	idx faissIndex
+	idx faissIndexBatch
 	// channel for enqueuing new batch requests into the queue.
 	enqueueCh chan *batchRequest
 	// channel for signaling the batcher to stop processing requests and shut down.
@@ -171,7 +171,7 @@ type coalesceQueue struct {
 	lastFlush time.Time
 }
 
-func newCoalesceQueue(idx faissIndex) *coalesceQueue {
+func newCoalesceQueue(idx faissIndexBatch) *coalesceQueue {
 	rv := &coalesceQueue{
 		idx:       idx,
 		queue:     make([]*batchRequest, 0),
@@ -253,7 +253,7 @@ func (q *coalesceQueue) enqueue(req *batchRequest) {
 func (q *coalesceQueue) flush() {
 	// execute all the requests in the queue, and empty the queue afterwards.
 	for _, req := range q.queue {
-		distances, ids, err := q.idx.searchWithoutIDs(req.qVector, req.k, nil, nil)
+		distances, ids, err := q.idx.batchSearch(req.qVector, req.k)
 		req.sendResponse(distances, ids, err)
 	}
 	// update the last flush time to now, since we just processed a batch of requests.

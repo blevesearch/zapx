@@ -49,6 +49,10 @@ func (f *fakeFaissIndex) search(vecs *vectorSet, k int64) ([]float32, []int64, e
 	return d, i, nil
 }
 
+func (f *fakeFaissIndex) batchSearch(vecs *vectorSet, k int64) ([]float32, []int64, error) {
+	return f.search(vecs, k)
+}
+
 func (f *fakeFaissIndex) searchWithoutIDs(vecs *vectorSet, k int64, _ faiss.Selector, _ json.RawMessage) ([]float32, []int64, error) {
 	return f.search(vecs, k)
 }

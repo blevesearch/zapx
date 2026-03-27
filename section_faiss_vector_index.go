@@ -435,16 +435,11 @@ func makeFaissIndex(vecs *vectorSet, config *faissIndexConfig) ([]byte, error) {
 		// the data space of indexData such that during the search time, we probe
 		// only a subset of vectors -> non-exhaustive search. could be a time
 		// consuming step when the indexData is large.
-		err = ivfIndex.train(vecs)
+		err = ivfIndex.trainAndAdd(vecs, vecs)
 		if err != nil {
 			return nil, err
 		}
-		// add the vectors to the index using sequential vector IDs starting
-		// from 0 to N-1
-		err = index.add(vecs)
-		if err != nil {
-			return nil, err
-		}
+
 		// the direct map maintained in the IVF index is essential for the
 		// reconstruction of vectors based on the sequential vector IDs in the
 		// future merges use direct map type 1 -> array based direct map, since
@@ -458,20 +453,18 @@ func makeFaissIndex(vecs *vectorSet, config *faissIndexConfig) ([]byte, error) {
 		// calculate nprobe using a heuristic.
 		nprobe := calculateNprobe(nlist, config.optimizationType)
 		ivfIndex.setNProbe(nprobe)
-	} else {
-		if sqIndex := index.castSQ(); sqIndex != nil {
-			err = sqIndex.train(vecs)
-			if err != nil {
-				return nil, err
-			}
+	} else if sqIndex := index.castSQ(); sqIndex != nil {
+		err = sqIndex.trainAndAdd(vecs, vecs)
+		if err != nil {
+			return nil, err
 		}
-		// add the vectors to the index using sequential vector IDs starting
-		// from 0 to N-1
+	} else {
 		err = index.add(vecs)
 		if err != nil {
 			return nil, err
 		}
 	}
+
 	// serialize the merged index into a byte slice, and write it out
 	indexBytes, err := index.serialize()
 	if err != nil {
@@ -556,6 +549,17 @@ func determineFloat32IndexToUse(nvecs, nlist int, optimizationType string) strin
 			return fmt.Sprintf("IVF%d,Flat", nlist)
 		}
 	}
+}
+
+// check if GPU is applicable for the index type and config
+// the only applicable types are: IVF and IVF-SQ8
+// we skip binary, flat and SQ8 for now
+func isGPUApplicable(idx *faiss.IndexImpl) bool {
+	if idx.IsIVFIndex() {
+		return true
+	}
+
+	return false
 }
 
 func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
@@ -830,7 +834,7 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 		if err != nil {
 			return nil, err
 		}
-		if cfg.useGPU {
+		if cfg.useGPU && isGPUApplicable(idx) {
 			return newFaissGPUFloat32Index(idx)
 		}
 		return newFaissFloat32Index(idx)

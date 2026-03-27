@@ -40,7 +40,6 @@ func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl) (faissIndex, error) {
 	if cpuIdx == nil {
 		return nil, ErrNilIndex
 	}
-	// TODO: log GPU clone errors in some way?
 	gpuIdx, _ := faiss.CloneToGPU(cpuIdx)
 	return &faissGPUFloat32Index{
 		cpuIdx: cpuIdx,
@@ -48,6 +47,8 @@ func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl) (faissIndex, error) {
 	}, nil
 }
 
+// attempt to add the vectors to the GPU index. If it fails,
+// fallback to the CPU index
 func (f *faissGPUFloat32Index) add(vecs *vectorSet) error {
 	if f.gpuIdx == nil {
 		return f.cpuIdx.Add(vecs.floatData)
@@ -55,9 +56,19 @@ func (f *faissGPUFloat32Index) add(vecs *vectorSet) error {
 
 	err := f.gpuIdx.Add(vecs.floatData)
 	if err != nil {
-		return err
+		f.gpuIdx.Close()
+		f.gpuIdx = nil
+		return f.cpuIdx.Add(vecs.floatData)
 	}
-	return f.syncGPUToCPU()
+
+	err = f.syncGPUToCPU()
+	if err != nil {
+		f.gpuIdx.Close()
+		f.gpuIdx = nil
+		return f.cpuIdx.Add(vecs.floatData)
+	}
+
+	return nil
 }
 
 func (f *faissGPUFloat32Index) close() {
@@ -146,15 +157,45 @@ func (f *faissGPUFloat32Index) setNProbe(nprobe int32) {
 	f.cpuIdx.SetNProbe(nprobe)
 }
 
-func (f *faissGPUFloat32Index) train(trainingData *vectorSet) error {
+// attempt to train and add the vectors to the GPU index. If it fails,
+// fallback to the CPU index
+func (f *faissGPUFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
 	if f.gpuIdx == nil {
-		return f.cpuIdx.Train(trainingData.floatData)
+		return f.trainAndAddCPU(trainingData, vecsToAdd)
 	}
 
-	if err := f.gpuIdx.Train(trainingData.floatData); err != nil {
+	err := f.gpuIdx.Train(trainingData.floatData)
+	if err != nil {
+		f.gpuIdx.Close()
+		f.gpuIdx = nil
+		return f.trainAndAddCPU(trainingData, vecsToAdd)
+	}
+
+	err = f.gpuIdx.Add(trainingData.floatData)
+	if err != nil {
+		f.gpuIdx.Close()
+		f.gpuIdx = nil
+		return f.trainAndAddCPU(trainingData, vecsToAdd)
+	}
+
+	err = f.syncGPUToCPU()
+	if err != nil {
+		f.gpuIdx.Close()
+		f.gpuIdx = nil
+		return f.trainAndAddCPU(trainingData, vecsToAdd)
+	}
+
+	return nil
+}
+
+// this function trains and adds the vectors on the CPU index only
+func (f *faissGPUFloat32Index) trainAndAddCPU(trainingData *vectorSet, vecsToAdd *vectorSet) error {
+	err := f.cpuIdx.Train(trainingData.floatData)
+	if err != nil {
 		return err
 	}
-	return nil
+
+	return f.cpuIdx.Add(vecsToAdd.floatData)
 }
 
 // syncGPUToCPU clones the current GPU index state back to the CPU index,

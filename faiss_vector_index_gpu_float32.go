@@ -31,8 +31,9 @@ import (
 // other operations (filtered searches, IVF cluster searches, SQ/IVF
 // operations, serialization, etc.) are delegated to the CPU index.
 type faissGPUFloat32Index struct {
-	cpuIdx *faiss.IndexImpl
-	gpuIdx *faiss.GPUIndexImpl
+	cpuIdx  *faiss.IndexImpl
+	gpuIdx  *faiss.GPUIndexImpl
+	batcher *requestBatcher
 }
 
 // if cloning to GPU fails, we still allow searches to happen on CPU only
@@ -41,10 +42,14 @@ func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl) (faissIndex, error) {
 		return nil, ErrNilIndex
 	}
 	gpuIdx, _ := faiss.CloneToGPU(cpuIdx)
-	return &faissGPUFloat32Index{
+	f := &faissGPUFloat32Index{
 		cpuIdx: cpuIdx,
 		gpuIdx: gpuIdx,
-	}, nil
+	}
+	if gpuIdx != nil {
+		f.batcher = newRequestBatcher(f)
+	}
+	return f, nil
 }
 
 // attempt to add the vectors to the GPU index. If it fails,
@@ -58,6 +63,7 @@ func (f *faissGPUFloat32Index) add(vecs *vectorSet) error {
 	if err != nil {
 		f.gpuIdx.Close()
 		f.gpuIdx = nil
+		f.stopBatcher()
 		return f.cpuIdx.Add(vecs.floatData)
 	}
 
@@ -65,6 +71,7 @@ func (f *faissGPUFloat32Index) add(vecs *vectorSet) error {
 	if err != nil {
 		f.gpuIdx.Close()
 		f.gpuIdx = nil
+		f.stopBatcher()
 		return f.cpuIdx.Add(vecs.floatData)
 	}
 
@@ -72,10 +79,18 @@ func (f *faissGPUFloat32Index) add(vecs *vectorSet) error {
 }
 
 func (f *faissGPUFloat32Index) close() {
+	f.stopBatcher()
 	if f.gpuIdx != nil {
 		f.gpuIdx.Close()
 	}
 	f.cpuIdx.Close()
+}
+
+func (f *faissGPUFloat32Index) stopBatcher() {
+	if f.batcher != nil {
+		f.batcher.stop()
+		f.batcher = nil
+	}
 }
 
 func (f *faissGPUFloat32Index) dim() int {
@@ -87,12 +102,16 @@ func (f *faissGPUFloat32Index) metricType() int {
 }
 
 func (f *faissGPUFloat32Index) searchWithoutIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
-	if f.gpuIdx != nil && selector == nil && len(params) == 0 {
-		// no selector and no params, use GPU for unfiltered search
-		return f.gpuIdx.Search(qVector.floatData, k)
+	if f.batcher != nil && selector == nil && len(params) == 0 {
+		// no selector and no params, use the batcher to batch GPU searches
+		return f.batcher.search(qVector, k)
 	}
 	// fall back to CPU for filtered search since GPU does not support selectors
 	return f.cpuIdx.SearchWithoutIDs(qVector.floatData, k, selector, params)
+}
+
+func (f *faissGPUFloat32Index) batchSearch(qVector *vectorSet, k int64) ([]float32, []int64, error) {
+	return f.gpuIdx.Search(qVector.floatData, k)
 }
 
 func (f *faissGPUFloat32Index) searchWithIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
@@ -168,6 +187,7 @@ func (f *faissGPUFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *v
 	if err != nil {
 		f.gpuIdx.Close()
 		f.gpuIdx = nil
+		f.stopBatcher()
 		return f.trainAndAddCPU(trainingData, vecsToAdd)
 	}
 
@@ -175,6 +195,7 @@ func (f *faissGPUFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *v
 	if err != nil {
 		f.gpuIdx.Close()
 		f.gpuIdx = nil
+		f.stopBatcher()
 		return f.trainAndAddCPU(trainingData, vecsToAdd)
 	}
 
@@ -182,6 +203,7 @@ func (f *faissGPUFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *v
 	if err != nil {
 		f.gpuIdx.Close()
 		f.gpuIdx = nil
+		f.stopBatcher()
 		return f.trainAndAddCPU(trainingData, vecsToAdd)
 	}
 

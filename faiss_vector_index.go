@@ -91,9 +91,18 @@ type faissIndexIVF interface {
 	trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error
 }
 
+// Interface for SQ-specific operations on Faiss vector indices.
 type faissIndexSQ interface {
 	// trains the SQ index on the provided training data and adds the vectors to
 	// the trained index. The training step performs quantization of the vector space,
 	// which enables efficient storage and search of high-dimensional vectors.
 	trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error
+}
+
+// Interface for batched search operations on Faiss vector indices.
+type faissIndexBatch interface {
+	// performs a batch search on the index using the provided query vector and parameters,
+	// and returns the distances and corresponding vector IDs of the top k results.
+	// NOTE: only vector search requests with the same `k` are batched together.
+	batchSearch(qVector *vectorSet, k int64) ([]float32, []int64, error)
 }

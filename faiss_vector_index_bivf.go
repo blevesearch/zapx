@@ -34,7 +34,7 @@ type faissBinaryIndex struct {
 func newFaissBinaryIndex(binary *faiss.BinaryIndexImpl, backing *faiss.IndexImpl) (index faissIndex, err error) {
 	// the binary index cannot be nil, but the backing index can be nil, depending on the use case.
 	if binary == nil {
-		return nil, ErrNilIndex
+		return nil, errNilIndex
 	}
 	return &faissBinaryIndex{
 		backing: backing,
@@ -71,7 +71,7 @@ func (b *faissBinaryIndex) ntotal() int64 {
 
 func (b *faissBinaryIndex) reconstructBatch(vecIDs []int64, prealloc []float32) ([]float32, error) {
 	// binary indexes do not support reconstruction
-	return nil, ErrInvalidIndex
+	return nil, errNotSupported
 }
 
 func (b *faissBinaryIndex) searchWithoutIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
@@ -267,10 +267,10 @@ func (b *faissBinaryIndex) train(trainingData *vectorSet) error {
 
 func (b *faissBinaryIndex) setQuantizers(centroidIndex faissIndexIVF) error {
 	// not supported for binary indexes, return error
-	return ErrInvalidIndex
+	return errNotSupported
 }
 
 func (b *faissBinaryIndex) mergeFrom(other faissIndex, offset int64) error {
 	// merging is not supported for binary indexes, return error
-	return ErrInvalidIndex
+	return errNotSupported
 }

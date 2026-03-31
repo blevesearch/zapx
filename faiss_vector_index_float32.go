@@ -144,7 +144,7 @@ func (f *faissFloat32Index) setQuantizers(centroidIndex faissIndexIVF) error {
 	if !ok {
 		// if not a float32 centroid index, we cannot set it as the quantizer
 		// for the current index, return an error.
-		return ErrInvalidIndex
+		return errNotSupported
 	}
 	return f.idx.SetQuantizers(centroidFaissIndex.idx)
 }
@@ -152,7 +152,7 @@ func (f *faissFloat32Index) setQuantizers(centroidIndex faissIndexIVF) error {
 func (f *faissFloat32Index) mergeFrom(other faissIndex, offset int64) error {
 	otherFaissIndex, ok := other.(*faissFloat32Index)
 	if !ok {
-		return ErrInvalidIndex
+		return errNotSupported
 	}
 	return f.idx.MergeFrom(otherFaissIndex.idx, offset)
 }

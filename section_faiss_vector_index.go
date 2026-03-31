@@ -1036,6 +1036,6 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 		// indexing path, where each index is handled independently
 		return newFaissBinaryIndex(idx, nil)
 	default:
-		return nil, ErrInvalidIndex
+		return nil, errNotSupported
 	}
 }

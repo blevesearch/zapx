@@ -70,11 +70,7 @@ func (b *faissBinaryIndex) ntotal() int64 {
 }
 
 func (b *faissBinaryIndex) reconstructBatch(vecIDs []int64, prealloc []float32) ([]float32, error) {
-	// if we have a backing index, we can use it to reconstruct the original vectors for the given vector IDs.
-	if b.backing != nil {
-		return b.backing.ReconstructBatch(vecIDs, prealloc)
-	}
-	// if we don't have a backing index, we cannot reconstruct the original vectors, so we return an error.
+	// binary indexes do not support reconstruction
 	return nil, ErrInvalidIndex
 }
 

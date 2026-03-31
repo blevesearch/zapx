@@ -139,22 +139,19 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		return nil, nil, nil, fmt.Errorf("could not read faiss index size")
 	}
 	pos += n
-
 	var rv faissIndex
 	// read the serialized vector index
-	fIndex, err := faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faissIOFlags)
+	fIndex, err := faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faissIOFlagsReadOnly)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("faiss index load error: %v", err)
 	}
 	pos += int(indexSize)
-
 	if faissIndexType(indexType) == faissBIVFIndex {
 		// read the faiss binary index size
 		binSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
-
 		// read the serialized binary vector index
-		bIndex, err := faiss.ReadBinaryIndexFromBuffer(mem[pos:pos+int(binSize)], faissIOFlags)
+		bIndex, err := faiss.ReadBinaryIndexFromBuffer(mem[pos:pos+int(binSize)], faissIOFlagsReadOnly)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("faiss binary index load error: %v", err)
 		}

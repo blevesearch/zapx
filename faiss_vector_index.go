@@ -25,7 +25,8 @@ import (
 )
 
 var (
-	ErrNilIndex error = errors.New("faiss index cannot be nil")
+	ErrNilIndex     error = errors.New("faiss index cannot be nil")
+	ErrInvalidIndex error = errors.New("input faiss index is invalid or incompatible for the intended operation")
 )
 
 // Abstract interface for Faiss vector indices, which are returned by the go-faiss library.
@@ -38,6 +39,10 @@ type faissIndex interface {
 	dim() int
 	// returns the metric type used by the index, which determines how distances between vectors are computed during search.
 	metricType() int
+	// ntotal returns the total number of vectors currently stored in the index.
+	ntotal() int64
+	// reconstructBatch reconstructs the original vectors for the given vector IDs in the index.
+	reconstructBatch(vecIDs []int64, prealloc []float32) ([]float32, error)
 	// performs a search on the index using the provided query vector and parameters, with an optional
 	// exclude selector to indicate a "blocklist" of indexed vectors to ignore during search.
 	// It returns the distances and corresponding vector IDs of the top k results.
@@ -89,6 +94,13 @@ type faissIndexIVF interface {
 	// perform k-means clustering to partition the data space of the index, which enables
 	// efficient non-exhaustive search during query time.
 	train(trainingData *vectorSet) error
+	// sets the quantizers for the IVF index. The quantizer is a separate
+	// IVF index that is trained on the same data and used to assign vectors
+	// to clusters in the IVF index.
+	setQuantizers(centroidIndex faissIndexIVF) error
+	// merged another faiss index into the current IVF index,
+	// with an offset to adjust vector IDs from the other index.
+	mergeFrom(other faissIndex, offset int64) error
 }
 
 // Interface for SQ-specific operations on Faiss vector indices.

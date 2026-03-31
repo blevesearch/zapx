@@ -55,6 +55,14 @@ func (f *faissFloat32Index) metricType() int {
 	return f.idx.MetricType()
 }
 
+func (f *faissFloat32Index) ntotal() int64 {
+	return f.idx.Ntotal()
+}
+
+func (f *faissFloat32Index) reconstructBatch(vecIDs []int64, prealloc []float32) ([]float32, error) {
+	return f.idx.ReconstructBatch(vecIDs, prealloc)
+}
+
 func (f *faissFloat32Index) searchWithoutIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
 	return f.idx.SearchWithoutIDs(qVector.floatData, k, selector, params)
 }
@@ -129,4 +137,22 @@ func (f *faissFloat32Index) setNProbe(nprobe int32) {
 func (f *faissFloat32Index) train(trainingData *vectorSet) error {
 	// train the index using the floatData from the vectorSet
 	return f.idx.Train(trainingData.floatData)
+}
+
+func (f *faissFloat32Index) setQuantizers(centroidIndex faissIndexIVF) error {
+	centroidFaissIndex, ok := centroidIndex.(*faissFloat32Index)
+	if !ok {
+		// if not a float32 centroid index, we cannot set it as the quantizer
+		// for the current index, return an error.
+		return ErrInvalidIndex
+	}
+	return f.idx.SetQuantizers(centroidFaissIndex.idx)
+}
+
+func (f *faissFloat32Index) mergeFrom(other faissIndex, offset int64) error {
+	otherFaissIndex, ok := other.(*faissFloat32Index)
+	if !ok {
+		return ErrInvalidIndex
+	}
+	return f.idx.MergeFrom(otherFaissIndex.idx, offset)
 }

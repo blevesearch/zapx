@@ -65,6 +65,19 @@ func (b *faissBinaryIndex) metricType() int {
 	return b.binary.MetricType()
 }
 
+func (b *faissBinaryIndex) ntotal() int64 {
+	return b.binary.Ntotal()
+}
+
+func (b *faissBinaryIndex) reconstructBatch(vecIDs []int64, prealloc []float32) ([]float32, error) {
+	// if we have a backing index, we can use it to reconstruct the original vectors for the given vector IDs.
+	if b.backing != nil {
+		return b.backing.ReconstructBatch(vecIDs, prealloc)
+	}
+	// if we don't have a backing index, we cannot reconstruct the original vectors, so we return an error.
+	return nil, ErrInvalidIndex
+}
+
 func (b *faissBinaryIndex) searchWithoutIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
 	// search the binary index with oversampling and then do a re-ranking on the
 	// FAISS index to get the top K results
@@ -254,4 +267,14 @@ func (b *faissBinaryIndex) setNProbe(nprobe int32) {
 func (b *faissBinaryIndex) train(trainingData *vectorSet) error {
 	// train the binary index using the binaryData from the vectorSet
 	return b.binary.Train(trainingData.binaryData)
+}
+
+func (b *faissBinaryIndex) setQuantizers(centroidIndex faissIndexIVF) error {
+	// not supported for binary indexes, return error
+	return ErrInvalidIndex
+}
+
+func (b *faissBinaryIndex) mergeFrom(other faissIndex, offset int64) error {
+	// merging is not supported for binary indexes, return error
+	return ErrInvalidIndex
 }

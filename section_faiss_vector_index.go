@@ -695,8 +695,8 @@ func determineIndexTypeFromOptimization(indexOptimizedFor string) faissIndexType
 }
 
 // freeReconstructedIndexes closes all faiss indexes in the provided slice.
-func freeReconstructedIndexes(reconsIndexes []*vecIndexInfo) {
-	for _, entry := range reconsIndexes {
+func freeReconstructedIndexes(vecIndexes []*vecIndexInfo) {
+	for _, entry := range vecIndexes {
 		if entry != nil && entry.index != nil {
 			entry.index.close()
 		}

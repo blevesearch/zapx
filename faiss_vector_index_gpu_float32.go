@@ -19,6 +19,7 @@ package zap
 
 import (
 	"encoding/json"
+	"sync"
 
 	faiss "github.com/blevesearch/go-faiss"
 )
@@ -31,47 +32,64 @@ import (
 // other operations (filtered searches, IVF cluster searches, SQ/IVF
 // operations, serialization, etc.) are delegated to the CPU index.
 type faissGPUFloat32Index struct {
-	cpuIdx  *faiss.IndexImpl
+	cpuIdx *faiss.IndexImpl
+
+	// mu protects gpuIdx, batcher, and closed.
+	mu      sync.RWMutex
 	gpuIdx  *faiss.GPUIndexImpl
 	batcher *requestBatcher
+	closed  bool
 }
 
-// if cloning to GPU fails, we still allow searches to happen on CPU only
+// newFaissGPUFloat32Index returns immediately using CPU-only search while the
+// GPU clone is performed asynchronously in the background.
 func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl) (faissIndex, error) {
 	if cpuIdx == nil {
 		return nil, ErrNilIndex
 	}
-	gpuIdx, _ := faiss.CloneToGPU(cpuIdx)
-	f := &faissGPUFloat32Index{
-		cpuIdx: cpuIdx,
-		gpuIdx: gpuIdx,
-	}
-	if gpuIdx != nil {
-		f.batcher = newRequestBatcher(f)
-	}
+	f := &faissGPUFloat32Index{cpuIdx: cpuIdx}
+	go f.initGPU()
 	return f, nil
+}
+
+// initGPU clones the CPU index to the GPU and sets up the request batcher.
+// If the index has already been closed by the time the clone finishes, the
+// newly created GPU index is immediately released.
+func (f *faissGPUFloat32Index) initGPU() {
+	gpuIdx, err := faiss.CloneToGPU(f.cpuIdx)
+	if err != nil || gpuIdx == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		gpuIdx.Close()
+		return
+	}
+	f.gpuIdx = gpuIdx
+	f.batcher = newRequestBatcher(f)
 }
 
 // attempt to add the vectors to the GPU index. If it fails,
 // fallback to the CPU index
 func (f *faissGPUFloat32Index) add(vecs *vectorSet) error {
-	if f.gpuIdx == nil {
+	f.mu.Lock()
+	gpuIdx := f.gpuIdx
+	f.mu.Unlock()
+
+	if gpuIdx == nil {
 		return f.cpuIdx.Add(vecs.floatData)
 	}
 
-	err := f.gpuIdx.Add(vecs.floatData)
+	err := gpuIdx.Add(vecs.floatData)
 	if err != nil {
-		f.gpuIdx.Close()
-		f.gpuIdx = nil
-		f.stopBatcher()
+		f.teardownGPU()
 		return f.cpuIdx.Add(vecs.floatData)
 	}
 
 	err = f.syncGPUToCPU()
 	if err != nil {
-		f.gpuIdx.Close()
-		f.gpuIdx = nil
-		f.stopBatcher()
+		f.teardownGPU()
 		return f.cpuIdx.Add(vecs.floatData)
 	}
 
@@ -79,17 +97,41 @@ func (f *faissGPUFloat32Index) add(vecs *vectorSet) error {
 }
 
 func (f *faissGPUFloat32Index) close() {
-	f.stopBatcher()
-	if f.gpuIdx != nil {
-		f.gpuIdx.Close()
+	f.mu.Lock()
+	f.closed = true
+	batcher := f.batcher
+	f.batcher = nil
+	gpuIdx := f.gpuIdx
+	f.gpuIdx = nil
+	f.mu.Unlock()
+
+	// stop the batcher outside the lock — its final flush calls batchSearch
+	// which needs the RLock.
+	if batcher != nil {
+		batcher.stop()
+	}
+	if gpuIdx != nil {
+		gpuIdx.Close()
 	}
 	f.cpuIdx.Close()
 }
 
-func (f *faissGPUFloat32Index) stopBatcher() {
-	if f.batcher != nil {
-		f.batcher.stop()
-		f.batcher = nil
+// teardownGPU extracts and nils the GPU index and batcher under the lock,
+// then stops the batcher and closes the GPU index outside the lock to
+// avoid deadlocking with batchSearch's RLock.
+func (f *faissGPUFloat32Index) teardownGPU() {
+	f.mu.Lock()
+	batcher := f.batcher
+	f.batcher = nil
+	gpuIdx := f.gpuIdx
+	f.gpuIdx = nil
+	f.mu.Unlock()
+
+	if batcher != nil {
+		batcher.stop()
+	}
+	if gpuIdx != nil {
+		gpuIdx.Close()
 	}
 }
 
@@ -102,16 +144,29 @@ func (f *faissGPUFloat32Index) metricType() int {
 }
 
 func (f *faissGPUFloat32Index) searchWithoutIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
-	if f.batcher != nil && selector == nil && len(params) == 0 {
-		// no selector and no params, use the batcher to batch GPU searches
-		return f.batcher.search(qVector, k)
+	if selector == nil && len(params) == 0 {
+		f.mu.RLock()
+		batcher := f.batcher
+		f.mu.RUnlock()
+		if batcher != nil {
+			return batcher.search(qVector, k)
+		}
 	}
-	// fall back to CPU for filtered search since GPU does not support selectors
+	// GPU not ready or filtered search — fall back to CPU
 	return f.cpuIdx.SearchWithoutIDs(qVector.floatData, k, selector, params)
 }
 
+// batchSearch is called from the coalesce queue's monitor goroutine.
+// It holds the RLock for the duration of the GPU search to prevent close()
+// from tearing down the GPU index while a search is in flight.
+// If the GPU index was torn down, it falls back to the CPU index.
 func (f *faissGPUFloat32Index) batchSearch(qVector *vectorSet, k int64) ([]float32, []int64, error) {
-	return f.gpuIdx.Search(qVector.floatData, k)
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.gpuIdx != nil {
+		return f.gpuIdx.Search(qVector.floatData, k)
+	}
+	return f.cpuIdx.SearchWithoutIDs(qVector.floatData, k, nil, nil)
 }
 
 func (f *faissGPUFloat32Index) searchWithIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
@@ -179,31 +234,29 @@ func (f *faissGPUFloat32Index) setNProbe(nprobe int32) {
 // attempt to train and add the vectors to the GPU index. If it fails,
 // fallback to the CPU index
 func (f *faissGPUFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
-	if f.gpuIdx == nil {
+	f.mu.Lock()
+	gpuIdx := f.gpuIdx
+	f.mu.Unlock()
+
+	if gpuIdx == nil {
 		return f.trainAndAddCPU(trainingData, vecsToAdd)
 	}
 
-	err := f.gpuIdx.Train(trainingData.floatData)
+	err := gpuIdx.Train(trainingData.floatData)
 	if err != nil {
-		f.gpuIdx.Close()
-		f.gpuIdx = nil
-		f.stopBatcher()
+		f.teardownGPU()
 		return f.trainAndAddCPU(trainingData, vecsToAdd)
 	}
 
-	err = f.gpuIdx.Add(trainingData.floatData)
+	err = gpuIdx.Add(trainingData.floatData)
 	if err != nil {
-		f.gpuIdx.Close()
-		f.gpuIdx = nil
-		f.stopBatcher()
+		f.teardownGPU()
 		return f.trainAndAddCPU(trainingData, vecsToAdd)
 	}
 
 	err = f.syncGPUToCPU()
 	if err != nil {
-		f.gpuIdx.Close()
-		f.gpuIdx = nil
-		f.stopBatcher()
+		f.teardownGPU()
 		return f.trainAndAddCPU(trainingData, vecsToAdd)
 	}
 
@@ -223,11 +276,15 @@ func (f *faissGPUFloat32Index) trainAndAddCPU(trainingData *vectorSet, vecsToAdd
 // syncGPUToCPU clones the current GPU index state back to the CPU index,
 // replacing the old CPU index.
 func (f *faissGPUFloat32Index) syncGPUToCPU() error {
-	if f.gpuIdx == nil {
+	f.mu.RLock()
+	gpuIdx := f.gpuIdx
+	f.mu.RUnlock()
+
+	if gpuIdx == nil {
 		return nil
 	}
 
-	cpuIdx, err := faiss.CloneToCPU(f.gpuIdx)
+	cpuIdx, err := faiss.CloneToCPU(gpuIdx)
 	if err != nil {
 		return err
 	}

@@ -14,6 +14,10 @@
 
 package zap
 
+import (
+	index "github.com/blevesearch/bleve_index_api"
+)
+
 // This file provides a mechanism for users of zap to provide callbacks
 // that can process data before it is written to disk, and after it is read
 // from disk.  This can be used for things like encryption, compression, etc.
@@ -31,12 +35,6 @@ package zap
 
 // An example implementation using AES-GCM encryption is provided in file_io_test.go
 // within initFileCallbacks().
-
-// Default no-op implementation. Is called before writing any user data to a file.
-var WriterHook func(context []byte) (string, func(data []byte) []byte, error)
-
-// Default no-op implementation. Is called after reading any user data from a file.
-var ReaderHook func(id string, context []byte) (func(data []byte) ([]byte, error), error)
 
 // FileWriter wraps a CountHashWriter and applies a user provided
 // writer callback to the data being written.
@@ -59,9 +57,9 @@ func NewFileWriter(c *CountHashWriter, context []byte) (*FileWriter, error) {
 		c: c,
 	}
 
-	if WriterHook != nil {
+	if index.WriterHook != nil {
 		var err error
-		rv.id, rv.processor, err = WriterHook(context)
+		rv.id, rv.processor, err = index.WriterHook(context)
 		if err != nil {
 			return nil, err
 		}
@@ -101,9 +99,9 @@ func NewFileReader(id string, context []byte) (*FileReader, error) {
 		id: id,
 	}
 
-	if ReaderHook != nil {
+	if index.ReaderHook != nil {
 		var err error
-		rv.processor, err = ReaderHook(id, context)
+		rv.processor, err = index.ReaderHook(id, context)
 		if err != nil {
 			return nil, err
 		}

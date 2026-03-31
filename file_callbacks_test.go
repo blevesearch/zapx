@@ -23,6 +23,8 @@ import (
 	"crypto/rand"
 	"fmt"
 	"testing"
+
+	index "github.com/blevesearch/bleve_index_api"
 )
 
 func initFileCallbacks(t *testing.T) {
@@ -33,7 +35,7 @@ func initFileCallbacks(t *testing.T) {
 		t.Errorf("Failed to generate random key: %s", err.Error())
 	}
 
-	WriterHook = func(context []byte) (string, func(data []byte) []byte, error) {
+	WriterHook := func(context []byte) (string, func(data []byte) []byte, error) {
 
 		if context == nil {
 			return "", func(data []byte) []byte {
@@ -73,7 +75,7 @@ func initFileCallbacks(t *testing.T) {
 		return keyId, writerCallback, nil
 	}
 
-	ReaderHook = func(id string, context []byte) (func(data []byte) ([]byte, error), error) {
+	ReaderHook := func(id string, context []byte) (func(data []byte) ([]byte, error), error) {
 
 		if id == "" {
 			return func(data []byte) ([]byte, error) {
@@ -113,6 +115,9 @@ func initFileCallbacks(t *testing.T) {
 
 		return readerCallback, nil
 	}
+
+	index.WriterHook = WriterHook
+	index.ReaderHook = ReaderHook
 }
 
 // Initializes encryption related file callbacks and

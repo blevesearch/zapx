@@ -32,7 +32,7 @@ type faissFloat32Index struct {
 
 func newFaissFloat32Index(idx *faiss.IndexImpl) (index faissIndex, err error) {
 	if idx == nil {
-		return nil, ErrNilIndex
+		return nil, errNilIndex
 	}
 	return &faissFloat32Index{
 		idx: idx,

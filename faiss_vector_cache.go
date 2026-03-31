@@ -139,7 +139,6 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		return nil, nil, nil, fmt.Errorf("could not read faiss index size")
 	}
 	pos += n
-	var rv faissIndex
 	// read the serialized vector index
 	fIndex, err := faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faissIOFlagsReadOnly)
 	if err != nil {
@@ -156,19 +155,19 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 			return nil, nil, nil, fmt.Errorf("faiss binary index load error: %v", err)
 		}
 		pos += int(binSize)
-		rv, err = newFaissBinaryIndex(bIndex, fIndex)
+		index, err = newFaissBinaryIndex(bIndex, fIndex)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("faiss binary index creation error: %v", err)
 		}
 	} else {
-		rv, err = newFaissFloat32Index(fIndex)
+		index, err = newFaissFloat32Index(fIndex)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("faiss float32 index creation error: %v", err)
 		}
 	}
 	// update the cache
-	vc.insertLOCKED(fieldID, rv, mapping)
-	return rv, mapping, getExcludedVectors(mapping, except), nil
+	vc.insertLOCKED(fieldID, index, mapping)
+	return index, mapping, getExcludedVectors(mapping, except), nil
 }
 
 func (vc *vectorIndexCache) insertLOCKED(fieldID uint16,

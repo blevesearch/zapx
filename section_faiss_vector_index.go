@@ -362,10 +362,9 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex faissIndexIVF, dims, 
 		nvecs += vecCount
 	}
 	nprobe, nlist := centroidIndex.ivfParams()
-	cfg := newFaissIndexConfig(indexType, optimizedFor, dims, metric, nvecs)
 	// set a custom nlist value in the config for the merged index,
 	//  which is same as the centroid index's nlist.
-	cfg.setNList(nlist)
+	cfg := newFaissIndexConfig(indexType, optimizedFor, dims, metric, nvecs, nlist)
 	// create the merged index based on the centroid index's config.
 	faissIndex, err := faissIndexFactory(cfg)
 	if err != nil {
@@ -571,7 +570,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 	freeReconstructedIndexes(vecIndexes)
 	// create the faiss index to hold the merged data, and add the
 	// reconstructed vectors into it.
-	config := newFaissIndexConfig(faissFP32Index, indexOptimizedFor, dims, metric, nvecs)
+	config := newFaissIndexConfig(faissFP32Index, indexOptimizedFor, dims, metric, nvecs, determineCentroids(nvecs))
 	vecSet, err := newVectorSet(dims, indexData)
 	if err != nil {
 		return err
@@ -603,7 +602,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 		// create the binary index to hold the merged data, and
 		// add the reconstructed vectors into it.
 		vecSet.binarize()
-		config := newFaissIndexConfig(faissBIVFIndex, indexOptimizedFor, dims, metric, nvecs)
+		config := newFaissIndexConfig(faissBIVFIndex, indexOptimizedFor, dims, metric, nvecs, determineCentroids(nvecs))
 		bIndexBytes, err := makeFaissIndex(vecSet, config)
 		if err != nil {
 			return err
@@ -779,7 +778,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 		}
 		// create the faiss float32 index for the vectors associated with this field and get the
 		// serialized index bytes to be written out to the segment.
-		config := newFaissIndexConfig(faissFP32Index, content.optimizedFor, content.dimension, metric, nvecs)
+		config := newFaissIndexConfig(faissFP32Index, content.optimizedFor, content.dimension, metric, nvecs, determineCentroids(nvecs))
 		fIndexBytes, err := makeFaissIndex(vecSet, config)
 		if err != nil {
 			return err
@@ -850,7 +849,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
 			// binarize the vector data in the vector set.
 			vecSet.binarize()
 			// bivf config
-			config := newFaissIndexConfig(faissBIVFIndex, content.optimizedFor, content.dimension, metric, nvecs)
+			config := newFaissIndexConfig(faissBIVFIndex, content.optimizedFor, content.dimension, metric, nvecs, determineCentroids(nvecs))
 			bIndexBytes, err := makeFaissIndex(vecSet, config)
 			if err != nil {
 				return err
@@ -1006,48 +1005,29 @@ type faissIndexConfig struct {
 	nlist            int
 }
 
-func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimension, metricType, numVecs int) *faissIndexConfig {
+func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimension, metricType, numVecs, nlist int) *faissIndexConfig {
 	return &faissIndexConfig{
 		indexType:        idxType,
 		dimension:        dimension,
 		metricType:       metricType,
 		numVecs:          numVecs,
+		nlist:            nlist,
 		optimizationType: optimizationType,
 	}
-}
-
-func (f *faissIndexConfig) setNList(nlist int) {
-	f.nlist = nlist
 }
 
 // Factory function to create a faissIndex for the given index config.
 func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 	switch cfg.indexType {
 	case faissFP32Index:
-		// check if we have an nlist set, if so we use that directly,
-		// otherwise we determine it based on the number of vectors.
-		var nlist int
-		if cfg.nlist > 0 {
-			nlist = cfg.nlist
-		} else {
-			nlist = determineCentroids(cfg.numVecs)
-		}
-		description := determineFloat32IndexToUse(cfg.numVecs, nlist, cfg.optimizationType)
+		description := determineFloat32IndexToUse(cfg.numVecs, cfg.nlist, cfg.optimizationType)
 		idx, err := faiss.IndexFactory(cfg.dimension, description, cfg.metricType)
 		if err != nil {
 			return nil, err
 		}
 		return newFaissFloat32Index(idx)
 	case faissBIVFIndex:
-		// check if we have an nlist set, if so we use that directly,
-		// otherwise we determine it based on the number of vectors.
-		var nlist int
-		if cfg.nlist > 0 {
-			nlist = cfg.nlist
-		} else {
-			nlist = determineCentroids(cfg.numVecs)
-		}
-		description := determineBinaryIndexToUse(cfg.numVecs, nlist)
+		description := determineBinaryIndexToUse(cfg.numVecs, cfg.nlist)
 		idx, err := faiss.BinaryIndexFactory(cfg.dimension, description)
 		if err != nil {
 			return nil, err
@@ -1056,6 +1036,6 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 		// indexing path, where each index is handled independently
 		return newFaissBinaryIndex(idx, nil)
 	default:
-		return nil, fmt.Errorf("unsupported index type: %v", cfg.indexType)
+		return nil, ErrInvalidIndex
 	}
 }

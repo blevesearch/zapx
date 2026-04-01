@@ -69,6 +69,7 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 
 	var err error
 	s.results, s.edgeList = flattenNestedDocuments(results, s.edgeList)
+	s.config = config
 	s.chunkMode = chunkMode
 
 	s.w = NewFileWriterEmpty(NewCountHashWriter(&br))
@@ -107,6 +108,8 @@ type interim struct {
 	chunkMode uint32
 
 	w *FileWriter
+
+	config map[string]interface{}
 
 	// FieldsMap adds 1 to field id to avoid zero value issues
 	//  name -> field id + 1
@@ -221,6 +224,7 @@ func (s *interim) convert() (uint64, uint64, error) {
 		"chunkMode":     s.chunkMode,
 		"fieldsMap":     s.FieldsMap,
 		"fieldsInv":     s.FieldsInv,
+		"config":        s.config,
 		"fieldsOptions": s.FieldsOptions,
 	}
 	if s.opaque == nil {

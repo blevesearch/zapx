@@ -62,11 +62,11 @@ func (*ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path st
 			panic(fmt.Sprintf("oops, unexpected segment type: %T", segment))
 		}
 	}
-	return mergeSegmentBases(segmentBases, drops, path, DefaultChunkMode, closeCh, s)
+	return mergeSegmentBases(segmentBases, drops, path, DefaultChunkMode, closeCh, s, config)
 }
 
 func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, path string,
-	chunkMode uint32, closeCh chan struct{}, s seg.StatsReporter) (
+	chunkMode uint32, closeCh chan struct{}, s seg.StatsReporter, config map[string]interface{}) (
 	[][]uint64, uint64, error) {
 	flag := os.O_RDWR | os.O_CREATE
 
@@ -92,7 +92,7 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 	}
 
 	newDocNums, numDocs, storedIndexOffset, _, _, sectionsIndexOffset, err :=
-		mergeToWriter(segmentBases, drops, chunkMode, w, closeCh)
+		mergeToWriter(segmentBases, drops, chunkMode, w, closeCh, config)
 	if err != nil {
 		cleanup()
 		return nil, 0, err
@@ -171,7 +171,7 @@ func finalizeFieldOptions(fieldOptions map[string]index.FieldIndexingOptions,
 }
 
 func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
-	chunkMode uint32, w *FileWriter, closeCh chan struct{}) (
+	chunkMode uint32, w *FileWriter, closeCh chan struct{}, config map[string]interface{}) (
 	newDocNums [][]uint64, numDocs, storedIndexOffset uint64,
 	fieldsInv []string, fieldsMap map[string]uint16, sectionsIndexOffset uint64,
 	err error) {
@@ -205,6 +205,7 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		"fieldsMap":     fieldsMap,
 		"numDocs":       numDocs,
 		"fieldsOptions": fieldsOptions,
+		"config":        config,
 	}
 
 	if numDocs > 0 {

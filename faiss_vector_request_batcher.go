@@ -54,7 +54,7 @@ func newRequestBatcher(idx faissIndexBatch) *requestBatcher {
 
 // search performs a search on the Faiss index using the provided query vector and k value.
 // NOTE: it must be ensured that every query vector passed to this method has the same dimensionality
-// as the vectors in the Faiss index, this is concidered as an invariant to be upheld by the caller,
+// as the vectors in the Faiss index, this is considered as an invariant to be upheld by the caller,
 // and is not checked within this method for performance reasons.
 func (b *requestBatcher) search(qVector *vectorSet, k int64) ([]float32, []int64, error) {
 	// create a new batch request for this search query.

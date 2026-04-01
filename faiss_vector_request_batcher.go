@@ -52,9 +52,15 @@ func newRequestBatcher(idx faissIndexBatch) *requestBatcher {
 	return b
 }
 
+// search performs a search on the Faiss index using the provided query vector and k value.
+// NOTE: it must be ensured that every query vector passed to this method has the same dimensionality
+// as the vectors in the Faiss index, this is concidered as an invariant to be upheld by the caller,
+// and is not checked within this method for performance reasons.
 func (b *requestBatcher) search(qVector *vectorSet, k int64) ([]float32, []int64, error) {
 	// create a new batch request for this search query.
-	req, respCh := newBatchRequest(qVector, k)
+	// since we are merging the query vectors of two requests, we need to clone
+	// the original query vector to avoid mutating the original request's query vector when we merge.
+	req, respCh := newBatchRequest(qVector.clone(), k)
 	// check if the batcher has been stopped before processing the search request.
 	select {
 	case b.cq.enqueueCh <- req:
@@ -101,9 +107,6 @@ func (r *batchRequest) mergeWith(other *batchRequest) {
 	if !r.canMerge(other) {
 		return
 	}
-	// since we are merging the query vectors of two requests, we need to clone
-	// the original query vector to avoid mutating the original request's query vector when we merge.
-	r.qVector = r.qVector.clone()
 	// merge the query vectors of the two requests by concatenating them together.
 	r.qVector.mergeWith(other.qVector)
 	// append the response channels from the other request to this request, so that when the search results are ready,

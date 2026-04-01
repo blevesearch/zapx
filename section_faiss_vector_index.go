@@ -835,7 +835,7 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 			return nil, err
 		}
 		if cfg.useGPU && isGPUApplicable(idx) {
-			return newFaissGPUFloat32Index(idx, false)
+			return newFaissGPUFloat32Index(idx)
 		}
 		return newFaissFloat32Index(idx)
 	case faissBIVFIndex:

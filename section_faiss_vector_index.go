@@ -64,12 +64,6 @@ const (
 	faissBIVFIndex
 )
 
-// Callback hooks for custom faiss index construction and handling.
-type (
-	// Returns the centroid index to be used in the fast merge path.
-	TrainedIndexCallbackFn func(indexName string) (interface{}, error)
-)
-
 // Errors for invariant violations related to fast merge and centroid index retrieval.
 var (
 	ErrorCentroidIndexNotIVF  error = errors.New("centroid index is not an IVF index, which is required for fast merge")
@@ -234,11 +228,11 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 }
 
 func centroidIndexFromConfig(config map[string]interface{}, fieldName string) (faissIndexIVF, error) {
-	var trainedIndexFor TrainedIndexCallbackFn
+	var trainedIndexFor index.TrainedIndexCallbackFn
 	var training bool
 	var rv *faiss.IndexImpl
 	if cb, ok := config[index.TrainedIndexCallback]; ok {
-		trainedIndexFor = cb.(TrainedIndexCallbackFn)
+		trainedIndexFor = cb.(index.TrainedIndexCallbackFn)
 	}
 	if tf, ok := config[index.TrainingKey]; ok {
 		training = tf.(bool)

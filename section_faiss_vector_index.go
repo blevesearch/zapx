@@ -435,6 +435,8 @@ func makeFaissIndex(vecs *vectorSet, config *faissIndexConfig) ([]byte, error) {
 		// the data space of indexData such that during the search time, we probe
 		// only a subset of vectors -> non-exhaustive search. could be a time
 		// consuming step when the indexData is large.
+		// also add the vectors to the index using sequential vector IDs starting
+		// from 0 to N-1
 		err = ivfIndex.trainAndAdd(vecs, vecs)
 		if err != nil {
 			return nil, err
@@ -549,17 +551,6 @@ func determineFloat32IndexToUse(nvecs, nlist int, optimizationType string) strin
 			return fmt.Sprintf("IVF%d,Flat", nlist)
 		}
 	}
-}
-
-// check if GPU is applicable for the index type and config
-// the only applicable types are: IVF and IVF-SQ8
-// we skip binary, flat and SQ8 for now
-func isGPUApplicable(idx *faiss.IndexImpl) bool {
-	if idx.IsIVFIndex() {
-		return true
-	}
-
-	return false
 }
 
 func (vo *vectorIndexOpaque) writeVectorIndexes(w *CountHashWriter) error {
@@ -834,7 +825,12 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 		if err != nil {
 			return nil, err
 		}
-		if cfg.useGPU && isGPUApplicable(idx) {
+		
+		// we restrict GPUs to only IVF and IVFSQ indexes.
+		// flat SQ indexes don't support GPU yet and flat
+		// indexes are small and don't have a train step
+		// so gpus will be overkill
+		if cfg.useGPU && idx.IsIVFIndex() {
 			return newFaissGPUFloat32Index(idx)
 		}
 		return newFaissFloat32Index(idx)

@@ -166,8 +166,8 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		}
 	}
 	// update the cache
-	vc.insertLOCKED(fieldID, rv, mapping)
-	return rv, mapping, getExcludedVectors(mapping, except), nil
+	vc.insertLOCKED(fieldID, index, mapping)
+	return index, mapping, getExcludedVectors(mapping, except), nil
 }
 
 func (vc *vectorIndexCache) insertLOCKED(fieldID uint16,

@@ -105,20 +105,9 @@ func (f *faissGPUFloat32Index) add(vecs *vectorSet) error {
 func (f *faissGPUFloat32Index) close() {
 	f.mu.Lock()
 	f.closed = true
-	batcher := f.batcher
-	f.batcher = nil
-	gpuIdx := f.gpuIdx
-	f.gpuIdx = nil
 	f.mu.Unlock()
 
-	// stop the batcher outside the lock — its final flush calls batchSearch
-	// which needs the RLock.
-	if batcher != nil {
-		batcher.stop()
-	}
-	if gpuIdx != nil {
-		gpuIdx.Close()
-	}
+	f.teardownGPU()
 	f.cpuIdx.Close()
 }
 

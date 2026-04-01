@@ -166,6 +166,8 @@ type coalesceQueue struct {
 	stopOnce sync.Once
 	// channel for signaling the batcher to stop processing requests and shut down.
 	stopCh chan struct{}
+	// closed when the monitor goroutine has fully exited, allowing stop() to block until done.
+	doneCh chan struct{}
 	// queue of pending batch requests that are waiting to be processed.
 	queue []*batchRequest
 	// timer for automatically triggering the execution of a batch of requests when the earliest deadline is reached.
@@ -179,6 +181,7 @@ func newCoalesceQueue(idx faissIndexBatch) *coalesceQueue {
 		idx:       idx,
 		enqueueCh: make(chan *batchRequest),
 		stopCh:    make(chan struct{}),
+		doneCh:    make(chan struct{}),
 	}
 	go rv.monitor()
 	return rv
@@ -188,9 +191,13 @@ func (q *coalesceQueue) stop() {
 	q.stopOnce.Do(func() {
 		close(q.stopCh)
 	})
+
+	// wait for the monitor to stop running
+	<-q.doneCh
 }
 
 func (q *coalesceQueue) monitor() {
+	defer close(q.doneCh)
 	var dequeueTimer <-chan time.Time
 	for {
 		select {

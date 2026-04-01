@@ -34,7 +34,7 @@ type faissBinaryIndex struct {
 func newFaissBinaryIndex(binary *faiss.BinaryIndexImpl, backing *faiss.IndexImpl) (index faissIndex, err error) {
 	// the binary index cannot be nil, but the backing index can be nil, depending on the use case.
 	if binary == nil {
-		return nil, ErrNilIndex
+		return nil, errNilIndex
 	}
 	return &faissBinaryIndex{
 		backing: backing,
@@ -70,12 +70,8 @@ func (b *faissBinaryIndex) ntotal() int64 {
 }
 
 func (b *faissBinaryIndex) reconstructBatch(vecIDs []int64, prealloc []float32) ([]float32, error) {
-	// if we have a backing index, we can use it to reconstruct the original vectors for the given vector IDs.
-	if b.backing != nil {
-		return b.backing.ReconstructBatch(vecIDs, prealloc)
-	}
-	// if we don't have a backing index, we cannot reconstruct the original vectors, so we return an error.
-	return nil, ErrInvalidIndex
+	// binary indexes do not support reconstruction
+	return nil, errNotSupported
 }
 
 func (b *faissBinaryIndex) searchWithoutIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
@@ -83,7 +79,7 @@ func (b *faissBinaryIndex) searchWithoutIDs(qVector *vectorSet, k int64, selecto
 	// FAISS index to get the top K results
 	// first binarize the query vector if not already done
 	qVector.binarize()
-	binDis, binIDs, err := b.binary.SearchWithoutIDs(qVector.binaryData, binaryOversampleValue*k,
+	_, binIDs, err := b.binary.SearchWithoutIDs(qVector.binaryData, binaryOversampleValue*k,
 		selector, params)
 	if err != nil {
 		return nil, nil, err
@@ -101,12 +97,9 @@ func (b *faissBinaryIndex) searchWithoutIDs(qVector *vectorSet, k int64, selecto
 		// based on distances/scores
 		scores, labels = topNIDsByDistance(distances, binIDs, int(k))
 	} else {
-		// if we don't have a backing index for re-ranking, we retun the top K results based on the binary distances.
-		scores = make([]float32, k)
-		for i, d := range binDis[:k] {
-			scores[i] = float32(d)
-		}
-		labels = binIDs[:k]
+		// if we don't have a backing index for re-ranking, we return error since we cannot return meaningful
+		// scores without a backing index to compute distances/scores for the retrieved binary IDs.
+		return nil, nil, errNotSupported
 	}
 	return scores, labels, nil
 }
@@ -116,7 +109,7 @@ func (b *faissBinaryIndex) searchWithIDs(qVector *vectorSet, k int64, selector f
 	// FAISS index to get the top K results
 	// first binarize the query vector if not already done
 	qVector.binarize()
-	binDis, binIDs, err := b.binary.SearchWithIDs(qVector.binaryData, binaryOversampleValue*k,
+	_, binIDs, err := b.binary.SearchWithIDs(qVector.binaryData, binaryOversampleValue*k,
 		selector, params)
 	if err != nil {
 		return nil, nil, err
@@ -134,12 +127,9 @@ func (b *faissBinaryIndex) searchWithIDs(qVector *vectorSet, k int64, selector f
 		// based on distances/scores
 		scores, labels = topNIDsByDistance(distances, binIDs, int(k))
 	} else {
-		// if we don't have a backing index for re-ranking, we retun the top K results based on the binary distances.
-		scores = make([]float32, k)
-		for i, d := range binDis[:k] {
-			scores[i] = float32(d)
-		}
-		labels = binIDs[:k]
+		// if we don't have a backing index for re-ranking, we return error since we cannot return meaningful
+		// scores without a backing index to compute distances/scores for the retrieved binary IDs.
+		return nil, nil, errNotSupported
 	}
 	return scores, labels, nil
 }
@@ -226,7 +216,7 @@ func (b *faissBinaryIndex) searchClusters(eligibleCentroidIDs []int64, centroidD
 	}
 	// search the binary index without oversampling, since we are already searching a
 	// limited number of centroids specified by centroidsToProbe
-	binDis, binIDs, err := b.binary.SearchClustersFromIVFIndex(eligibleCentroidIDs, binaryCentroidDis,
+	_, binIDs, err := b.binary.SearchClustersFromIVFIndex(eligibleCentroidIDs, binaryCentroidDis,
 		centroidsToProbe, qVector.binaryData, k, selector, params)
 	if err != nil {
 		return nil, nil, err
@@ -245,13 +235,9 @@ func (b *faissBinaryIndex) searchClusters(eligibleCentroidIDs []int64, centroidD
 		// based on distances/scores
 		scores, labels = topNIDsByDistance(distances, binIDs, int(k))
 	} else {
-		// if we don't have a backing index for re-ranking, we
-		// return the top K results based on the binary distances.
-		scores = make([]float32, k)
-		for i, d := range binDis[:k] {
-			scores[i] = float32(d)
-		}
-		labels = binIDs[:k]
+		// if we don't have a backing index for re-ranking, we return error since we cannot return meaningful
+		// scores without a backing index to compute distances/scores for the retrieved binary IDs.
+		return nil, nil, errNotSupported
 	}
 	return scores, labels, nil
 }
@@ -271,10 +257,10 @@ func (b *faissBinaryIndex) train(trainingData *vectorSet) error {
 
 func (b *faissBinaryIndex) setQuantizers(centroidIndex faissIndexIVF) error {
 	// not supported for binary indexes, return error
-	return ErrInvalidIndex
+	return errNotSupported
 }
 
 func (b *faissBinaryIndex) mergeFrom(other faissIndex, offset int64) error {
 	// merging is not supported for binary indexes, return error
-	return ErrInvalidIndex
+	return errNotSupported
 }

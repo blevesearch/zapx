@@ -1,4 +1,4 @@
-//  Copyright (c) 2024 Couchbase, Inc.
+//  Copyright (c) 2026 Couchbase, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,8 +25,8 @@ import (
 )
 
 var (
-	ErrNilIndex     error = errors.New("faiss index cannot be nil")
-	ErrInvalidIndex error = errors.New("input faiss index is invalid or incompatible for the intended operation")
+	errNilIndex     error = errors.New("faiss index is nil")
+	errNotSupported error = errors.New("operation not supported")
 )
 
 // Abstract interface for Faiss vector indices, which are returned by the go-faiss library.

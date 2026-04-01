@@ -34,11 +34,11 @@ import (
 type faissGPUFloat32Index struct {
 	cpuIdx *faiss.IndexImpl
 
-	// doneCh is closed when initGPU completes. All GPU-operating functions
-	// except searchWithoutIDs must receive from doneCh before proceeding.
+	// doneCh is closed when initGPU completes.
 	doneCh chan struct{}
 
-	// mu protects gpuIdx and batcher against concurrent searchWithoutIDs.
+	// mu is only used to coordinate the async initGPU with searchWithoutIDs,
+	// which may read gpuIdx/batcher before initGPU completes.
 	mu      sync.RWMutex
 	gpuIdx  *faiss.GPUIndexImpl
 	batcher *requestBatcher
@@ -59,6 +59,12 @@ func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl) (faissIndex, error) {
 	return f, nil
 }
 
+// waitGPU blocks until initGPU has completed. Safe to call multiple times
+// since reading from a closed channel returns immediately.
+func (f *faissGPUFloat32Index) waitGPU() {
+	<-f.doneCh
+}
+
 // initGPU clones the CPU index to the GPU and sets up the request batcher.
 // It always closes doneCh when it returns, signalling completion to waiters.
 func (f *faissGPUFloat32Index) initGPU() {
@@ -76,7 +82,7 @@ func (f *faissGPUFloat32Index) initGPU() {
 // attempt to add the vectors to the GPU index. If it fails,
 // fallback to the CPU index
 func (f *faissGPUFloat32Index) add(vecs *vectorSet) error {
-	<-f.doneCh
+	f.waitGPU()
 	if f.gpuIdx == nil {
 		return f.cpuIdx.Add(vecs.floatData)
 	}
@@ -97,7 +103,7 @@ func (f *faissGPUFloat32Index) add(vecs *vectorSet) error {
 }
 
 func (f *faissGPUFloat32Index) close() {
-	<-f.doneCh
+	f.waitGPU()
 	f.teardownGPU()
 	f.cpuIdx.Close()
 }
@@ -105,21 +111,15 @@ func (f *faissGPUFloat32Index) close() {
 // teardownGPU stops the batcher first (while gpuIdx is still live so that
 // the final flush can complete on the GPU), then nils and closes the GPU index.
 func (f *faissGPUFloat32Index) teardownGPU() {
-	<-f.doneCh
-	f.mu.Lock()
+	f.waitGPU()
 	batcher := f.batcher
 	f.batcher = nil
-	f.mu.Unlock()
-
 	if batcher != nil {
 		batcher.stop()
 	}
 
-	f.mu.Lock()
 	gpuIdx := f.gpuIdx
 	f.gpuIdx = nil
-	f.mu.Unlock()
-
 	if gpuIdx != nil {
 		gpuIdx.Close()
 	}
@@ -214,7 +214,7 @@ func (f *faissGPUFloat32Index) setDirectMap(directMapType int) error {
 
 func (f *faissGPUFloat32Index) setNProbe(nprobe int32) {
 	f.cpuIdx.SetNProbe(nprobe)
-	<-f.doneCh
+	f.waitGPU()
 	if f.gpuIdx != nil {
 		f.gpuIdx.SetNProbe(nprobe)
 	}
@@ -223,7 +223,7 @@ func (f *faissGPUFloat32Index) setNProbe(nprobe int32) {
 // attempt to train and add the vectors to the GPU index. If it fails,
 // fallback to the CPU index
 func (f *faissGPUFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
-	<-f.doneCh
+	f.waitGPU()
 	if f.gpuIdx == nil {
 		return f.trainAndAddCPU(trainingData, vecsToAdd)
 	}
@@ -260,12 +260,8 @@ func (f *faissGPUFloat32Index) trainAndAddCPU(trainingData *vectorSet, vecsToAdd
 }
 
 // syncGPUToCPU clones the current GPU index state back to the CPU index,
-// replacing the old CPU index. The write lock is held for the entire duration
-// to block concurrent searchWithoutIDs calls and to protect the cpuIdx swap.
+// replacing the old CPU index.
 func (f *faissGPUFloat32Index) syncGPUToCPU() error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
 	if f.gpuIdx == nil {
 		return nil
 	}

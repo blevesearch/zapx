@@ -200,6 +200,7 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		"fieldsMap":     fieldsMap,
 		"numDocs":       numDocs,
 		"fieldsOptions": fieldsOptions,
+		"config":        config,
 	}
 
 	if numDocs > 0 {
@@ -213,7 +214,7 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		for i, x := range segmentSections {
 			mergeOpaque[int(i)] = x.InitOpaque(args)
 
-			err = x.Merge(mergeOpaque, segments, drops, fieldsInv, newDocNums, cr, closeCh, config)
+			err = x.Merge(mergeOpaque, segments, drops, fieldsInv, newDocNums, cr, closeCh)
 			if err != nil {
 				return nil, 0, 0, nil, nil, 0, err
 			}

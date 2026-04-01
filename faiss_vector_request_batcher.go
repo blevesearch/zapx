@@ -58,9 +58,7 @@ func newRequestBatcher(idx faissIndexBatch) *requestBatcher {
 // and is not checked within this method for performance reasons.
 func (b *requestBatcher) search(qVector *vectorSet, k int64) ([]float32, []int64, error) {
 	// create a new batch request for this search query.
-	// since we are merging the query vectors of two requests, we need to clone
-	// the original query vector to avoid mutating the original request's query vector when we merge.
-	req, respCh := newBatchRequest(qVector.clone(), k)
+	req, respCh := newBatchRequest(qVector, k)
 	// check if the batcher has been stopped before processing the search request.
 	select {
 	case b.cq.enqueueCh <- req:
@@ -257,7 +255,11 @@ func (q *coalesceQueue) enqueue(req *batchRequest) {
 			return
 		}
 	}
-	// if we didn't find any compatible request to merge with, add this new request to the end of the queue.
+	// if we didn't find any compatible request to merge with, or if the queue is empty,
+	// we need to add this new request as a new batch request in the queue.
+	// Since we can potentially merge future requests with this new batch request,
+	// we need to clone the query vector to avoid mutating the original request's query vector.
+	req.qVector = req.qVector.clone()
 	q.queue = append(q.queue, req)
 }
 

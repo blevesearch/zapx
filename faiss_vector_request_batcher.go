@@ -113,7 +113,7 @@ func (r *batchRequest) mergeWith(other *batchRequest) {
 }
 
 func (r *batchRequest) sendResponse(distances []float32, ids []int64, err error) {
-	// we may have multiple batches merged together, so we need segregate the results for each original request
+	// we may have multiple batches merged together, so we need to segregate the results for each original request
 	// and send them back to the appropriate response channels.
 	if err != nil {
 		// if there was an error during the search, send the error back to all requesters in this batch.

@@ -37,7 +37,7 @@ type faissGPUFloat32Index struct {
 	// doneCh is closed when initGPU completes.
 	doneCh chan struct{}
 
-	// mu is only used to coordinate the async initGPU with searchWithoutIDs,
+	// mu is only used to coordinate the async initGPU with search,
 	// which may read gpuIdx/batcher before initGPU completes.
 	mu      sync.RWMutex
 	gpuIdx  *faiss.GPUIndexImpl
@@ -59,8 +59,7 @@ func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl) (faissIndex, error) {
 	return f, nil
 }
 
-// waitGPU blocks until initGPU has completed. Safe to call multiple times
-// since reading from a closed channel returns immediately.
+// waitGPU blocks until initGPU has completed
 func (f *faissGPUFloat32Index) waitGPU() {
 	<-f.doneCh
 }

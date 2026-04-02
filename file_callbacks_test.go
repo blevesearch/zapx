@@ -32,7 +32,7 @@ func initFileCallbacks(t *testing.T) {
 	keyId := "test-key-id"
 
 	if _, err := rand.Read(key); err != nil {
-		t.Errorf("Failed to generate random key: %s", err.Error())
+		t.Fatalf("Failed to generate random key: %s", err.Error())
 	}
 
 	WriterHook := func(context []byte) (string, func(data []byte) []byte, error) {
@@ -116,8 +116,16 @@ func initFileCallbacks(t *testing.T) {
 		return readerCallback, nil
 	}
 
+	prevWriterHook := index.WriterHook
+	prevReaderHook := index.ReaderHook
+
 	index.WriterHook = WriterHook
 	index.ReaderHook = ReaderHook
+
+	t.Cleanup(func() {
+		index.WriterHook = prevWriterHook
+		index.ReaderHook = prevReaderHook
+	})
 }
 
 // Initializes encryption related file callbacks and

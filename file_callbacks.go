@@ -35,8 +35,8 @@ import (
 // when creating a reader.  This allows the reader to determine which
 // callback to use for a given file.
 
-// An example implementation using AES-GCM encryption is provided in file_io_test.go
-// within initFileCallbacks().
+// An example implementation using AES-GCM encryption is provided in
+// file_callbacks_test.go within initFileCallbacks().
 
 // FileWriter wraps a CountHashWriter and applies a user provided
 // writer callback to the data being written.

@@ -525,9 +525,6 @@ func writeSynonyms(postings *roaring64.Bitmap, w *FileWriter, bufMaxVarintLen64 
 // writing the length of the map followed by the map entries, where each entry
 // consists of the synonym ID, the length of the term, and the term itself.
 func writeSynTermMap(synTermMap map[uint32]string, w *FileWriter, bufMaxVarintLen64 []byte) error {
-	if len(synTermMap) == 0 {
-		return nil
-	}
 	n := binary.PutUvarint(bufMaxVarintLen64, uint64(len(synTermMap)))
 	_, err := w.Write(bufMaxVarintLen64[:n])
 	if err != nil {

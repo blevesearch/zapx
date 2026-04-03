@@ -23,13 +23,13 @@ import (
 	"time"
 )
 
-var (
+const (
 	// adaptive batching parameters - these can be tuned based on the expected workload and latency requirements.
 
-	// MinLatencyBudget is the minimum amount of time that the batcher will wait before flushing a batch of requests.
-	MinLatencyBudget time.Duration = 10 * time.Millisecond
-	// MaxLatencyBudget is the maximum amount of time that the batcher will wait before flushing a batch of requests.
-	MaxLatencyBudget time.Duration = 250 * time.Millisecond
+	// minLatencyBudget is the minimum amount of time that the batcher will wait before flushing a batch of requests.
+	minLatencyBudget time.Duration = 10 * time.Millisecond
+	// maxLatencyBudget is the maximum amount of time that the batcher will wait before flushing a batch of requests.
+	maxLatencyBudget time.Duration = 250 * time.Millisecond
 )
 
 var (
@@ -233,10 +233,10 @@ func (q *coalesceQueue) startTimer() <-chan time.Time {
 		// Adaptive strategy:
 		// - If requests arrive quickly (small timeSinceLastFlush), use higher budget to batch more
 		// - If requests arrive slowly (large timeSinceLastFlush), use lower budget to reduce latency
-		budget = max(MaxLatencyBudget-timeSinceLastFlush, MinLatencyBudget)
+		budget = max(maxLatencyBudget-timeSinceLastFlush, minLatencyBudget)
 	} else {
 		// First request ever, use maximum budget
-		budget = MaxLatencyBudget
+		budget = maxLatencyBudget
 	}
 	if q.timer != nil {
 		q.timer.Reset(budget)

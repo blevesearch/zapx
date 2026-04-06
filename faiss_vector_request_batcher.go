@@ -19,6 +19,7 @@ package zap
 
 import (
 	"errors"
+	"sync"
 	"time"
 )
 
@@ -161,6 +162,8 @@ type coalesceQueue struct {
 	idx faissIndexBatch
 	// channel for enqueuing new batch requests into the queue.
 	enqueueCh chan *batchRequest
+	// safeguard to ensure that the stop() method is thread-safe and can only be called once, preventing multiple close operations on the stopCh.
+	stopOnce sync.Once
 	// channel for signaling the batcher to stop processing requests and shut down.
 	stopCh chan struct{}
 	// closed when the monitor goroutine has fully exited, allowing stop() to block until done.
@@ -176,7 +179,6 @@ type coalesceQueue struct {
 func newCoalesceQueue(idx faissIndexBatch) *coalesceQueue {
 	rv := &coalesceQueue{
 		idx:       idx,
-		queue:     make([]*batchRequest, 0),
 		enqueueCh: make(chan *batchRequest),
 		stopCh:    make(chan struct{}),
 		doneCh:    make(chan struct{}),
@@ -186,10 +188,11 @@ func newCoalesceQueue(idx faissIndexBatch) *coalesceQueue {
 }
 
 func (q *coalesceQueue) stop() {
-	if isClosed(q.stopCh) {
-		return
-	}
-	close(q.stopCh)
+	q.stopOnce.Do(func() {
+		close(q.stopCh)
+	})
+
+	// wait for the monitor to stop running
 	<-q.doneCh
 }
 

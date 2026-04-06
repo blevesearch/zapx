@@ -213,10 +213,6 @@ func (f *faissGPUFloat32Index) setDirectMap(directMapType int) error {
 
 func (f *faissGPUFloat32Index) setNProbe(nprobe int32) {
 	f.cpuIdx.SetNProbe(nprobe)
-	f.waitGPU()
-	if f.gpuIdx != nil {
-		f.gpuIdx.SetNProbe(nprobe)
-	}
 }
 
 // attempt to train and add the vectors to the GPU index. If it fails,

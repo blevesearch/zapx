@@ -23,13 +23,13 @@ import (
 	"time"
 )
 
-var (
+const (
 	// adaptive batching parameters - these can be tuned based on the expected workload and latency requirements.
 
-	// MinLatencyBudget is the minimum amount of time that the batcher will wait before flushing a batch of requests.
-	MinLatencyBudget time.Duration = 10 * time.Millisecond
-	// MaxLatencyBudget is the maximum amount of time that the batcher will wait before flushing a batch of requests.
-	MaxLatencyBudget time.Duration = 250 * time.Millisecond
+	// minLatencyBudget is the minimum amount of time that the batcher will wait before flushing a batch of requests.
+	minLatencyBudget time.Duration = 10 * time.Millisecond
+	// maxLatencyBudget is the maximum amount of time that the batcher will wait before flushing a batch of requests.
+	maxLatencyBudget time.Duration = 250 * time.Millisecond
 )
 
 var (
@@ -52,6 +52,10 @@ func newRequestBatcher(idx faissIndexBatch) *requestBatcher {
 	return b
 }
 
+// search performs a search on the Faiss index using the provided query vector and k value.
+// NOTE: it must be ensured that every query vector passed to this method has the same dimensionality
+// as the vectors in the Faiss index, this is considered as an invariant to be upheld by the caller,
+// and is not checked within this method for performance reasons.
 func (b *requestBatcher) search(qVector *vectorSet, k int64) ([]float32, []int64, error) {
 	// create a new batch request for this search query.
 	req, respCh := newBatchRequest(qVector, k)
@@ -101,9 +105,6 @@ func (r *batchRequest) mergeWith(other *batchRequest) {
 	if !r.canMerge(other) {
 		return
 	}
-	// since we are merging the query vectors of two requests, we need to clone
-	// the original query vector to avoid mutating the original request's query vector when we merge.
-	r.qVector = r.qVector.clone()
 	// merge the query vectors of the two requests by concatenating them together.
 	r.qVector.mergeWith(other.qVector)
 	// append the response channels from the other request to this request, so that when the search results are ready,
@@ -112,7 +113,7 @@ func (r *batchRequest) mergeWith(other *batchRequest) {
 }
 
 func (r *batchRequest) sendResponse(distances []float32, ids []int64, err error) {
-	// we may have multiple batches merged together, so we need segregate the results for each original request
+	// we may have multiple batches merged together, so we need to segregate the results for each original request
 	// and send them back to the appropriate response channels.
 	if err != nil {
 		// if there was an error during the search, send the error back to all requesters in this batch.
@@ -232,10 +233,10 @@ func (q *coalesceQueue) startTimer() <-chan time.Time {
 		// Adaptive strategy:
 		// - If requests arrive quickly (small timeSinceLastFlush), use higher budget to batch more
 		// - If requests arrive slowly (large timeSinceLastFlush), use lower budget to reduce latency
-		budget = max(MaxLatencyBudget-timeSinceLastFlush, MinLatencyBudget)
+		budget = max(maxLatencyBudget-timeSinceLastFlush, minLatencyBudget)
 	} else {
 		// First request ever, use maximum budget
-		budget = MaxLatencyBudget
+		budget = maxLatencyBudget
 	}
 	if q.timer != nil {
 		q.timer.Reset(budget)
@@ -254,7 +255,11 @@ func (q *coalesceQueue) enqueue(req *batchRequest) {
 			return
 		}
 	}
-	// if we didn't find any compatible request to merge with, add this new request to the end of the queue.
+	// if we didn't find any compatible request to merge with, or if the queue is empty,
+	// we need to add this new request as a new batch request in the queue.
+	// Since we can potentially merge future requests with this new batch request,
+	// we need to clone the query vector to avoid mutating the original request's query vector.
+	req.qVector = req.qVector.clone()
 	q.queue = append(q.queue, req)
 }
 

@@ -449,8 +449,9 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 	typs := make([][]byte, len(fieldsInv))
 	poss := make([][][]uint64, len(fieldsInv))
 
-	// copying data from segments is only possible when
-	// there are no writer callbacks across all segments
+	// copying data directly is safe only if there are no
+	// file callbacks that might modify the data in all
+	// of the involved segments and the current writer
 	copyFlag := true
 	for _, segment := range segments {
 		if segment.fileReader.id != "" {

@@ -158,7 +158,7 @@ func persistStoredFieldValues(fieldID int,
 }
 
 func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64,
-	storedIndexOffset uint64, sectionsIndexOffset uint64, fileWriterID string,
+	storedIndexOffset uint64, sectionsIndexOffset uint64,
 	config map[string]interface{}) (*SegmentBase, error) {
 	sb := &SegmentBase{
 		mem:                 mem,
@@ -179,10 +179,12 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		fieldsInv:     make([]string, 0),
 		config:        config,
 	}
-
 	sb.updateSize()
 
-	fileReader, err := NewFileReader(fileWriterID, nil)
+	// initialize the file reader with an empty callback
+	// since the data is not yet persisted, the data has also
+	// not been processed by any writer callback
+	fileReader, err := NewFileReader("", nil)
 	if err != nil {
 		return nil, err
 	}

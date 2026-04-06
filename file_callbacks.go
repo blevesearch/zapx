@@ -46,6 +46,8 @@ type FileWriter struct {
 	processor func(data []byte) []byte
 }
 
+// creates an empty FileWriter with no callback. Used
+// when we are writing data that is not going to be persisted
 func NewFileWriterEmpty(c *CountHashWriter) *FileWriter {
 	rv := &FileWriter{
 		c: c,
@@ -54,6 +56,8 @@ func NewFileWriterEmpty(c *CountHashWriter) *FileWriter {
 	return rv
 }
 
+// NewFileWriter creates a FileWriter with the provided CountHashWriter and applies
+// the writer callback identified by the context.
 func NewFileWriter(c *CountHashWriter, context []byte) (*FileWriter, error) {
 	rv := &FileWriter{
 		c: c,
@@ -96,6 +100,8 @@ type FileReader struct {
 	processor func(data []byte) ([]byte, error)
 }
 
+// NewFileReader creates a FileReader with the reader callback identified by the context.
+// The id is used to identify which callback to use when reading data.
 func NewFileReader(id string, context []byte) (*FileReader, error) {
 	rv := &FileReader{
 		id: id,

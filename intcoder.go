@@ -144,7 +144,8 @@ func (c *chunkedIntCoder) Write(w io.Writer) (int, error) {
 	// convert the chunk lengths into chunk offsets
 	chunkOffsets := modifyLengthsToEndOffsets(c.chunkLens)
 
-	// process each chunk if needed and update the chunk offsets
+	// process each chunk's data individually and recalculate the chunk
+	// boundaries if necessary.
 	if fw, ok := w.(*FileWriter); ok && fw != nil {
 		var prevOffset int
 		processedBuf := make([]byte, 0)

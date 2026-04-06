@@ -117,6 +117,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		return nil, nil, nil, fmt.Errorf("could not read docID list length")
 	}
 	pos += n
+	// read the entierity of the docID list through the file reader
 	buf, err := r.process(mem[pos : pos+int(listLen)])
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("could not process docID list: %v", err)

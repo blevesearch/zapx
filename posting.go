@@ -209,13 +209,13 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 
 	// initialize freq chunk reader
 	if rv.includeFreqNorm {
-		rv.freqNormReader = newChunkedIntDecoder(p.sb.mem, p.freqOffset, rv.freqNormReader)
+		rv.freqNormReader = newChunkedIntDecoder(p.sb.mem, p.freqOffset, rv.freqNormReader, p.sb.fileReader)
 		rv.incrementBytesRead(rv.freqNormReader.getBytesRead())
 	}
 
 	// initialize the loc chunk reader
 	if rv.includeLocs {
-		rv.locReader = newChunkedIntDecoder(p.sb.mem, p.locOffset, rv.locReader)
+		rv.locReader = newChunkedIntDecoder(p.sb.mem, p.locOffset, rv.locReader, p.sb.fileReader)
 		rv.incrementBytesRead(rv.locReader.getBytesRead())
 	}
 
@@ -290,14 +290,17 @@ func (rv *PostingsList) read(postingsOffset uint64, d *Dictionary) error {
 	postingsLen, read = binary.Uvarint(d.sb.mem[postingsOffset+n : postingsOffset+n+binary.MaxVarintLen64])
 	n += uint64(read)
 
-	roaringBytes := d.sb.mem[postingsOffset+n : postingsOffset+n+postingsLen]
+	roaringBytes, err := d.sb.fileReader.process(d.sb.mem[postingsOffset+n : postingsOffset+n+postingsLen])
+	if err != nil {
+		return err
+	}
 
 	rv.incrementBytesRead(n + postingsLen)
 
 	if rv.postings == nil {
 		rv.postings = roaring.NewBitmap()
 	}
-	_, err := rv.postings.FromBuffer(roaringBytes)
+	_, err = rv.postings.FromBuffer(roaringBytes)
 	if err != nil {
 		return fmt.Errorf("error loading roaring bitmap: %v", err)
 	}

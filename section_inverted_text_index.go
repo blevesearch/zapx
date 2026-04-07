@@ -68,7 +68,7 @@ func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint
 	}
 }
 
-func (i *invertedTextIndexSection) Persist(opaque map[int]resetable, w *CountHashWriter) error {
+func (i *invertedTextIndexSection) Persist(opaque map[int]resetable, w *FileWriter) error {
 	io := i.getInvertedIndexOpaque(opaque)
 	return io.writeDicts(w)
 }
@@ -80,7 +80,7 @@ func (i *invertedTextIndexSection) AddrForField(opaque map[int]resetable, fieldI
 
 func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
 	fieldsInv []string, fieldsMap map[string]uint16, fieldsOptions map[string]index.FieldIndexingOptions,
-	fieldsSame bool, newDocNumsIn [][]uint64, newSegDocCount uint64, chunkMode uint32, w *CountHashWriter,
+	fieldsSame bool, newDocNumsIn [][]uint64, newSegDocCount uint64, chunkMode uint32, w *FileWriter,
 	closeCh chan struct{}) (map[int]int, error) {
 	var bufMaxVarintLen64 []byte = make([]byte, binary.MaxVarintLen64)
 	var bufLoc []uint64
@@ -92,6 +92,20 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 	dictOffsets := make([]uint64, len(fieldsInv))
 	fieldDvLocsStart := make([]uint64, len(fieldsInv))
 	fieldDvLocsEnd := make([]uint64, len(fieldsInv))
+
+	// copying data directly is safe only if there are no
+	// file callbacks that might modify the data in all
+	// of the involved segments and the current writer
+	copyFlag := true
+	for _, segment := range segments {
+		if segment.fileReader.id != "" {
+			copyFlag = false
+			break
+		}
+	}
+	if w.id != "" {
+		copyFlag = false
+	}
 
 	// these int coders are initialized with chunk size 1024
 	// however this will be reset to the correct chunk size
@@ -247,8 +261,9 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 
 			postItr = postings.iterator(true, true, true, postItr)
 
-			// can only safely copy data if all segments have same fields
-			if fieldsSame {
+			// can only safely copy data if all segments have same fields and all have an empty
+			// writer id (i.e. no callbacks)
+			if fieldsSame && copyFlag {
 				// can optimize by copying freq/norm/loc bytes directly
 				lastDocNum, lastFreq, lastNorm, err = mergeTermFreqNormLocsByCopying(
 					term, postItr, newDocNums[itrI], newRoaring,
@@ -287,7 +302,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		if err != nil {
 			return nil, err
 		}
-		vellumData := vellumBuf.Bytes()
+		vellumData := w.process(vellumBuf.Bytes())
 
 		// write out the length of the vellum data
 		n := binary.PutUvarint(bufMaxVarintLen64, uint64(len(vellumData)))
@@ -403,7 +418,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 
 func (i *invertedTextIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
 	drops []*roaring.Bitmap, fieldsInv []string, newDocNumsIn [][]uint64,
-	w *CountHashWriter, closeCh chan struct{}) error {
+	w *FileWriter, closeCh chan struct{}) error {
 	io := i.getInvertedIndexOpaque(opaque)
 	fieldAddrs, err := mergeAndPersistInvertedSection(segments, drops, fieldsInv,
 		io.FieldsMap, io.FieldsOptions, io.fieldsSame, newDocNumsIn, io.numDocs, io.chunkMode, w, closeCh)
@@ -438,7 +453,7 @@ func (i *invertedIndexOpaque) BytesRead() uint64 {
 
 func (i *invertedIndexOpaque) ResetBytesRead(uint64) {}
 
-func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) error {
+func (io *invertedIndexOpaque) writeDicts(w *FileWriter) error {
 	if len(io.results) == 0 {
 		return nil
 	}
@@ -585,7 +600,7 @@ func (io *invertedIndexOpaque) writeDicts(w *CountHashWriter) error {
 		// record where this dictionary starts
 		dictOffsets[fieldID] = uint64(w.Count())
 
-		vellumData := io.builderBuf.Bytes()
+		vellumData := w.process(io.builderBuf.Bytes())
 
 		// write out the length of the vellum data
 		n := binary.PutUvarint(buf, uint64(len(vellumData)))

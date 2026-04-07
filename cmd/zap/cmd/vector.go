@@ -59,7 +59,7 @@ var vectorCmd = &cobra.Command{
 		// read the number of vectors indexed
 		numVecs, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
-		// read the length of the vector to docID map (unused for now)
+		// read the length of the vector to docID map
 		_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
 		// read the vector to docID map
@@ -69,7 +69,7 @@ var vectorCmd = &cobra.Command{
 			pos += uint64(n)
 			vecToDocID[vecID] = docID
 		}
-		// read the type of the vector index (unused for now)
+		// read the type of the vector index
 		_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
 		// read the length of the serialized faiss index

@@ -33,6 +33,10 @@ func writeRoaringWithLen(r *roaring.Bitmap, w io.Writer,
 
 	var tw int
 
+	if fw, ok := w.(*FileWriter); ok && fw != nil {
+		buf = fw.process(buf)
+	}
+
 	// write out the length
 	n := binary.PutUvarint(reuseBufVarint, uint64(len(buf)))
 	nw, err := w.Write(reuseBufVarint[:n])
@@ -51,13 +55,17 @@ func writeRoaringWithLen(r *roaring.Bitmap, w io.Writer,
 	return tw, nil
 }
 
-func persistFieldsSection(fieldsInv []string, fieldsOptions map[string]index.FieldIndexingOptions, w *CountHashWriter, opaque map[int]resetable) (uint64, error) {
+func persistFieldsSection(fieldsInv []string,
+	fieldsOptions map[string]index.FieldIndexingOptions, w *FileWriter,
+	opaque map[int]resetable) (uint64, error) {
 	var rv uint64
 	fieldsOffsets := make([]uint64, 0, len(fieldsInv))
 
 	for fieldID, fieldName := range fieldsInv {
 		// record start of this field
 		fieldsOffsets = append(fieldsOffsets, uint64(w.Count()))
+		fieldOpts := fieldsOptions[fieldName]
+		fieldName := w.process([]byte(fieldName))
 
 		// write field name length
 		_, err := writeUvarints(w, uint64(len(fieldName)))
@@ -66,13 +74,12 @@ func persistFieldsSection(fieldsInv []string, fieldsOptions map[string]index.Fie
 		}
 
 		// write out the field name
-		_, err = w.Write([]byte(fieldName))
+		_, err = w.Write(fieldName)
 		if err != nil {
 			return 0, err
 		}
 
 		// write out the field options
-		fieldOpts := fieldsOptions[fieldName]
 		_, err = writeUvarints(w, uint64(fieldOpts))
 		if err != nil {
 			return 0, err
@@ -116,21 +123,18 @@ func persistFieldsSection(fieldsInv []string, fieldsOptions map[string]index.Fie
 const FooterSize = 4 + 4 + 4 + 4 + 8 + 8 + 8
 
 func persistFooter(numDocs, storedIndexOffset, sectionsIndexOffset uint64,
-	chunkMode, crcBeforeFooter uint32, writerIn io.Writer) error {
+	chunkMode, crcBeforeFooter uint32, writerIn io.Writer, fileWriterID string) error {
 	w := NewCountHashWriter(writerIn)
 	w.crc = crcBeforeFooter
 
-	// To be replaced with writer id (unused for now)
-	tempId := []byte("")
-
 	// Write the writer id
-	err := binary.Write(w, binary.BigEndian, tempId)
+	_, err := w.Write([]byte(fileWriterID))
 	if err != nil {
 		return err
 	}
 
 	// Write the length of the writer id
-	err = binary.Write(w, binary.BigEndian, uint32(len(tempId)))
+	err = binary.Write(w, binary.BigEndian, uint32(len(fileWriterID)))
 	if err != nil {
 		return err
 	}

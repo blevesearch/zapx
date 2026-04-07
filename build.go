@@ -98,7 +98,8 @@ func persistSegmentBaseToWriter(sb *SegmentBase, w io.Writer) (int, error) {
 		return 0, err
 	}
 
-	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.sectionsIndexOffset, sb.chunkMode, sb.memCRC, br)
+	err = persistFooter(sb.numDocs, sb.storedIndexOffset, sb.sectionsIndexOffset,
+		sb.chunkMode, sb.memCRC, br, sb.fileReader.id)
 	if err != nil {
 		return 0, err
 	}
@@ -157,7 +158,8 @@ func persistStoredFieldValues(fieldID int,
 }
 
 func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64,
-	storedIndexOffset uint64, sectionsIndexOffset uint64, config map[string]interface{}) (*SegmentBase, error) {
+	storedIndexOffset uint64, sectionsIndexOffset uint64,
+	config map[string]interface{}) (*SegmentBase, error) {
 	sb := &SegmentBase{
 		mem:                 mem,
 		memCRC:              memCRC,
@@ -179,9 +181,18 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 	}
 	sb.updateSize()
 
+	// initialize the file reader with an empty callback
+	// since the data is not yet persisted, the data has also
+	// not been processed by any writer callback
+	fileReader, err := NewFileReader("", nil)
+	if err != nil {
+		return nil, err
+	}
+	sb.fileReader = fileReader
+
 	// load the data/section starting offsets for each field
 	// by via the sectionsIndexOffset as starting point.
-	err := sb.loadFields()
+	err = sb.loadFields()
 	if err != nil {
 		return nil, err
 	}

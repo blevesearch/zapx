@@ -27,9 +27,9 @@ const (
 	// adaptive batching parameters - these can be tuned based on the expected workload and latency requirements.
 
 	// minLatencyBudget is the minimum amount of time that the batcher will wait before flushing a batch of requests.
-	minLatencyBudget time.Duration = 10 * time.Millisecond
+	minLatencyBudget time.Duration = 1 * time.Millisecond
 	// maxLatencyBudget is the maximum amount of time that the batcher will wait before flushing a batch of requests.
-	maxLatencyBudget time.Duration = 250 * time.Millisecond
+	maxLatencyBudget time.Duration = 10 * time.Millisecond
 )
 
 var (

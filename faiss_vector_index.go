@@ -90,10 +90,11 @@ type faissIndexIVF interface {
 	// inverted lists are probed during search, and is a key parameter that controls the
 	// trade-off between search accuracy and latency.
 	setNProbe(nprobe int32)
-	// trains the IVF index on the provided training data. This step is necessary to
-	// perform k-means clustering to partition the data space of the index, which enables
-	// efficient non-exhaustive search during query time.
-	train(trainingData *vectorSet) error
+	// trains the IVF index on the provided training data and adds the vectors to
+	// the trained index. The training step performs k-means clustering to partition
+	// the data space, which enables efficient non-exhaustive search during query time.
+	// directMap and nprobe must be set after this call (GPU sync clears them).
+	trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error
 	// sets the quantizers for the IVF index. The quantizer is a separate
 	// IVF index that is trained on the same data and used to assign vectors
 	// to clusters in the IVF index.
@@ -105,10 +106,10 @@ type faissIndexIVF interface {
 
 // Interface for SQ-specific operations on Faiss vector indices.
 type faissIndexSQ interface {
-	// trains the SQ index on the provided training data. This step is necessary to
-	// perform quantization of the vector space, which enables efficient storage and
-	// search of high-dimensional vectors.
-	train(trainingData *vectorSet) error
+	// trains the SQ index on the provided training data and adds the vectors to
+	// the trained index. The training step performs quantization of the vector space,
+	// which enables efficient storage and search of high-dimensional vectors.
+	trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error
 }
 
 // Interface for batched search operations on Faiss vector indices.

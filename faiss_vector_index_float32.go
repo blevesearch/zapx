@@ -64,7 +64,7 @@ func (f *faissFloat32Index) reconstructBatch(vecIDs []int64, prealloc []float32)
 }
 
 func (f *faissFloat32Index) searchWithSelector(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
-	if selector == nil {
+	if params == nil && selector == nil {
 		return f.idx.Search(qVector.floatData, k)
 	}
 	return f.idx.SearchWithSelector(qVector.floatData, k, selector, params)

@@ -82,7 +82,7 @@ func (b *faissBinaryIndex) searchWithSelector(qVector *vectorSet, k int64, selec
 
 	var binIDs []int64
 	var err error
-	if selector == nil {
+	if params == nil && selector == nil {
 		_, binIDs, err = b.binary.Search(qVector.binaryData, binaryOversampleValue*k)
 	} else {
 		_, binIDs, err = b.binary.SearchWithSelector(qVector.binaryData, binaryOversampleValue*k,

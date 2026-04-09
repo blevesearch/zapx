@@ -451,12 +451,14 @@ func (v *vectorIndexWrapper) searchWithIDs(vecSet *vectorSet, k int64, include *
 			if err != nil {
 				return nil, nil, err
 			}
+			if sel == nil {
+				return nil, nil, fmt.Errorf("requires valid include selector, got nil")
+			}
+
 			// NOTE: the selector being freed does NOT free the inner bitmap, as we control
 			// its lifecycle in GO, to reuse the bitmap across iterations, if needed, for
 			// multi-vector document retrieval.
-			if sel != nil {
-				defer sel.Delete()
-			}
+			defer sel.Delete()
 			return v.index.searchWithSelector(vecSet, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {

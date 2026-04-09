@@ -22,3 +22,5 @@ require (
 )
 
 replace github.com/blevesearch/bleve_index_api => github.com/blevesearch/bleve_index_api v1.3.10-0.20260403181255-6dc4a7ba4807
+
+replace github.com/blevesearch/go-faiss => github.com/blevesearch/go-faiss v1.0.31-0.20260408101658-f3af3cfbdc5e

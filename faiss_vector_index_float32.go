@@ -134,10 +134,6 @@ func (f *faissFloat32Index) setNProbe(nprobe int32) {
 	f.idx.SetNProbe(nprobe)
 }
 
-func (f *faissFloat32Index) train(trainingData *vectorSet) error {
-	return f.idx.Train(trainingData.floatData)
-}
-
 func (f *faissFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
 	err := f.idx.Train(trainingData.floatData)
 	if err != nil {

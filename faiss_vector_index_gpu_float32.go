@@ -261,22 +261,11 @@ func (f *faissGPUFloat32Index) trainAndAddCPU(trainingData *vectorSet, vecsToAdd
 }
 
 func (f *faissGPUFloat32Index) setQuantizers(centroidIndex faissIndexIVF) error {
-	centroidFaissIndex, ok := centroidIndex.(*faissFloat32Index)
-	if !ok {
-		return errNotSupported
-	}
-	return f.cpuIdx.SetQuantizers(centroidFaissIndex.idx)
+	return errNotSupported
 }
 
 func (f *faissGPUFloat32Index) mergeFrom(other faissIndex, offset int64) error {
-	switch o := other.(type) {
-	case *faissFloat32Index:
-		return f.cpuIdx.MergeFrom(o.idx, offset)
-	case *faissGPUFloat32Index:
-		return f.cpuIdx.MergeFrom(o.cpuIdx, offset)
-	default:
-		return errNotSupported
-	}
+	return errNotSupported
 }
 
 // syncGPUToCPU clones the current GPU index state back to the CPU index,

@@ -74,46 +74,24 @@ func (b *faissBinaryIndex) reconstructBatch(vecIDs []int64, prealloc []float32) 
 	return nil, errNotSupported
 }
 
-func (b *faissBinaryIndex) searchWithoutIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
+func (b *faissBinaryIndex) searchWithSelector(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
 	// search the binary index with oversampling and then do a re-ranking on the
 	// FAISS index to get the top K results
 	// first binarize the query vector if not already done
 	qVector.binarize()
-	_, binIDs, err := b.binary.SearchWithoutIDs(qVector.binaryData, binaryOversampleValue*k,
-		selector, params)
-	if err != nil {
-		return nil, nil, err
-	}
-	var scores []float32
-	var labels []int64
-	// if we have a backing index for re-ranking, compute the distances/scores for the
-	// retrieved binary IDs and then get the top K results based on those distances/scores.
-	if b.backing != nil {
-		distances, err := b.backing.DistCompute(qVector.floatData, binIDs)
-		if err != nil {
-			return nil, nil, err
-		}
-		// quick select algorithm for inplace partial sorting to get top K results
-		// based on distances/scores
-		scores, labels = topNIDsByDistance(distances, binIDs, int(k))
-	} else {
-		// if we don't have a backing index for re-ranking, we return error since we cannot return meaningful
-		// scores without a backing index to compute distances/scores for the retrieved binary IDs.
-		return nil, nil, errNotSupported
-	}
-	return scores, labels, nil
-}
 
-func (b *faissBinaryIndex) searchWithIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
-	// search the binary index with oversampling and then do a re-ranking on the
-	// FAISS index to get the top K results
-	// first binarize the query vector if not already done
-	qVector.binarize()
-	_, binIDs, err := b.binary.SearchWithIDs(qVector.binaryData, binaryOversampleValue*k,
-		selector, params)
+	var binIDs []int64
+	var err error
+	if selector == nil {
+		_, binIDs, err = b.binary.Search(qVector.binaryData, binaryOversampleValue*k)
+	} else {
+		_, binIDs, err = b.binary.SearchWithSelector(qVector.binaryData, binaryOversampleValue*k,
+			selector, params)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
+
 	var scores []float32
 	var labels []int64
 	// if we have a backing index for re-ranking, compute the distances/scores for the

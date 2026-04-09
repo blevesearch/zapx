@@ -406,7 +406,7 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector *vectorSet, k int64,
 			if sel != nil {
 				defer sel.Delete()
 			}
-			return v.index.searchWithoutIDs(qVector, k, sel, params)
+			return v.index.searchWithSelector(qVector, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
@@ -457,7 +457,7 @@ func (v *vectorIndexWrapper) searchWithIDs(vecSet *vectorSet, k int64, include *
 			if sel != nil {
 				defer sel.Delete()
 			}
-			return v.index.searchWithIDs(vecSet, k, sel, params)
+			return v.index.searchWithSelector(vecSet, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,

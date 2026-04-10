@@ -156,7 +156,7 @@ func newBatchManager() *batchManager {
 	return &batchManager{
 		batchPool: sync.Pool{
 			New: func() any {
-				return make([]*batchRequest, 0, 16) // preallocate a batch slice with capacity for 16 requests
+				return make([]*batchRequest, 0, 16)
 			},
 		},
 	}

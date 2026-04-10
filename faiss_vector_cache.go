@@ -65,7 +65,7 @@ func (vc *vectorIndexCache) Clear() {
 
 // loadOrCreate obtains the vector index from the cache or creates it if it's not present.
 // useGPU indicates whether the field mapping requires GPU acceleration for this index.
-func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uint32, except *roaring.Bitmap, useGPU bool) (
+func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uint32, except *roaring.Bitmap, useGPU bool, r *FileReader) (
 	index faissIndex, mapping *idMapping, exclude *bitmap, err error) {
 	// first try to read from the cache with a read lock
 	vc.m.RLock()
@@ -93,12 +93,12 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uin
 		return entry.load(except)
 	}
 	// still not present, create and cache it
-	return vc.createAndCacheLOCKED(fieldID, mem, numDocs, except, useGPU)
+	return vc.createAndCacheLOCKED(fieldID, mem, numDocs, except, useGPU, r)
 }
 
 // Rebuilding the cache on a miss.
 func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
-	numDocs uint32, except *roaring.Bitmap, useGPU bool) (index faissIndex,
+	numDocs uint32, except *roaring.Bitmap, useGPU bool, r *FileReader) (index faissIndex,
 	mapping *idMapping, exclude *bitmap, err error) {
 	// if the cache doesn't have the entry, construct the vector to doc id map and
 	// the vector index out of the mem bytes and update the cache under lock.
@@ -112,20 +112,28 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		return nil, nil, nil, nil
 	}
 	pos += n
-	// read the length of the vector to docID map (unused for now)
-	_, n = binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+	// read the length of the docID list
+	listLen, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	if n <= 0 {
-		return nil, nil, nil, fmt.Errorf("could not read vecDocIDMap length")
+		return nil, nil, nil, fmt.Errorf("could not read docID list length")
 	}
 	pos += n
+	// read the entierity of the docID list through the file reader
+	buf, err := r.process(mem[pos : pos+int(listLen)])
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("could not process docID list: %v", err)
+	}
+	pos += int(listLen)
+	bufPos := 0
+	bufLen := len(buf)
 	// create a mapping using the numVecs and numDocs
 	mapping = newIDMapping(uint32(numVecs), numDocs)
 	for vecID := uint32(0); vecID < uint32(numVecs); vecID++ {
-		docID, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+		docID, n := binary.Uvarint(buf[bufPos:min(bufPos+binary.MaxVarintLen64, bufLen)])
 		if n <= 0 {
 			return nil, nil, nil, fmt.Errorf("could not read docID for vecID %d", vecID)
 		}
-		pos += n
+		bufPos += n
 		mapping.add(vecID, uint32(docID))
 	}
 	// read the type of the vector index
@@ -140,8 +148,15 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		return nil, nil, nil, fmt.Errorf("could not read faiss index size")
 	}
 	pos += n
+
+	// read the index bytes through the file reader
+	buf, err = r.process(mem[pos : pos+int(indexSize)])
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
 	// read the serialized vector index
-	fIndex, err := faiss.ReadIndexFromBuffer(mem[pos:pos+int(indexSize)], faissIOFlagsReadOnly)
+	fIndex, err := faiss.ReadIndexFromBuffer(buf, faissIOFlagsReadOnly)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("faiss index load error: %v", err)
 	}
@@ -150,8 +165,13 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		// read the faiss binary index size
 		binSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
+		// read the index bytes through the file reader
+		buf, err = r.process(mem[pos : pos+int(binSize)])
+		if err != nil {
+			return nil, nil, nil, err
+		}
 		// read the serialized binary vector index
-		bIndex, err := faiss.ReadBinaryIndexFromBuffer(mem[pos:pos+int(binSize)], faissIOFlagsReadOnly)
+		bIndex, err := faiss.ReadBinaryIndexFromBuffer(buf, faissIOFlagsReadOnly)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("faiss binary index load error: %v", err)
 		}

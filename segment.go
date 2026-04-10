@@ -128,6 +128,9 @@ type SegmentBase struct {
 	fieldDvNames        []string            // field names cached in fieldDvReaders
 	size                uint64
 
+	// file reader initialised with the writer callback id used by the segment
+	fileReader *FileReader
+
 	// index update specific tracking
 	updatedFields map[string]*index.UpdateFieldInfo
 	config        map[string]interface{} // config for the segment
@@ -242,7 +245,7 @@ func (s *Segment) loadConfig() error {
 	storedIndexOffset := sectionsIndexOffset - 8
 	numDocsOffset := storedIndexOffset - 8
 
-	// read offsets for the writer id length (unused for now)
+	// read offsets for the writer id length
 	idLenOffset := numDocsOffset - 4
 
 	// read 32-bit crc
@@ -266,8 +269,17 @@ func (s *Segment) loadConfig() error {
 	// read 64-bit num docs
 	s.numDocs = binary.BigEndian.Uint64(s.mm[numDocsOffset : numDocsOffset+8])
 
-	// read the length of the id (unused for now)
+	// read the length of the id
 	idLen := binary.BigEndian.Uint32(s.mm[idLenOffset : idLenOffset+4])
+	idOffset := idLenOffset - int(idLen)
+
+	// read the file writer callback id and initialize the file reader with the same id
+	fileWriterID := string(s.mm[idOffset : idOffset+int(idLen)])
+	var err error
+	s.fileReader, err = NewFileReader(fileWriterID, []byte(s.path))
+	if err != nil {
+		return err
+	}
 
 	footerSize := FooterSize + int(idLen)
 	s.incrementBytesRead(uint64(footerSize))
@@ -373,16 +385,19 @@ func (sb *SegmentBase) loadField(fieldID uint16, pos uint64) ([]uint64, error) {
 	fieldNameLen, sz := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(sz)
 
-	fieldName := string(sb.mem[pos : pos+fieldNameLen])
+	fieldName, err := sb.fileReader.process(sb.mem[pos : pos+fieldNameLen])
+	if err != nil {
+		return nil, err
+	}
 	pos += fieldNameLen
 
 	// read field options
 	fieldOptions, sz := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(sz)
 
-	sb.fieldsInv = append(sb.fieldsInv, fieldName)
-	sb.fieldsMap[fieldName] = fieldID + 1
-	sb.fieldsOptions[fieldName] = index.FieldIndexingOptions(fieldOptions)
+	sb.fieldsInv = append(sb.fieldsInv, string(fieldName))
+	sb.fieldsMap[string(fieldName)] = fieldID + 1
+	sb.fieldsOptions[string(fieldName)] = index.FieldIndexingOptions(fieldOptions)
 
 	fieldNumSections, sz := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(sz)
@@ -432,7 +447,7 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 		}
 		dictLoc, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
-		fst, bytesRead, err := sb.invIndexCache.loadOrCreate(rv.fieldID, sb.mem[dictLoc:])
+		fst, bytesRead, err := sb.invIndexCache.loadOrCreate(rv.fieldID, sb.mem[dictLoc:], sb.fileReader)
 		if err != nil {
 			return nil, fmt.Errorf("dictionary for field %s err: %v", field, err)
 		}
@@ -475,7 +490,7 @@ func (sb *SegmentBase) thesaurus(name string) (rv *Thesaurus, err error) {
 		}
 		thesLoc, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
-		fst, synTermMap, bytesRead, err := sb.synIndexCache.loadOrCreate(rv.fieldID, sb.mem[thesLoc:])
+		fst, synTermMap, bytesRead, err := sb.synIndexCache.loadOrCreate(rv.fieldID, sb.mem[thesLoc:], sb.fileReader)
 		if err != nil {
 			return nil, fmt.Errorf("thesaurus name %s err: %v", name, err)
 		}
@@ -517,7 +532,10 @@ func (sb *SegmentBase) visitStoredFields(vdc *visitDocumentCtx, num uint64,
 	visitor segment.StoredFieldValueVisitor) error {
 	// first make sure this is a valid number in this segment
 	if num < sb.numDocs {
-		meta, compressed := sb.getDocStoredMetaAndCompressed(num)
+		meta, compressed, err := sb.getDocStoredMetaAndCompressed(num)
+		if err != nil {
+			return err
+		}
 
 		vdc.reader.Reset(meta)
 
@@ -597,7 +615,10 @@ func (sb *SegmentBase) DocID(num uint64) ([]byte, error) {
 
 	vdc := visitDocumentCtxPool.Get().(*visitDocumentCtx)
 
-	meta, compressed := sb.getDocStoredMetaAndCompressed(num)
+	meta, compressed, err := sb.getDocStoredMetaAndCompressed(num)
+	if err != nil {
+		return nil, err
+	}
 
 	vdc.reader.Reset(meta)
 
@@ -904,4 +925,8 @@ func (sb *SegmentBase) EdgeList() EdgeList {
 // Utility method to count the number of nested documents in the segment, not exported.
 func (sb *SegmentBase) countNested() uint64 {
 	return sb.nstIndexCache.countNested()
+}
+
+func (sb *SegmentBase) CallbackId() string {
+	return sb.fileReader.id
 }

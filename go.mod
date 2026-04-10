@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/RoaringBitmap/roaring/v2 v2.14.5
-	github.com/blevesearch/bleve_index_api v1.3.9
+	github.com/blevesearch/bleve_index_api v1.3.10
 	github.com/blevesearch/go-faiss v1.0.30
 	github.com/blevesearch/mmap-go v1.2.0
 	github.com/blevesearch/scorch_segment_api/v2 v2.4.4
@@ -20,7 +20,5 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 )
-
-replace github.com/blevesearch/bleve_index_api => github.com/blevesearch/bleve_index_api v1.3.10-0.20260403181255-6dc4a7ba4807
 
 replace github.com/blevesearch/go-faiss => github.com/blevesearch/go-faiss v1.0.31-0.20260408101658-f3af3cfbdc5e

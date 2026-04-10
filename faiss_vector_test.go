@@ -346,27 +346,28 @@ func getSectionContentOffsets(sb *SegmentBase, offset uint64) (
 	numVecs, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
-	// read the length of the vector to docID map (unused for now)
-	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	// read the length of the vector to docID map
+	idMapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
-
 	vecDocIDsMappingOffset = pos
-	for i := 0; i < int(numVecs); i++ {
-		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += uint64(n)
-	}
 
-	// read the type of vector index (unused for now)
+	// skip the vector to docID map
+	pos += idMapLen
+
+	// read the type of vector index
 	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
 	indexBytesLen, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
-	indexBytesOffset = pos
+	indexBytes, err := sb.fileReader.process(sb.mem[pos:int(pos+indexBytesLen)])
 	pos += indexBytesLen
+	if err != nil {
+		return 0, 0, 0, 0, 0, 0
+	}
 
-	return docValueStart, docValueEnd, indexBytesLen, indexBytesOffset, numVecs, vecDocIDsMappingOffset
+	return docValueStart, docValueEnd, uint64(len(indexBytes)), indexBytesOffset, numVecs, vecDocIDsMappingOffset
 }
 
 func serializeVecs(dataset [][]float32) []float32 {

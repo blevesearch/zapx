@@ -67,10 +67,12 @@ func (*ZapPlugin) newWithChunkMode(results []index.Document,
 		br.Grow(estimateAvgBytesPerDoc * estimateNumResults)
 	}
 
+	var err error
 	s.results, s.edgeList = flattenNestedDocuments(results, s.edgeList)
 	s.config = config
 	s.chunkMode = chunkMode
-	s.w = NewCountHashWriter(&br)
+
+	s.w = NewFileWriterEmpty(NewCountHashWriter(&br))
 
 	storedIndexOffset, sectionsIndexOffset, err := s.convert()
 	if err != nil {
@@ -105,7 +107,7 @@ type interim struct {
 
 	chunkMode uint32
 
-	w *CountHashWriter
+	w *FileWriter
 
 	config map[string]interface{}
 
@@ -404,24 +406,25 @@ func (s *interim) writeStoredFields() (
 		s.incrementBytesWritten(uint64(len(compressed)))
 		docStoredOffsets[docNum] = uint64(s.w.Count())
 
-		_, err := writeUvarints(s.w,
-			uint64(len(metaBytes)),
-			uint64(len(idFieldVal)+len(compressed)))
+		combined := make([]byte, len(idFieldVal)+len(compressed))
+		copy(combined, idFieldVal)
+		copy(combined[len(idFieldVal):], compressed)
+		bufMeta := s.w.process(metaBytes)
+		bufCompressed := s.w.process(combined)
+
+		_, err = writeUvarints(s.w,
+			uint64(len(bufMeta)),
+			uint64(len(bufCompressed)))
 		if err != nil {
 			return 0, err
 		}
 
-		_, err = s.w.Write(metaBytes)
+		_, err = s.w.Write(bufMeta)
 		if err != nil {
 			return 0, err
 		}
 
-		_, err = s.w.Write(idFieldVal)
-		if err != nil {
-			return 0, err
-		}
-
-		_, err = s.w.Write(compressed)
+		_, err = s.w.Write(bufCompressed)
 		if err != nil {
 			return 0, err
 		}

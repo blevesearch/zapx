@@ -301,7 +301,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 	// create the vector index wrapper by loading (or creating) the vector index
 	// and the vector to docID mapping
 	var err error
-	rv.index, rv.mapping, rv.exclude, err = sb.vecIndexCache.loadOrCreate(fieldID, sb.mem[pos:], uint32(sb.numDocs), except)
+	rv.index, rv.mapping, rv.exclude, err = sb.vecIndexCache.loadOrCreate(fieldID, sb.mem[pos:], uint32(sb.numDocs), except, sb.fileReader)
 	if err != nil {
 		return nil, err
 	}

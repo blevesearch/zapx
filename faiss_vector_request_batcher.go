@@ -20,16 +20,6 @@ package zap
 import (
 	"errors"
 	"sync"
-	"time"
-)
-
-const (
-	// adaptive batching parameters - these can be tuned based on the expected workload and latency requirements.
-
-	// minLatencyBudget is the minimum amount of time that the batcher will wait before flushing a batch of requests.
-	minLatencyBudget time.Duration = 1 * time.Millisecond
-	// maxLatencyBudget is the maximum amount of time that the batcher will wait before flushing a batch of requests.
-	maxLatencyBudget time.Duration = 10 * time.Millisecond
 )
 
 var (
@@ -95,16 +85,17 @@ func newBatchRequest(qVector *vectorSet, k int64) (*batchRequest, chan *batchRes
 	}, respChan
 }
 
+// canMerge checks if this batch request can be merged with another request.
+// For now, we can only merge requests that have the same k value.
 func (r *batchRequest) canMerge(other *batchRequest) bool {
 	// for now, we can only merge requests that have the same k value,
 	// since the Faiss search API requires a single k value for each search.
 	return r.k == other.k
 }
 
+// mergeWith combines another batch request into this one by concatenating their query vectors and response channels.
+// NOTE: must only be called after veryfing that canMerge() returns true for these two requests.
 func (r *batchRequest) mergeWith(other *batchRequest) {
-	if !r.canMerge(other) {
-		return
-	}
 	// merge the query vectors of the two requests by concatenating them together.
 	r.qVector.mergeWith(other.qVector)
 	// append the response channels from the other request to this request, so that when the search results are ready,
@@ -154,126 +145,148 @@ func newBatchResponse(distances []float32, ids []int64, err error) *batchRespons
 	}
 }
 
+// ---------------------------------------------------
+// batch manager
+// ---------------------------------------------------
+type batchManager struct {
+	batchPool sync.Pool
+}
+
+func newBatchManager() *batchManager {
+	return &batchManager{
+		batchPool: sync.Pool{
+			New: func() any {
+				return make([]*batchRequest, 0, 16) // preallocate a batch slice with capacity for 16 requests
+			},
+		},
+	}
+}
+
+func (m *batchManager) getBatch() []*batchRequest {
+	return m.batchPool.Get().([]*batchRequest)[:0]
+}
+
+func (m *batchManager) putBatch(batch []*batchRequest) {
+	clear(batch)
+	m.batchPool.Put(batch[:0])
+}
+
 // --------------------------------------------------
 // coalesceQueue
 // --------------------------------------------------
-
+// Implements Nagle's algorithm for coalescing search requests:
+//   - The coalesce goroutine continuously receives and coalesces incoming requests.
+//   - When the flusher is idle, the coalesce goroutine hands off the coalesced batch.
+//   - While the flusher is busy executing a batch, the coalesce goroutine keeps coalescing new requests.
+//   - Once the flusher completes, the coalesce goroutine hands off any accumulated requests right away.
 type coalesceQueue struct {
 	// the Faiss index that this coalesce queue will execute search requests against.
 	idx faissIndexBatch
 	// channel for enqueuing new batch requests into the queue.
 	enqueueCh chan *batchRequest
-	// safeguard to ensure that the stop() method is thread-safe and can only be called once, preventing multiple close operations on the stopCh.
+	// channel for handing off coalesced batches to the flusher goroutine for execution.
+	flushCh chan []*batchRequest
+	// safeguard to ensure that the stop() method is thread-safe and can only be called once,
+	// preventing multiple close operations on the stopCh.
 	stopOnce sync.Once
 	// channel for signaling the batcher to stop processing requests and shut down.
 	stopCh chan struct{}
-	// closed when the monitor goroutine has fully exited, allowing stop() to block until done.
-	doneCh chan struct{}
-	// queue of pending batch requests that are waiting to be processed.
-	queue []*batchRequest
-	// timer for automatically triggering the execution of a batch of requests when the earliest deadline is reached.
-	timer *time.Timer
-	// timestamp of the last time the queue was flushed.
-	lastFlush time.Time
+	// closed when filler goroutine has exited after receiving a stop signal.
+	fillerDoneCh chan struct{}
+	// closed when flusher goroutine has exited after receiving a stop signal.
+	flusherDoneCh chan struct{}
+	// a sync.Pool for reusing batch slices to reduce allocations and GC overhead.
+	batchManager *batchManager
 }
 
 func newCoalesceQueue(idx faissIndexBatch) *coalesceQueue {
-	rv := &coalesceQueue{
-		idx:       idx,
-		enqueueCh: make(chan *batchRequest),
-		stopCh:    make(chan struct{}),
-		doneCh:    make(chan struct{}),
+	q := &coalesceQueue{
+		idx:           idx,
+		enqueueCh:     make(chan *batchRequest),
+		flushCh:       make(chan []*batchRequest),
+		stopCh:        make(chan struct{}),
+		fillerDoneCh:  make(chan struct{}),
+		flusherDoneCh: make(chan struct{}),
+		batchManager:  newBatchManager(),
 	}
-	go rv.monitor()
-	return rv
+	go q.filler()
+	go q.flusher()
+	return q
 }
 
 func (q *coalesceQueue) stop() {
 	q.stopOnce.Do(func() {
 		close(q.stopCh)
 	})
-
-	// wait for the monitor to stop running
-	<-q.doneCh
+	// wait for all goroutines to exit
+	<-q.fillerDoneCh
+	<-q.flusherDoneCh
 }
 
-func (q *coalesceQueue) monitor() {
-	defer close(q.doneCh)
-	var dequeueTimer <-chan time.Time
+// filler is the enqueuer goroutine. It receives incoming search requests,
+// coalesces them into batches, and hands them off to the flusher when it is idle.
+func (q *coalesceQueue) filler() {
+	defer close(q.fillerDoneCh)
+	var pendingBatch []*batchRequest
+	for {
+		if len(pendingBatch) > 0 {
+			select {
+			case req := <-q.enqueueCh:
+				pendingBatch = q.coalesce(pendingBatch, req)
+			case q.flushCh <- pendingBatch:
+				pendingBatch = nil
+			case <-q.stopCh:
+				q.flushCh <- pendingBatch
+				return
+			}
+		} else {
+			select {
+			case req := <-q.enqueueCh:
+				pendingBatch = q.coalesce(pendingBatch, req)
+			case <-q.stopCh:
+				return
+			}
+		}
+	}
+}
+
+// flusher is the background goroutine that executes batches handed off by the monitor.
+func (q *coalesceQueue) flusher() {
+	defer close(q.flusherDoneCh)
 	for {
 		select {
-		case req := <-q.enqueueCh:
-			if len(q.queue) == 0 {
-				dequeueTimer = q.startTimer()
-			}
-			q.enqueue(req)
-		case <-dequeueTimer:
-			// when the timer fires, it means that at least one batch request in the queue has
-			// reached its deadline and needs to be executed.
-			q.flush()
-			// the queue is flushed after processing, so set the dequeue timer to nil until we have
-			// new requests in the queue that can trigger a new timer.
-			dequeueTimer = nil
-		case <-q.stopCh:
-			// flush the queue one last time before stopping, to ensure that any pending requests are processed.
-			q.flush()
-			dequeueTimer = nil
+		case batch := <-q.flushCh:
+			q.executeBatch(batch)
+		case <-q.fillerDoneCh:
 			return
 		}
 	}
 }
 
-func (q *coalesceQueue) startTimer() <-chan time.Time {
-	// Calculate adaptive budget when this is the first request after a flush
-	var budget time.Duration
-	// empty queue.
-	if !q.lastFlush.IsZero() {
-		// Calculate time elapsed since last flush
-		timeSinceLastFlush := time.Since(q.lastFlush)
-		// Adaptive strategy:
-		// - If requests arrive quickly (small timeSinceLastFlush), use higher budget to batch more
-		// - If requests arrive slowly (large timeSinceLastFlush), use lower budget to reduce latency
-		budget = max(maxLatencyBudget-timeSinceLastFlush, minLatencyBudget)
-	} else {
-		// First request ever, use maximum budget
-		budget = maxLatencyBudget
-	}
-	if q.timer != nil {
-		q.timer.Reset(budget)
-	} else {
-		q.timer = time.NewTimer(budget)
-	}
-	return q.timer.C
-}
-
-func (q *coalesceQueue) enqueue(req *batchRequest) {
-	// Try to find an existing batch request in the queue that can be merged with this new request.
-	for _, pendingReq := range q.queue {
+// coalesce merges req into the queue, either by finding a compatible pending
+// request to merge with or by appending a new entry.
+func (q *coalesceQueue) coalesce(queue []*batchRequest, req *batchRequest) []*batchRequest {
+	for _, pendingReq := range queue {
 		if pendingReq.canMerge(req) {
-			// if we find a compatible request, merge this new request into the existing batch request and return.
 			pendingReq.mergeWith(req)
-			return
+			return queue
 		}
 	}
-	// if we didn't find any compatible request to merge with, or if the queue is empty,
-	// we need to add this new request as a new batch request in the queue.
-	// Since we can potentially merge future requests with this new batch request,
-	// we need to clone the query vector to avoid mutating the original request's query vector.
+	// No compatible request found; clone the query vector so that future
+	// merges into this entry do not mutate the caller's data.
 	req.qVector = req.qVector.clone()
-	q.queue = append(q.queue, req)
+	if queue == nil {
+		queue = q.batchManager.getBatch()
+	}
+	return append(queue, req)
 }
 
-func (q *coalesceQueue) flush() {
-	// execute all the requests in the queue, and empty the queue afterwards.
-	for _, req := range q.queue {
+// executeBatch runs all coalesced requests against the Faiss index and delivers results.
+func (q *coalesceQueue) executeBatch(batch []*batchRequest) {
+	for _, req := range batch {
 		distances, ids, err := q.idx.batchSearch(req.qVector, req.k)
 		req.sendResponse(distances, ids, err)
 	}
-	// update the last flush time to now, since we just processed a batch of requests.
-	q.lastFlush = time.Now()
-	if q.timer != nil {
-		q.timer.Stop()
-	}
-	// clear the queue after processing all the requests.
-	q.queue = q.queue[:0]
+	// recycle the batch slice back into the pool
+	q.batchManager.putBatch(batch)
 }

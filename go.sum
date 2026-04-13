@@ -2,8 +2,8 @@ github.com/RoaringBitmap/roaring/v2 v2.14.5 h1:ckd0o545JqDPeVJDgeFoaM21eBixUnlWf
 github.com/RoaringBitmap/roaring/v2 v2.14.5/go.mod h1:eq4wdNXxtJIS/oikeCzdX1rBzek7ANzbth041hrU8Q4=
 github.com/bits-and-blooms/bitset v1.24.2 h1:M7/NzVbsytmtfHbumG+K2bremQPMJuqv1JD3vOaFxp0=
 github.com/bits-and-blooms/bitset v1.24.2/go.mod h1:7hO7Gc7Pp1vODcmWvKMRA9BNmbv6a/7QIWpPxHddWR8=
-github.com/blevesearch/bleve_index_api v1.3.10 h1:a7G+IOMa2xuO6f8vtutbTsqjVLpLuCuH3uoTZHkGiYg=
-github.com/blevesearch/bleve_index_api v1.3.10/go.mod h1:xvd48t5XMeeioWQ5/jZvgLrV98flT2rdvEJ3l/ki4Ko=
+github.com/blevesearch/bleve_index_api v1.3.11-0.20260413142030-e3378dec252d h1:wSDXDST7sQ4e685jtR0aSWzjuhYkn9I4wF660GJNd0I=
+github.com/blevesearch/bleve_index_api v1.3.11-0.20260413142030-e3378dec252d/go.mod h1:xvd48t5XMeeioWQ5/jZvgLrV98flT2rdvEJ3l/ki4Ko=
 github.com/blevesearch/go-faiss v1.0.31-0.20260408101658-f3af3cfbdc5e h1:qftUblyzrOzJeQf3CnPh2M3jkHcAaZ/roPZ6Gx3ClIc=
 github.com/blevesearch/go-faiss v1.0.31-0.20260408101658-f3af3cfbdc5e/go.mod h1:OMGQwOaRRYxrmeNdMrXJPvVx8gBnvE5RYrr0BahNnkk=
 github.com/blevesearch/mmap-go v1.2.0 h1:l33nNKPFcBjJUMwem6sAYJPUzhUCABoK9FxZDGiFNBI=

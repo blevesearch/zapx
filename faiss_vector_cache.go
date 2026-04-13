@@ -65,7 +65,8 @@ func (vc *vectorIndexCache) Clear() {
 
 // loadOrCreate obtains the vector index from the cache or creates it if it's not present.
 // useGPU indicates whether the field mapping requires GPU acceleration for this index.
-func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uint32, except *roaring.Bitmap, useGPU bool, r *FileReader) (
+func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uint32, except *roaring.Bitmap,
+	useGPU bool, r *FileReader, config map[string]interface{}) (
 	index faissIndex, mapping *idMapping, exclude *bitmap, err error) {
 	// first try to read from the cache with a read lock
 	vc.m.RLock()
@@ -93,12 +94,13 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uin
 		return entry.load(except)
 	}
 	// still not present, create and cache it
-	return vc.createAndCacheLOCKED(fieldID, mem, numDocs, except, useGPU, r)
+	return vc.createAndCacheLOCKED(fieldID, mem, numDocs, except, useGPU, r, config)
 }
 
 // Rebuilding the cache on a miss.
 func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
-	numDocs uint32, except *roaring.Bitmap, useGPU bool, r *FileReader) (index faissIndex,
+	numDocs uint32, except *roaring.Bitmap, useGPU bool, r *FileReader,
+	config map[string]interface{}) (index faissIndex,
 	mapping *idMapping, exclude *bitmap, err error) {
 	// if the cache doesn't have the entry, construct the vector to doc id map and
 	// the vector index out of the mem bytes and update the cache under lock.
@@ -182,7 +184,17 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		}
 	} else {
 		if useGPU {
-			index, err = newFaissGPUFloat32Index(fIndex)
+			var gpuToCPUCloneErrCb index.GPUToCPUCloneErrorCallback
+			var gpuErrCb index.GPUErrorCallback
+			if config != nil {
+				if cb, ok := config[index.GPUToCPUCloneErrorKey]; ok {
+					gpuToCPUCloneErrCb = cb.(index.GPUToCPUCloneErrorCallback)
+				}
+				if cb, ok := config[index.GPUErrorKey]; ok {
+					gpuErrCb = cb.(index.GPUErrorCallback)
+				}
+			}
+			index, err = newFaissGPUFloat32Index(fIndex, gpuToCPUCloneErrCb, gpuErrCb)
 		} else {
 			index, err = newFaissFloat32Index(fIndex)
 		}

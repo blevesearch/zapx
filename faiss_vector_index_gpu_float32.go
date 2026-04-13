@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"sync/atomic"
 
+	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 )
 
@@ -54,18 +55,27 @@ type faissGPUFloat32Index struct {
 	// atomic pointer; a nil load means the GPU is not yet available or has
 	// been torn down.
 	gpu atomic.Pointer[gpuState]
+
+	// gpuToCPUCloneErrCb is invoked when cloning the CPU index to the GPU fails.
+	gpuToCPUCloneErrCb index.GPUToCPUCloneErrorCallback
+	// gpuErrCb is invoked when a generic GPU operation fails.
+	gpuErrCb index.GPUErrorCallback
 }
 
 // newFaissGPUFloat32Index creates a GPU-backed float32 index. The GPU clone is
 // always performed asynchronously; searchWithoutIDs falls back to CPU until it
 // completes. All other GPU-operating methods block on doneCh before proceeding.
-func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl) (faissIndex, error) {
+func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl,
+	gpuToCPUCloneErrCb index.GPUToCPUCloneErrorCallback,
+	gpuErrCb index.GPUErrorCallback) (faissIndex, error) {
 	if cpuIdx == nil {
 		return nil, errNilIndex
 	}
 	f := &faissGPUFloat32Index{
-		cpuIdx: cpuIdx,
-		doneCh: make(chan struct{}),
+		cpuIdx:             cpuIdx,
+		doneCh:             make(chan struct{}),
+		gpuToCPUCloneErrCb: gpuToCPUCloneErrCb,
+		gpuErrCb:           gpuErrCb,
 	}
 	go f.initGPU()
 	return f, nil
@@ -81,7 +91,11 @@ func (f *faissGPUFloat32Index) waitGPU() {
 func (f *faissGPUFloat32Index) initGPU() {
 	defer close(f.doneCh)
 	gpuIdx, err := faiss.CloneToGPU(f.cpuIdx)
-	if err != nil || gpuIdx == nil {
+	if err != nil {
+		// error move to GPU
+		if f.gpuToCPUCloneErrCb != nil {
+			f.gpuToCPUCloneErrCb(err)
+		}
 		return
 	}
 	gs := &gpuState{idx: gpuIdx}
@@ -100,12 +114,20 @@ func (f *faissGPUFloat32Index) add(vecs *vectorSet) error {
 
 	err := gpuState.idx.Add(vecs.floatData)
 	if err != nil {
+		// gpu error
+		if f.gpuErrCb != nil {
+			f.gpuErrCb(err)
+		}
 		f.teardownGPU()
 		return f.cpuIdx.Add(vecs.floatData)
 	}
 
 	err = f.syncGPUToCPU()
 	if err != nil {
+		// gpu error
+		if f.gpuErrCb != nil {
+			f.gpuErrCb(err)
+		}
 		f.teardownGPU()
 		return f.cpuIdx.Add(vecs.floatData)
 	}
@@ -233,18 +255,30 @@ func (f *faissGPUFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *v
 
 	err := gpuState.idx.Train(trainingData.floatData)
 	if err != nil {
+		// gpu error
+		if f.gpuErrCb != nil {
+			f.gpuErrCb(err)
+		}
 		f.teardownGPU()
 		return f.trainAndAddCPU(trainingData, vecsToAdd)
 	}
 
 	err = gpuState.idx.Add(vecsToAdd.floatData)
 	if err != nil {
+		// gpu error
+		if f.gpuErrCb != nil {
+			f.gpuErrCb(err)
+		}
 		f.teardownGPU()
 		return f.trainAndAddCPU(trainingData, vecsToAdd)
 	}
 
 	err = f.syncGPUToCPU()
 	if err != nil {
+		// gpu error
+		if f.gpuErrCb != nil {
+			f.gpuErrCb(err)
+		}
 		f.teardownGPU()
 		return f.trainAndAddCPU(trainingData, vecsToAdd)
 	}

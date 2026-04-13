@@ -369,7 +369,7 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex faissIndexIVF, dims, 
 	nprobe, nlist := centroidIndex.ivfParams()
 	// set a custom nlist value in the config for the merged index,
 	//  which is same as the centroid index's nlist.
-	cfg := newFaissIndexConfig(indexType, optimizedFor, dims, metric, nvecs, nlist, false)
+	cfg := newFaissIndexConfig(indexType, optimizedFor, dims, metric, nvecs, nlist, false, nil, nil)
 	// create the merged index based on the centroid index's config.
 	faissIndex, err := faissIndexFactory(cfg)
 	if err != nil {
@@ -578,9 +578,21 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 	// the reconstructed ones anymore and doing so will hold up memory which can
 	// be detrimental while creating indexes during introduction.
 	freeReconstructedIndexes(vecIndexes)
+
+	// extract error callbacks from segment config, if any
+	var gpuToCPUCloneErrCb index.GPUToCPUCloneErrorCallback
+	var gpuErrCb index.GPUErrorCallback
+	if useGPU && v.config != nil {
+		if cb, ok := v.config[index.GPUToCPUCloneErrorKey]; ok {
+			gpuToCPUCloneErrCb = cb.(index.GPUToCPUCloneErrorCallback)
+		}
+		if cb, ok := v.config[index.GPUErrorKey]; ok {
+			gpuErrCb = cb.(index.GPUErrorCallback)
+		}
+	}
 	// create the faiss index to hold the merged data, and add the
 	// reconstructed vectors into it.
-	config := newFaissIndexConfig(faissFP32Index, indexOptimizedFor, dims, metric, nvecs, determineCentroids(nvecs), useGPU)
+	config := newFaissIndexConfig(faissFP32Index, indexOptimizedFor, dims, metric, nvecs, determineCentroids(nvecs), useGPU, gpuToCPUCloneErrCb, gpuErrCb)
 	vecSet, err := newVectorSet(dims, indexData)
 	if err != nil {
 		return err
@@ -613,7 +625,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 		// create the binary index to hold the merged data, and
 		// add the reconstructed vectors into it.
 		vecSet.binarize()
-		config := newFaissIndexConfig(faissBIVFIndex, indexOptimizedFor, dims, metric, nvecs, determineCentroids(nvecs), false)
+		config := newFaissIndexConfig(faissBIVFIndex, indexOptimizedFor, dims, metric, nvecs, determineCentroids(nvecs), false, nil, nil)
 		bIndexBytes, err := makeFaissIndex(vecSet, config, w)
 		if err != nil {
 			return err
@@ -789,7 +801,17 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 		}
 		// create the faiss float32 index for the vectors associated with this field and get the
 		// serialized index bytes to be written out to the segment.
-		config := newFaissIndexConfig(faissFP32Index, content.optimizedFor, content.dimension, metric, nvecs, determineCentroids(nvecs), content.useGPU)
+		var gpuToCPUCloneErrCb index.GPUToCPUCloneErrorCallback
+		var gpuErrCb index.GPUErrorCallback
+		if content.useGPU && vo.config != nil {
+			if cb, ok := vo.config[index.GPUToCPUCloneErrorKey]; ok {
+				gpuToCPUCloneErrCb = cb.(index.GPUToCPUCloneErrorCallback)
+			}
+			if cb, ok := vo.config[index.GPUErrorKey]; ok {
+				gpuErrCb = cb.(index.GPUErrorCallback)
+			}
+		}
+		config := newFaissIndexConfig(faissFP32Index, content.optimizedFor, content.dimension, metric, nvecs, determineCentroids(nvecs), content.useGPU, gpuToCPUCloneErrCb, gpuErrCb)
 		fIndexBytes, err := makeFaissIndex(vecSet, config, w)
 		if err != nil {
 			return err
@@ -865,7 +887,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 			// binarize the vector data in the vector set.
 			vecSet.binarize()
 			// bivf config
-			config := newFaissIndexConfig(faissBIVFIndex, content.optimizedFor, content.dimension, metric, nvecs, determineCentroids(nvecs), false)
+			config := newFaissIndexConfig(faissBIVFIndex, content.optimizedFor, content.dimension, metric, nvecs, determineCentroids(nvecs), false, nil, nil)
 			bIndexBytes, err := makeFaissIndex(vecSet, config, w)
 			if err != nil {
 				return err
@@ -1024,17 +1046,23 @@ type faissIndexConfig struct {
 	optimizationType string
 	nlist            int
 	useGPU           bool
+
+	gpuToCPUCloneErrCb index.GPUToCPUCloneErrorCallback
+	gpuErrCb           index.GPUErrorCallback
 }
 
-func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimension, metricType, numVecs, nlist int, useGPU bool) *faissIndexConfig {
+func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimension, metricType, numVecs, nlist int, useGPU bool,
+	gpuToCPUCloneErrCb index.GPUToCPUCloneErrorCallback, gpuErrCb index.GPUErrorCallback) *faissIndexConfig {
 	return &faissIndexConfig{
-		indexType:        idxType,
-		dimension:        dimension,
-		metricType:       metricType,
-		numVecs:          numVecs,
-		nlist:            nlist,
-		optimizationType: optimizationType,
-		useGPU:           useGPU,
+		indexType:          idxType,
+		dimension:          dimension,
+		metricType:         metricType,
+		numVecs:            numVecs,
+		nlist:              nlist,
+		optimizationType:   optimizationType,
+		useGPU:             useGPU,
+		gpuToCPUCloneErrCb: gpuToCPUCloneErrCb,
+		gpuErrCb:           gpuErrCb,
 	}
 }
 
@@ -1050,7 +1078,7 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 		// we restrict GPU to IVF indexes only; flat and SQ indexes are either
 		// too small to justify the overhead or not supported on GPU
 		if cfg.useGPU && idx.IsIVFIndex() {
-			return newFaissGPUFloat32Index(idx)
+			return newFaissGPUFloat32Index(idx, cfg.gpuToCPUCloneErrCb, cfg.gpuErrCb)
 		}
 		return newFaissFloat32Index(idx)
 	case faissBIVFIndex:

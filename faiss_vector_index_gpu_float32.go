@@ -56,8 +56,8 @@ type faissGPUFloat32Index struct {
 	// been torn down.
 	gpu atomic.Pointer[gpuState]
 
-	// gpuToCPUCloneErrCb is invoked when cloning the CPU index to the GPU fails.
-	gpuToCPUCloneErrCb index.GPUToCPUCloneErrorCallback
+	// cpuToGPUCloneErrCb is invoked when cloning the CPU index to the GPU fails.
+	cpuToGPUCloneErrCb index.CPUToGPUCloneErrorCallback
 	// gpuErrCb is invoked when a generic GPU operation fails.
 	gpuErrCb index.GPUErrorCallback
 }
@@ -66,7 +66,7 @@ type faissGPUFloat32Index struct {
 // always performed asynchronously; searchWithoutIDs falls back to CPU until it
 // completes. All other GPU-operating methods block on doneCh before proceeding.
 func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl,
-	gpuToCPUCloneErrCb index.GPUToCPUCloneErrorCallback,
+	cpuToGPUCloneErrCb index.CPUToGPUCloneErrorCallback,
 	gpuErrCb index.GPUErrorCallback) (faissIndex, error) {
 	if cpuIdx == nil {
 		return nil, errNilIndex
@@ -74,7 +74,7 @@ func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl,
 	f := &faissGPUFloat32Index{
 		cpuIdx:             cpuIdx,
 		doneCh:             make(chan struct{}),
-		gpuToCPUCloneErrCb: gpuToCPUCloneErrCb,
+		cpuToGPUCloneErrCb: cpuToGPUCloneErrCb,
 		gpuErrCb:           gpuErrCb,
 	}
 	go f.initGPU()
@@ -93,8 +93,8 @@ func (f *faissGPUFloat32Index) initGPU() {
 	gpuIdx, err := faiss.CloneToGPU(f.cpuIdx)
 	if err != nil {
 		// error move to GPU
-		if f.gpuToCPUCloneErrCb != nil {
-			f.gpuToCPUCloneErrCb(err)
+		if f.cpuToGPUCloneErrCb != nil {
+			f.cpuToGPUCloneErrCb(err)
 		}
 		return
 	}

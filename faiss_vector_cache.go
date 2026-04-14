@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring/v2"
+	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 )
 
@@ -67,7 +68,7 @@ func (vc *vectorIndexCache) Clear() {
 // useGPU indicates whether the field mapping requires GPU acceleration for this index.
 func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uint32, except *roaring.Bitmap,
 	useGPU bool, r *FileReader, config map[string]interface{}) (
-	index faissIndex, mapping *idMapping, exclude *bitmap, err error) {
+	faissIndex faissIndex, mapping *idMapping, exclude *bitmap, err error) {
 	// first try to read from the cache with a read lock
 	vc.m.RLock()
 	if vc.isClosed {
@@ -100,7 +101,7 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, mem []byte, numDocs uin
 // Rebuilding the cache on a miss.
 func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	numDocs uint32, except *roaring.Bitmap, useGPU bool, r *FileReader,
-	config map[string]interface{}) (index faissIndex,
+	config map[string]interface{}) (faissIndex faissIndex,
 	mapping *idMapping, exclude *bitmap, err error) {
 	// if the cache doesn't have the entry, construct the vector to doc id map and
 	// the vector index out of the mem bytes and update the cache under lock.
@@ -178,37 +179,37 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 			return nil, nil, nil, fmt.Errorf("faiss binary index load error: %v", err)
 		}
 		pos += int(binSize)
-		index, err = newFaissBinaryIndex(bIndex, fIndex)
+		faissIndex, err = newFaissBinaryIndex(bIndex, fIndex)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("faiss binary index creation error: %v", err)
 		}
 	} else {
 		if useGPU {
-			var gpuToCPUCloneErrCb index.GPUToCPUCloneErrorCallback
+			var cpuToGPUCloneErrCb index.CPUToGPUCloneErrorCallback
 			var gpuErrCb index.GPUErrorCallback
 			if config != nil {
-				if cb, ok := config[index.GPUToCPUCloneErrorKey]; ok {
-					gpuToCPUCloneErrCb = cb.(index.GPUToCPUCloneErrorCallback)
+				if cb, ok := config[index.CPUToGPUCloneErrorKey]; ok {
+					cpuToGPUCloneErrCb = cb.(index.CPUToGPUCloneErrorCallback)
 				}
 				if cb, ok := config[index.GPUErrorKey]; ok {
 					gpuErrCb = cb.(index.GPUErrorCallback)
 				}
 			}
-			index, err = newFaissGPUFloat32Index(fIndex, gpuToCPUCloneErrCb, gpuErrCb)
+			faissIndex, err = newFaissGPUFloat32Index(fIndex, cpuToGPUCloneErrCb, gpuErrCb)
 		} else {
-			index, err = newFaissFloat32Index(fIndex)
+			faissIndex, err = newFaissFloat32Index(fIndex)
 		}
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("faiss float32 index creation error: %v", err)
 		}
 	}
 	// update the cache
-	vc.insertLOCKED(fieldID, index, mapping)
-	return index, mapping, getExcludedVectors(mapping, except), nil
+	vc.insertLOCKED(fieldID, faissIndex, mapping)
+	return faissIndex, mapping, getExcludedVectors(mapping, except), nil
 }
 
 func (vc *vectorIndexCache) insertLOCKED(fieldID uint16,
-	index faissIndex, mapping *idMapping) {
+	faissIndex faissIndex, mapping *idMapping) {
 	// the first time we've hit the cache, try to spawn a monitoring routine
 	// which will reconcile the moving averages for all the fields being hit
 	if len(vc.cache) == 0 {
@@ -219,7 +220,7 @@ func (vc *vectorIndexCache) insertLOCKED(fieldID uint16,
 	// this makes the average to be kept above the threshold value for a
 	// longer time and thereby the index to be resident in the cache
 	// for longer time.
-	vc.cache[fieldID] = createCacheEntry(index, mapping, 0.4)
+	vc.cache[fieldID] = createCacheEntry(faissIndex, mapping, 0.4)
 }
 
 func (vc *vectorIndexCache) incHit(fieldID uint16) {

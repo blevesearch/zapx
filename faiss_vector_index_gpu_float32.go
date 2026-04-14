@@ -92,7 +92,7 @@ func (f *faissGPUFloat32Index) initGPU() {
 	defer close(f.doneCh)
 	gpuIdx, err := faiss.CloneToGPU(f.cpuIdx)
 	if err != nil {
-		// error move to GPU
+		// error moving to GPU
 		if f.cpuToGPUCloneErrCb != nil {
 			f.cpuToGPUCloneErrCb(err)
 		}

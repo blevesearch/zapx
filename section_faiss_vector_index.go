@@ -584,10 +584,14 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 	var gpuErrCb index.GPUErrorCallback
 	if useGPU && v.config != nil {
 		if cb, ok := v.config[index.CPUToGPUCloneErrorKey]; ok {
-			cpuToGPUCloneErrCb = cb.(index.CPUToGPUCloneErrorCallback)
+			if cb, ok := cb.(index.CPUToGPUCloneErrorCallback); ok {
+				cpuToGPUCloneErrCb = cb
+			}
 		}
 		if cb, ok := v.config[index.GPUErrorKey]; ok {
-			gpuErrCb = cb.(index.GPUErrorCallback)
+			if cb, ok := cb.(index.GPUErrorCallback); ok {
+				gpuErrCb = cb
+			}
 		}
 	}
 	// create the faiss index to hold the merged data, and add the
@@ -805,10 +809,14 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 		var gpuErrCb index.GPUErrorCallback
 		if content.useGPU && vo.config != nil {
 			if cb, ok := vo.config[index.CPUToGPUCloneErrorKey]; ok {
-				cpuToGPUCloneErrCb = cb.(index.CPUToGPUCloneErrorCallback)
+				if cb, ok := cb.(index.CPUToGPUCloneErrorCallback); ok {
+					cpuToGPUCloneErrCb = cb
+				}
 			}
 			if cb, ok := vo.config[index.GPUErrorKey]; ok {
-				gpuErrCb = cb.(index.GPUErrorCallback)
+				if cb, ok := cb.(index.GPUErrorCallback); ok {
+					gpuErrCb = cb
+				}
 			}
 		}
 		config := newFaissIndexConfig(faissFP32Index, content.optimizedFor, content.dimension, metric, nvecs, determineCentroids(nvecs), content.useGPU, cpuToGPUCloneErrCb, gpuErrCb)

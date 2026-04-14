@@ -189,10 +189,14 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 			var gpuErrCb index.GPUErrorCallback
 			if config != nil {
 				if cb, ok := config[index.CPUToGPUCloneErrorKey]; ok {
-					cpuToGPUCloneErrCb = cb.(index.CPUToGPUCloneErrorCallback)
+					if cb, ok := cb.(index.CPUToGPUCloneErrorCallback); ok {
+						cpuToGPUCloneErrCb = cb
+					}
 				}
 				if cb, ok := config[index.GPUErrorKey]; ok {
-					gpuErrCb = cb.(index.GPUErrorCallback)
+					if cb, ok := cb.(index.GPUErrorCallback); ok {
+						gpuErrCb = cb
+					}
 				}
 			}
 			faissIndex, err = newFaissGPUFloat32Index(fIndex, cpuToGPUCloneErrCb, gpuErrCb)

@@ -406,7 +406,7 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector *vectorSet, k int64,
 			if sel != nil {
 				defer sel.Delete()
 			}
-			return v.index.searchWithoutIDs(qVector, k, sel, params)
+			return v.index.searchWithSelector(qVector, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
@@ -451,13 +451,15 @@ func (v *vectorIndexWrapper) searchWithIDs(vecSet *vectorSet, k int64, include *
 			if err != nil {
 				return nil, nil, err
 			}
+			if sel == nil {
+				return nil, nil, fmt.Errorf("requires valid include selector, got nil")
+			}
+
 			// NOTE: the selector being freed does NOT free the inner bitmap, as we control
 			// its lifecycle in GO, to reuse the bitmap across iterations, if needed, for
 			// multi-vector document retrieval.
-			if sel != nil {
-				defer sel.Delete()
-			}
-			return v.index.searchWithIDs(vecSet, k, sel, params)
+			defer sel.Delete()
+			return v.index.searchWithSelector(vecSet, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,

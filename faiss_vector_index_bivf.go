@@ -74,24 +74,17 @@ func (b *faissBinaryIndex) reconstructBatch(vecIDs []int64, prealloc []float32) 
 	return nil, errNotSupported
 }
 
-func (b *faissBinaryIndex) searchWithSelector(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
+func (b *faissBinaryIndex) search(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
 	// search the binary index with oversampling and then do a re-ranking on the
 	// FAISS index to get the top K results
 	// first binarize the query vector if not already done
 	qVector.binarize()
-
-	var binIDs []int64
-	var err error
-	if params == nil && selector == nil {
-		_, binIDs, err = b.binary.Search(qVector.binaryData, binaryOversampleValue*k)
-	} else {
-		_, binIDs, err = b.binary.SearchWithSelector(qVector.binaryData, binaryOversampleValue*k,
-			selector, params)
-	}
+	// search the binary index with oversampling to get a larger set of candidate binary IDs for re-ranking
+	_, binIDs, err := b.binary.SearchWithOptions(qVector.binaryData, binaryOversampleValue*k,
+		selector, params)
 	if err != nil {
 		return nil, nil, err
 	}
-
 	var scores []float32
 	var labels []int64
 	// if we have a backing index for re-ranking, compute the distances/scores for the

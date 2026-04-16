@@ -63,12 +63,8 @@ func (f *faissFloat32Index) reconstructBatch(vecIDs []int64, prealloc []float32)
 	return f.idx.ReconstructBatch(vecIDs, prealloc)
 }
 
-func (f *faissFloat32Index) searchWithoutIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
-	return f.idx.SearchWithoutIDs(qVector.floatData, k, selector, params)
-}
-
-func (f *faissFloat32Index) searchWithIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
-	return f.idx.SearchWithIDs(qVector.floatData, k, selector, params)
+func (f *faissFloat32Index) search(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
+	return f.idx.SearchWithOptions(qVector.floatData, k, selector, params)
 }
 
 func (f *faissFloat32Index) serialize() ([]byte, error) {

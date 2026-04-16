@@ -43,14 +43,9 @@ type faissIndex interface {
 	ntotal() int64
 	// reconstructBatch reconstructs the original vectors for the given vector IDs in the index.
 	reconstructBatch(vecIDs []int64, prealloc []float32) ([]float32, error)
-	// performs a search on the index using the provided query vector and parameters, with an optional
-	// exclude selector to indicate a "blocklist" of indexed vectors to ignore during search.
-	// It returns the distances and corresponding vector IDs of the top k results.
-	searchWithoutIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error)
-	// performs a search on the index using the provided query vector and parameters, with a required
-	// include selector to indicate an "allowlist" of indexed vectors to consider during search.
-	// It returns the distances and corresponding vector IDs of the top k results.
-	searchWithIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error)
+	// performs a search on the index using the provided query vector and and retrieves the top K nearest neighbors.
+	// Optional search constraints can be applied using the selector and additional search parameters.
+	search(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error)
 	// serializes the index into a byte slice,
 	// which can be stored or transmitted.
 	serialize() ([]byte, error)

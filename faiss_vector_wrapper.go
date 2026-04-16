@@ -404,9 +404,11 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector *vectorSet, k int64,
 			// its lifecycle in GO, to reuse the bitmap across iterations, if needed, for
 			// multi-vector document retrieval.
 			if sel != nil {
+				// The selector can be nil here as we may not be excluding any vectors
+				// in which case we can just pass a nil selector to FAISS.
 				defer sel.Delete()
 			}
-			return v.index.searchWithoutIDs(qVector, k, sel, params)
+			return v.index.search(qVector, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,
@@ -454,10 +456,8 @@ func (v *vectorIndexWrapper) searchWithIDs(vecSet *vectorSet, k int64, include *
 			// NOTE: the selector being freed does NOT free the inner bitmap, as we control
 			// its lifecycle in GO, to reuse the bitmap across iterations, if needed, for
 			// multi-vector document retrieval.
-			if sel != nil {
-				defer sel.Delete()
-			}
-			return v.index.searchWithIDs(vecSet, k, sel, params)
+			defer sel.Delete()
+			return v.index.search(vecSet, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
 			// if this is the first loop iteration and we have < k unique docIDs,

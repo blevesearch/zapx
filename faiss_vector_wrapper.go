@@ -19,7 +19,6 @@ package zap
 
 import (
 	"encoding/json"
-	"fmt"
 	"math"
 	"slices"
 
@@ -424,10 +423,6 @@ func (v *vectorIndexWrapper) searchWithoutIDs(qVector []float32, k int64, exclud
 				}
 				defer sel.Delete()
 			}
-
-			if sel == nil && params == nil {
-				return v.vecIndex.Search(qVector, k)
-			}
 			return v.vecIndex.SearchWithOptions(qVector, k, sel, params)
 		},
 		func(numIter int, labels []int64) bool {
@@ -460,9 +455,6 @@ func (v *vectorIndexWrapper) searchWithIDs(qVector []float32, k int64, include [
 			selector, err := v.getSelector(include, true)
 			if err != nil {
 				return nil, nil, err
-			}
-			if selector == nil {
-				return nil, nil, fmt.Errorf("requires valid include selector, got nil")
 			}
 			// once the main search is done we must free the selector
 			defer selector.Delete()

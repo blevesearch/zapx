@@ -107,7 +107,7 @@ type faissIndexSQ interface {
 }
 
 // Interface for batched search operations on Faiss vector indices.
-type faissIndexBatch interface {
+type faissQueryBatch interface {
 	// performs a batch search on the index using the provided query vector and parameters,
 	// and returns the distances and corresponding vector IDs of the top k results.
 	// NOTE: only vector search requests with the same `k` are batched together.

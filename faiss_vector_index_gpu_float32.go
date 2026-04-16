@@ -57,7 +57,7 @@ type faissGPUFloat32Index struct {
 }
 
 // newFaissGPUFloat32Index creates a GPU-backed float32 index. The GPU clone is
-// always performed asynchronously; searchWithoutIDs falls back to CPU until it
+// always performed asynchronously; search falls back to CPU until it
 // completes. All other GPU-operating methods block on doneCh before proceeding.
 func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl) (faissIndex, error) {
 	if cpuIdx == nil {
@@ -150,19 +150,14 @@ func (f *faissGPUFloat32Index) reconstructBatch(vecIDs []int64, prealloc []float
 	return f.cpuIdx.ReconstructBatch(vecIDs, prealloc)
 }
 
-func (f *faissGPUFloat32Index) searchWithoutIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
+func (f *faissGPUFloat32Index) search(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
 	if selector == nil && len(params) == 0 {
 		if gpuState := f.gpu.Load(); gpuState != nil {
 			return gpuState.batcher.search(qVector, k)
 		}
 	}
 	// GPU not ready, filtered search, or non-empty params — fall back to CPU
-	return f.cpuIdx.SearchWithoutIDs(qVector.floatData, k, selector, params)
-}
-
-func (f *faissGPUFloat32Index) searchWithIDs(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
-	// GPU does not support selector-based search, use CPU
-	return f.cpuIdx.SearchWithIDs(qVector.floatData, k, selector, params)
+	return f.cpuIdx.SearchWithOptions(qVector.floatData, k, selector, params)
 }
 
 func (f *faissGPUFloat32Index) serialize() ([]byte, error) {

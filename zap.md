@@ -73,10 +73,10 @@ Stored Fields Index is `D#` consecutive 64-bit unsigned integers - offsets, wher
 We also store the EdgeList for nested documents, if present in the segment, to preserve hierarchical relationships.
 If there are NE edges, it means there are NE nested or sub-documents, with each edge representing a child -> parent relationship.
 
-    0                                [SF]                   [SF + D# * 8]                       
+    0                                [SF]                   [SF + D# * 8]
     | Stored Fields                  | Stored Fields Index              | Edge List Information                                                  |
     |================================|==================================|========================================================================|
-    |                                |                                  |                                                                        | 
+    |                                |                                  |                                                                        |
     |       |--------------------|   ||--------|--------|. . .|--------|||~~~~~~~~|~~~~~~~~|~~~~~~~~|~~~~~~~~|~~~~~~~~|. . .|~~~~~~~~~|~~~~~~~~~||
     |   |-> | Stored Fields Data |   ||      0 |      1 |     | D# - 1 |||   NE   |   C1   |   P1   |   C2   |   P2   |     |   CNE   |   PNE   ||
     |   |   |--------------------|   ||--------|----|---|. . .|--------|||~~~~~~~~|~~~~~~~~|~~~~~~~~|~~~~~~~~|~~~~~~~~|. . .|~~~~~~~~~|~~~~~~~~~||
@@ -194,14 +194,9 @@ In a vector index, each vector is assigned a unique, monotonically increasing ID
     |   |   +~~~~~~~~~~~~~+                                              |
     |   |   |  INDEX TYPE |                                              |
     |   |   +~~~~~~~~~~~~~+                                              |
-    |   |                                                                |
     |   |   +~~~~~~~~~~~~~+                                              |
-    |   |   |  FAISS LEN  |                                              |
+    |   |   |  INDEX DATA |                                              |
     |   |   +~~~~~~~~~~~~~+                                              |
-    |   |                                                                |
-    |   |   +---------------------------+...+----------------------+     |
-    |   |   |                SERIALIZED FAISS INDEX                |     |
-    |   |   +---------------------------+...+----------------------+     |
     |   |                                                                |
     |   |================================================================+- Synonym Index Section
     |   |                                                                |
@@ -218,7 +213,44 @@ In a vector index, each vector is assigned a unique, monotonically increasing ID
          NVEC - Number of vectors
          ML   - Length of the vector to document ID map
          INDEX TYPE - Type of the vector index
-         FAISS LEN - Length of serialized FAISS index
+         INDEX DATA - Vector index data
+
+### Vector Index Type - FP32
+
+FP32 vector indexes stores a singular FAISS index to perform search
+
+    |   +~~~~~~~~~~~~~~~~~~~~~~~~~~+    |
+    |   |        FAISS LEN         |    |
+    |   +~~~~~~~~~~~~~~~~~~~~~~~~~~+    |
+    |                                   |
+    |   +----------+...+-----------+    |
+    |   |  SERIALIZED FAISS INDEX  |    |
+    |   +----------+...+-----------+    |
+
+         FAISS LEN   - Length of the serialized faiss index
+
+### Vector Index Type - Binary
+
+Binary vector indexes stores two separate FAISS indexes to perform search. The first is a primary binary index and the second is a backing FP32 index
+
+    |   +~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+    |
+    |   |        PRIMARY FAISS LEN         |    |
+    |   +~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+    |
+    |                                           |
+    |   +---------------+...+--------------+    |
+    |   |  SERIALIZED PRIMARY FAISS INDEX  |    |
+    |   +---------------+...+--------------+    |
+    |                                           |
+    |   +~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+    |
+    |   |        BACKING FAISS LEN         |    |
+    |   +~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+    |
+    |                                           |
+    |   +---------------+...+--------------+    |
+    |   |  SERIALIZED BACKING FAISS INDEX  |    |
+    |   +---------------+...+--------------+    |
+
+         PRIMARY FAISS LEN   - Length of the serialized primary faiss index
+         BACKING FAISS LEN   - Length of the serialized backing faiss index
 
 ## Synonym Index Section
 

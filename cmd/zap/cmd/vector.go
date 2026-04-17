@@ -70,21 +70,37 @@ var vectorCmd = &cobra.Command{
 			vecToDocID[vecID] = docID
 		}
 		// read the type of the vector index
-		_, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+		vecType, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
 		// read the length of the serialized faiss index
-		indexSize, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+		indexSizePrimary, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
-		// read the serialized faiss index bytes
-		indexBytes := data[pos : pos+indexSize]
-		pos += indexSize
+		indexBytes := data[pos : pos+indexSizePrimary]
+		pos += indexSizePrimary
 		// construct the faiss index from the buffer
-		vecIndex, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
+		vecIndexPrimary, err := faiss.ReadIndexFromBuffer(indexBytes, faiss.IOFlagReadOnly)
 		if err != nil {
 			return fmt.Errorf("error reading faiss index from buffer: %v", err)
 		}
-		metricType := vecIndex.MetricType()
-		dims := vecIndex.D()
+		metricType := vecIndexPrimary.MetricType()
+		dims := vecIndexPrimary.D()
+		var indexSizeBacking uint64
+		var vecIndexBacking faiss.Index
+		if vecType == 1 {
+			// read the length of the serialized backing faiss index
+			indexSizeBacking, n = binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+			pos += uint64(n)
+			indexBytesBacking := data[pos : pos+indexSizeBacking]
+			pos += indexSizeBacking
+			// construct the backing faiss index from the buffer
+			vecIndexBacking, err = faiss.ReadIndexFromBuffer(indexBytesBacking, faiss.IOFlagReadOnly)
+			if err != nil {
+				return fmt.Errorf("error reading backing faiss index from buffer: %v", err)
+			}
+			// override metric type with the backing index metric type since that
+			// is the one used for scoring
+			metricType = vecIndexBacking.MetricType()
+		}
 		optimizationType := index.VectorIndexOptimizationsReverseLookup[int(vecOpt)]
 
 		switch len(args) {
@@ -95,7 +111,13 @@ var vectorCmd = &cobra.Command{
 			}
 			fmt.Printf("decoded vector section content for field `%v`:\n", args[1])
 			fmt.Printf("  number of vectors: %v\n", numVecs)
-			fmt.Printf("  size of the serialized vector index: %v\n", indexSize)
+			fmt.Printf("  type of the vector index: %v\n", vecType)
+			if vecType == 0 {
+				fmt.Printf("  size of the serialized vector index: %v\n", indexSizePrimary)
+			} else {
+				fmt.Printf("  size of the serialized primary vector index: %v\n", indexSizePrimary)
+				fmt.Printf("  size of the serialized backing vector index: %v\n", indexSizeBacking)
+			}
 			fmt.Printf("  dimensionality of vectors in the index: %v\n", dims)
 			fmt.Printf("  similarity metric used: %v\n", metrics[metricType])
 			fmt.Printf("  index optimized for: %v\n", optimizationType)
@@ -111,7 +133,12 @@ var vectorCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("error parsing vecID: %v", err)
 			}
-			vec, err := vecIndex.Reconstruct(int64(vecID))
+			var vec []float32
+			if vecIndexBacking != nil {
+				vec, err = vecIndexBacking.Reconstruct(int64(vecID))
+			} else {
+				vec, err = vecIndexPrimary.Reconstruct(int64(vecID))
+			}
 			if err != nil {
 				return fmt.Errorf("error while reconstructing vector with ID %v, err: %v", vecID, err)
 			}

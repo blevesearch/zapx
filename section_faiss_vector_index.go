@@ -997,6 +997,7 @@ func (vo *vectorIndexOpaque) Reset() error {
 	clear(vo.fieldVectorIndex)
 	vo.tmp0 = vo.tmp0[:0]
 	vo.fieldsOptions = nil
+	vo.config = nil
 	atomic.StoreUint64(&vo.bytesWritten, 0)
 	return nil
 }

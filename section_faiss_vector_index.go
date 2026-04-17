@@ -1047,8 +1047,8 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 		if err != nil {
 			return nil, err
 		}
-		// we restrict GPU to IVF indexes only; flat and SQ indexes are either
-		// too small to justify the overhead or not supported on GPU
+		// we restrict GPU to IVF indexes only; flat and SQ indexes do not get a noticeable speedup
+		// when run on GPU, and the GPU overhead can actually make them slower than CPU.
 		if cfg.useGPU && idx.IsIVFIndex() {
 			return newFaissGPUFloat32Index(idx)
 		}

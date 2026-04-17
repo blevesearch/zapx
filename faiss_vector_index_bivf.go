@@ -221,9 +221,12 @@ func (b *faissBinaryIndex) setNProbe(nprobe int32) {
 	b.binary.SetNProbe(nprobe)
 }
 
-func (b *faissBinaryIndex) train(trainingData *vectorSet) error {
-	// train the binary index using the binaryData from the vectorSet
-	return b.binary.Train(trainingData.binaryData)
+func (b *faissBinaryIndex) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
+	err := b.binary.Train(trainingData.binaryData)
+	if err != nil {
+		return err
+	}
+	return b.add(vecsToAdd)
 }
 
 func (b *faissBinaryIndex) setQuantizers(centroidIndex faissIndexIVF) error {

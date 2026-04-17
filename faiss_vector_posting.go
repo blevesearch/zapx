@@ -300,8 +300,9 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 
 	// create the vector index wrapper by loading (or creating) the vector index
 	// and the vector to docID mapping
+	useGPU := sb.fieldsOptions[field].UseGPU()
 	var err error
-	rv.index, rv.mapping, rv.exclude, err = sb.vecIndexCache.loadOrCreate(fieldID, sb.mem[pos:], uint32(sb.numDocs), except, sb.fileReader)
+	rv.index, rv.mapping, rv.exclude, err = sb.vecIndexCache.loadOrCreate(fieldID, sb.mem[pos:], uint32(sb.numDocs), except, useGPU, sb.fileReader)
 	if err != nil {
 		return nil, err
 	}

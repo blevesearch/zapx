@@ -130,9 +130,12 @@ func (f *faissFloat32Index) setNProbe(nprobe int32) {
 	f.idx.SetNProbe(nprobe)
 }
 
-func (f *faissFloat32Index) train(trainingData *vectorSet) error {
-	// train the index using the floatData from the vectorSet
-	return f.idx.Train(trainingData.floatData)
+func (f *faissFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
+	err := f.idx.Train(trainingData.floatData)
+	if err != nil {
+		return err
+	}
+	return f.add(vecsToAdd)
 }
 
 func (f *faissFloat32Index) setQuantizers(centroidIndex faissIndexIVF) error {

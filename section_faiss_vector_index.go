@@ -79,7 +79,7 @@ func (v *faissVectorIndexSection) Process(opaque map[int]resetable, docNum uint3
 	}
 	if vf, ok := field.(index.VectorField); ok {
 		vo := v.getVectorIndexOpaque(opaque)
-		vo.process(vf, fieldID, docNum)
+		vo.process(vf, field.Name(), fieldID, docNum)
 	}
 }
 
@@ -226,7 +226,8 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 				return err
 			}
 		}
-		err = vo.mergeAndWriteVectorIndexes(centroidIndex, vecSegs, indexes, w, closeCh)
+		useGPU := vo.fieldsOptions[fieldName].UseGPU()
+		err = vo.mergeAndWriteVectorIndexes(centroidIndex, vecSegs, indexes, w, closeCh, useGPU)
 		if err != nil {
 			return err
 		}
@@ -368,7 +369,7 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex faissIndexIVF, dims, 
 	nprobe, nlist := centroidIndex.ivfParams()
 	// set a custom nlist value in the config for the merged index,
 	//  which is same as the centroid index's nlist.
-	cfg := newFaissIndexConfig(indexType, optimizedFor, dims, metric, nvecs, nlist)
+	cfg := newFaissIndexConfig(indexType, optimizedFor, dims, metric, nvecs, nlist, false)
 	// create the merged index based on the centroid index's config.
 	faissIndex, err := faissIndexFactory(cfg)
 	if err != nil {
@@ -457,7 +458,7 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex faissIndexIVF, dims, 
 }
 
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexIVF, sbs []*SegmentBase,
-	vecIndexes []*vecIndexInfo, w *FileWriter, closeCh chan struct{}) error {
+	vecIndexes []*vecIndexInfo, w *FileWriter, closeCh chan struct{}, useGPU bool) error {
 	// safe to assume that all the indexes are of the same config values, given
 	// that they are extracted from the field mapping info.
 	var dims, metric, indexDataCap, reconsCap, nvecs int
@@ -579,7 +580,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 	freeReconstructedIndexes(vecIndexes)
 	// create the faiss index to hold the merged data, and add the
 	// reconstructed vectors into it.
-	config := newFaissIndexConfig(faissFP32Index, indexOptimizedFor, dims, metric, nvecs, determineCentroids(nvecs))
+	config := newFaissIndexConfig(faissFP32Index, indexOptimizedFor, dims, metric, nvecs, determineCentroids(nvecs), useGPU)
 	vecSet, err := newVectorSet(dims, indexData)
 	if err != nil {
 		return err
@@ -612,7 +613,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 		// create the binary index to hold the merged data, and
 		// add the reconstructed vectors into it.
 		vecSet.binarize()
-		config := newFaissIndexConfig(faissBIVFIndex, indexOptimizedFor, dims, metric, nvecs, determineCentroids(nvecs))
+		config := newFaissIndexConfig(faissBIVFIndex, indexOptimizedFor, dims, metric, nvecs, determineCentroids(nvecs), false)
 		bIndexBytes, err := makeFaissIndex(vecSet, config, w)
 		if err != nil {
 			return err
@@ -641,8 +642,17 @@ func makeFaissIndex(vecs *vectorSet, config *faissIndexConfig, w *FileWriter) ([
 	}
 	// ensure the faiss index is closed after use
 	defer index.close()
-	// if we are using an IVF index, set the direct map and train it
+	// if we are using an IVF index, train and add first, then set the direct map
+	// and nprobe. The order matters for GPU indexes: CloneToCPU (done inside
+	// trainAndAdd) clears the direct map and nprobe, so they must be set after.
 	if ivfIndex := index.castIVF(); ivfIndex != nil {
+		// train the vector index and add the vectors to it. The training step
+		// performs k-means clustering to partition the data space such that during
+		// search time we probe only a subset of vectors (non-exhaustive search).
+		err = ivfIndex.trainAndAdd(vecs, vecs)
+		if err != nil {
+			return nil, err
+		}
 		// the direct map maintained in the IVF index is essential for the
 		// reconstruction of vectors based on the sequential vector IDs in the
 		// future merges use direct map type 1 -> array based direct map, since
@@ -651,30 +661,19 @@ func makeFaissIndex(vecs *vectorSet, config *faissIndexConfig, w *FileWriter) ([
 		if err != nil {
 			return nil, err
 		}
-		// the number of centroids (nlist) for the IVF index.
-		nlist := determineCentroids(config.numVecs)
 		// calculate nprobe using a heuristic.
-		nprobe := calculateNprobe(nlist, config.optimizationType)
+		nprobe := calculateNprobe(config.nlist, config.optimizationType)
 		ivfIndex.setNProbe(nprobe)
-		// train the vector index, essentially performs k-means clustering to partition
-		// the data space of indexData such that during the search time, we probe
-		// only a subset of vectors -> non-exhaustive search. could be a time
-		// consuming step when the indexData is large.
-		err = ivfIndex.train(vecs)
-		if err != nil {
-			return nil, err
-		}
 	} else if sqIndex := index.castSQ(); sqIndex != nil {
-		err = sqIndex.train(vecs)
+		err = sqIndex.trainAndAdd(vecs, vecs)
 		if err != nil {
 			return nil, err
 		}
-	}
-	// add the vectors to the index using sequential vector IDs starting
-	// from 0 to N-1
-	err = index.add(vecs)
-	if err != nil {
-		return nil, err
+	} else {
+		err = index.add(vecs)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// serialize the merged index into a byte slice, and write it out
 	indexBytes, err := index.serialize()
@@ -790,7 +789,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 		}
 		// create the faiss float32 index for the vectors associated with this field and get the
 		// serialized index bytes to be written out to the segment.
-		config := newFaissIndexConfig(faissFP32Index, content.optimizedFor, content.dimension, metric, nvecs, determineCentroids(nvecs))
+		config := newFaissIndexConfig(faissFP32Index, content.optimizedFor, content.dimension, metric, nvecs, determineCentroids(nvecs), content.useGPU)
 		fIndexBytes, err := makeFaissIndex(vecSet, config, w)
 		if err != nil {
 			return err
@@ -866,7 +865,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 			// binarize the vector data in the vector set.
 			vecSet.binarize()
 			// bivf config
-			config := newFaissIndexConfig(faissBIVFIndex, content.optimizedFor, content.dimension, metric, nvecs, determineCentroids(nvecs))
+			config := newFaissIndexConfig(faissBIVFIndex, content.optimizedFor, content.dimension, metric, nvecs, determineCentroids(nvecs), false)
 			bIndexBytes, err := makeFaissIndex(vecSet, config, w)
 			if err != nil {
 				return err
@@ -890,7 +889,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 	return nil
 }
 
-func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, docNum uint32) {
+func (vo *vectorIndexOpaque) process(field index.VectorField, fieldName string, fieldID uint16, docNum uint32) {
 	if fieldID == math.MaxUint16 {
 		// doc processing checkpoint - no action needed
 		return
@@ -918,6 +917,7 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 				optimizedFor: indexOptimizedFor,
 				vectors:      make([]float32, 0, dim*numVectors),
 				vecDocIDs:    make([]uint32, 0, numVectors),
+				useGPU:       vo.fieldsOptions[fieldName].UseGPU(),
 			}
 			vo.fieldVectorIndex[fieldID] = content
 		}
@@ -958,6 +958,8 @@ type vectorIndexContent struct {
 	metric string
 	// optimizedFor is the optimization type for the index
 	optimizedFor string
+	// useGPU indicates whether the index should be created on the GPU
+	useGPU bool
 }
 
 // vectorIndexOpaque holds the internal state for vector index processing.
@@ -1021,9 +1023,10 @@ type faissIndexConfig struct {
 	numVecs          int
 	optimizationType string
 	nlist            int
+	useGPU           bool
 }
 
-func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimension, metricType, numVecs, nlist int) *faissIndexConfig {
+func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimension, metricType, numVecs, nlist int, useGPU bool) *faissIndexConfig {
 	return &faissIndexConfig{
 		indexType:        idxType,
 		dimension:        dimension,
@@ -1031,6 +1034,7 @@ func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimens
 		numVecs:          numVecs,
 		nlist:            nlist,
 		optimizationType: optimizationType,
+		useGPU:           useGPU,
 	}
 }
 
@@ -1042,6 +1046,11 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 		idx, err := faiss.IndexFactory(cfg.dimension, description, cfg.metricType)
 		if err != nil {
 			return nil, err
+		}
+		// we restrict GPU to IVF indexes only; flat and SQ indexes do not get a noticeable speedup
+		// when run on GPU, and the GPU overhead can actually make them slower than CPU.
+		if cfg.useGPU && idx.IsIVFIndex() {
+			return newFaissGPUFloat32Index(idx)
 		}
 		return newFaissFloat32Index(idx)
 	case faissBIVFIndex:

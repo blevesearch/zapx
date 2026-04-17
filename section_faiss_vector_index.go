@@ -753,7 +753,7 @@ func determineFloat32IndexToUse(nvecs, nlist int, optimizationType string) strin
 		return "SQ8"
 	case index.IndexOptimizedForMemoryEfficient:
 		return fmt.Sprintf("IVF%d,SQ4", nlist)
-	case index.IndexOptimizedWithRaBitQ:
+	case index.IndexIVFRaBitQ:
 		return fmt.Sprintf("IVF%d,RaBitQ", nlist)
 	default:
 		switch {

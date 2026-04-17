@@ -35,7 +35,7 @@ type requestBatcher struct {
 	cq *coalesceQueue
 }
 
-func newRequestBatcher(idx faissIndexBatch) *requestBatcher {
+func newRequestBatcher(idx faissQueryBatch) *requestBatcher {
 	b := &requestBatcher{
 		cq: newCoalesceQueue(idx),
 	}
@@ -181,7 +181,7 @@ func (m *batchManager) putBatch(batch []*batchRequest) {
 //   - Once the flusher completes, the coalesce goroutine hands off any accumulated requests right away.
 type coalesceQueue struct {
 	// the Faiss index that this coalesce queue will execute search requests against.
-	idx faissIndexBatch
+	idx faissQueryBatch
 	// channel for enqueuing new batch requests into the queue.
 	enqueueCh chan *batchRequest
 	// channel for handing off coalesced batches to the flusher goroutine for execution.
@@ -199,7 +199,7 @@ type coalesceQueue struct {
 	batchManager *batchManager
 }
 
-func newCoalesceQueue(idx faissIndexBatch) *coalesceQueue {
+func newCoalesceQueue(idx faissQueryBatch) *coalesceQueue {
 	q := &coalesceQueue{
 		idx:           idx,
 		enqueueCh:     make(chan *batchRequest),

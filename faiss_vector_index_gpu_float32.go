@@ -168,9 +168,9 @@ func (f *faissGPUFloat32Index) size() uint64 {
 	return f.cpuIdx.Size()
 }
 
-// isInGPU reports if the index is currently running on the GPU.
+// inGPURam reports if the index is currently running on the GPU.
 // returns false if the async clone is not yet done or the clone fails.
-func (f *faissGPUFloat32Index) isInGPU() bool {
+func (f *faissGPUFloat32Index) inGPURam() bool {
 	return f.gpu.Load() != nil
 }
 

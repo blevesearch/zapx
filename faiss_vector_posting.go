@@ -354,7 +354,7 @@ func (sb *SegmentBase) UpdateGPUFieldStats(stats segment.FieldStats) {
 		if !ok {
 			continue
 		}
-		if gpuIdx.isInGPU() {
+		if gpuIdx.inGPURam() {
 			stats.Store("num_gpu_segments_in_gpu_memory", fieldName, 1)
 		} else {
 			stats.Store("num_gpu_segments_in_cpu_memory", fieldName, 1)

@@ -228,6 +228,17 @@ func (vc *vectorIndexCache) decRef(fieldID uint16) {
 	vc.m.RUnlock()
 }
 
+// getEntry returns the cache entry for the given fieldID, or nil if the field
+// is not currently cached (i.e. has never been queried or has been evicted).
+func (vc *vectorIndexCache) getEntry(fieldID uint16) *cacheEntry {
+	vc.m.RLock()
+	defer vc.m.RUnlock()
+	if vc.isClosed {
+		return nil
+	}
+	return vc.cache[fieldID]
+}
+
 func (vc *vectorIndexCache) cleanup() bool {
 	vc.m.Lock()
 	cache := vc.cache

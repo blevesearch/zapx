@@ -334,3 +334,22 @@ func (sb *SegmentBase) UpdateFieldStats(stats segment.FieldStats) {
 		stats.Store("num_vectors", fieldName, numVecs)
 	}
 }
+
+func (sb *SegmentBase) UpdateVectorFieldStats(stats segment.FieldStats) {
+	if sb.vecIndexCache == nil {
+		return
+	}
+	for _, fieldName := range sb.fieldsInv {
+		pos := int(sb.fieldsSectionsMap[sb.fieldsMap[fieldName]-1][SectionFaissVectorIndex])
+		if pos == 0 {
+			continue
+		}
+		fieldID := sb.fieldsMap[fieldName] - 1
+		switch sb.vecIndexCache.indexLocation(fieldID) {
+		case vectorIndexInGPU:
+			stats.Store("num_vector_indexes_in_gpu", fieldName, 1)
+		case vectorIndexInCPU:
+			stats.Store("num_vector_indexes_in_cpu", fieldName, 1)
+		}
+	}
+}

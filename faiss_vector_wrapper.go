@@ -331,13 +331,13 @@ func (v *vectorIndexWrapper) docSearch(k int64, numDocs uint64,
 		}
 		// process the retrieved ids and scores, getting the corresponding docIDs
 		// for each vector id retrieved, and storing the best score for each unique docID
-		// the moment we see a -1 for a vector id, we stop processing further since
-		// it indicates there are no more vectors to be retrieved and break out of the loop
-		// by setting the exhausted flag
 		for i, vecID := range labels {
+			// a vecID of -1 indicates that all valid vectors in the index have been exhausted,
+			// so we set the flag to prevent further iterations. However, the current iteration
+			// may still contain valid results, so we process them before stopping.
 			if vecID == -1 {
 				exhausted = true
-				break
+				continue
 			}
 			docID, exists := v.getDocIDForVectorID(vecID)
 			if !exists {

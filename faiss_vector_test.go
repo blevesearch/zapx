@@ -156,6 +156,18 @@ func newStubFieldVec(name string, vector []float32, d int, metric string, fieldO
 	}
 }
 
+func newStubFieldVecWithOptimization(name string, vector []float32, d int, metric string, fieldOptions index.FieldIndexingOptions, optimizeFor string) index.Field {
+	return &stubVecField{
+		name:        name,
+		value:       vector,
+		dims:        d,
+		similarity:  metric,
+		encodedType: 'v',
+		options:     fieldOptions,
+		optimizeFor: optimizeFor,
+	}
+}
+
 var stubVecData = [][]float32{
 	{1.0, 2.0, 3.0},
 	{12.0, 42.6, 78.65},
@@ -802,4 +814,76 @@ func TestValidVectorMerge(t *testing.T) {
 	defer func() {
 		_ = os.RemoveAll(mergedSegPath1)
 	}()
+}
+
+func TestIndexExhaustion(t *testing.T) {
+	for optim := range index.SupportedVectorIndexOptimizations {
+		t.Run(optim, func(t *testing.T) {
+			// Use 8-dimensional vectors (must be multiple of 8 for binary index)
+			dims := 8
+			numDocs := 5
+			var docs []index.Document
+			for i := 0; i < numDocs; i++ {
+				vec := make([]float32, dims)
+				for j := 0; j < dims; j++ {
+					vec[j] = float32(i*dims + j)
+				}
+				docs = append(docs, newVecStubDocument(string(rune('a'+i)), []index.Field{
+					newStubFieldSplitString("_id", nil, string(rune('a'+i)), true, false, false),
+					newStubFieldVecWithOptimization("vec", vec, dims, index.CosineSimilarity, index.IndexField, optim),
+				}))
+			}
+			vecSegPlugin := &ZapPlugin{}
+			seg, _, err := vecSegPlugin.New(docs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := "./test-seg-exhaustion-" + optim
+			if unPersistedSeg, ok := seg.(segment.UnpersistedSegment); ok {
+				err = unPersistedSeg.Persist(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			segOnDisk, err := vecSegPlugin.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				cerr := segOnDisk.Close()
+				if cerr != nil {
+					t.Fatalf("error closing segment: %v", cerr)
+				}
+				_ = os.RemoveAll(path)
+			}()
+			if vecSeg, ok := segOnDisk.(segment.VectorSegment); ok {
+				vecIndex, err := vecSeg.InterpretVectorIndex("vec", nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer vecIndex.Close()
+				queryVec := make([]float32, dims)
+				pl, err := vecIndex.Search(queryVec, int64(numDocs*2), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				itr := pl.Iterator(nil)
+				resultCount := 0
+				for {
+					next, err := itr.Next()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if next == nil {
+						break
+					}
+					resultCount++
+				}
+				if resultCount != numDocs {
+					t.Fatalf("expected %d results, got %d", numDocs, resultCount)
+				}
+			}
+		})
+	}
 }

@@ -107,6 +107,12 @@ type faissIndexSQ interface {
 	trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error
 }
 
+// faissIndexGPU is implemented by any index type that can reside in GPU memory.
+type faissIndexGPU interface {
+	// inGPURam reports whether the index is currently loaded in GPU memory.
+	inGPURam() bool
+}
+
 // Interface for batched search operations on Faiss vector indices.
 type faissQueryBatch interface {
 	// performs a batch search on the index using the provided query vector and parameters,

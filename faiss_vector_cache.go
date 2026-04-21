@@ -228,6 +228,32 @@ func (vc *vectorIndexCache) decRef(fieldID uint16) {
 	vc.m.RUnlock()
 }
 
+// vectorIndexLocation describes where a cached vector index currently resides.
+type vectorIndexLocation uint8
+
+const (
+	vectorIndexNotCached vectorIndexLocation = iota // not present in the cache
+	vectorIndexInCPU                                // loaded in CPU memory
+	vectorIndexInGPU                                // loaded in GPU memory
+)
+
+// indexLocation reports where the vector index for fieldID currently resides.
+func (vc *vectorIndexCache) indexLocation(fieldID uint16) vectorIndexLocation {
+	vc.m.RLock()
+	defer vc.m.RUnlock()
+	if vc.isClosed {
+		return vectorIndexNotCached
+	}
+	entry, ok := vc.cache[fieldID]
+	if !ok {
+		return vectorIndexNotCached
+	}
+	if gpuIdx, ok := entry.index.(faissIndexGPU); ok && gpuIdx.inGPURam() {
+		return vectorIndexInGPU
+	}
+	return vectorIndexInCPU
+}
+
 func (vc *vectorIndexCache) cleanup() bool {
 	vc.m.Lock()
 	cache := vc.cache

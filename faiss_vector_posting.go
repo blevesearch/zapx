@@ -335,7 +335,7 @@ func (sb *SegmentBase) UpdateFieldStats(stats segment.FieldStats) {
 	}
 }
 
-func (sb *SegmentBase) UpdateGPUFieldStats(stats segment.FieldStats) {
+func (sb *SegmentBase) UpdateVectorFieldStats(stats segment.FieldStats) {
 	if sb.vecIndexCache == nil {
 		return
 	}
@@ -350,14 +350,13 @@ func (sb *SegmentBase) UpdateGPUFieldStats(stats segment.FieldStats) {
 			// not in cache — not actively in use, skip
 			continue
 		}
-		gpuIdx, ok := entry.index.(*faissGPUFloat32Index)
-		if !ok {
-			continue
-		}
-		if gpuIdx.inGPURam() {
-			stats.Store("num_gpu_segments_in_gpu_memory", fieldName, 1)
+
+		// if its a gpu index and in gpu ram: increment gpu counter
+		// if its a cpu index or a gpu index served from cpu: increment cpu counter
+		if gpuIdx, ok := entry.index.(*faissGPUFloat32Index); ok && gpuIdx.inGPURam() {
+			stats.Store("num_vector_indexes_in_gpu", fieldName, 1) 
 		} else {
-			stats.Store("num_gpu_segments_in_cpu_memory", fieldName, 1)
+			stats.Store("num_vector_indexes_in_cpu", fieldName, 1)
 		}
 	}
 }

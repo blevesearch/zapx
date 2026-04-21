@@ -345,17 +345,10 @@ func (sb *SegmentBase) UpdateVectorFieldStats(stats segment.FieldStats) {
 			continue
 		}
 		fieldID := sb.fieldsMap[fieldName] - 1
-		entry := sb.vecIndexCache.getEntry(fieldID)
-		if entry == nil {
-			// not in cache — not actively in use, skip
-			continue
-		}
-
-		// if its a gpu index and in gpu ram: increment gpu counter
-		// if its a cpu index or a gpu index served from cpu: increment cpu counter
-		if gpuIdx, ok := entry.index.(*faissGPUFloat32Index); ok && gpuIdx.inGPURam() {
-			stats.Store("num_vector_indexes_in_gpu", fieldName, 1) 
-		} else {
+		switch sb.vecIndexCache.indexLocation(fieldID) {
+		case vectorIndexInGPU:
+			stats.Store("num_vector_indexes_in_gpu", fieldName, 1)
+		case vectorIndexInCPU:
 			stats.Store("num_vector_indexes_in_cpu", fieldName, 1)
 		}
 	}

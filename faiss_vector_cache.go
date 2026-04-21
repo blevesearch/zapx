@@ -228,15 +228,29 @@ func (vc *vectorIndexCache) decRef(fieldID uint16) {
 	vc.m.RUnlock()
 }
 
-// getEntry returns the cache entry for the given fieldID, or nil if the field
-// is not currently cached (i.e. has never been queried or has been evicted).
-func (vc *vectorIndexCache) getEntry(fieldID uint16) *cacheEntry {
+type vectorIndexLocation uint8
+
+const (
+	vectorIndexNotCached vectorIndexLocation = iota
+	vectorIndexInCPU
+	vectorIndexInGPU
+)
+
+// indexLocation reports where the vector index for fieldID currently resides.
+func (vc *vectorIndexCache) indexLocation(fieldID uint16) vectorIndexLocation {
 	vc.m.RLock()
 	defer vc.m.RUnlock()
 	if vc.isClosed {
-		return nil
+		return vectorIndexNotCached
 	}
-	return vc.cache[fieldID]
+	entry, ok := vc.cache[fieldID]
+	if !ok {
+		return vectorIndexNotCached
+	}
+	if gpuIdx, ok := entry.index.(*faissGPUFloat32Index); ok && gpuIdx.inGPURam() {
+		return vectorIndexInGPU
+	}
+	return vectorIndexInCPU
 }
 
 func (vc *vectorIndexCache) cleanup() bool {

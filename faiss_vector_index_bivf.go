@@ -18,6 +18,7 @@
 package zap
 
 import (
+	"encoding/binary"
 	"encoding/json"
 
 	faiss "github.com/blevesearch/go-faiss"
@@ -33,7 +34,7 @@ type faissBinaryIndex struct {
 
 func newFaissBinaryIndex(binary *faiss.BinaryIndexImpl, backing *faiss.IndexImpl) (index faissIndex, err error) {
 	// the binary index cannot be nil, but the backing index can be nil, depending on the use case.
-	if binary == nil {
+	if binary == nil || backing == nil {
 		return nil, errNilIndex
 	}
 	return &faissBinaryIndex{
@@ -43,15 +44,17 @@ func newFaissBinaryIndex(binary *faiss.BinaryIndexImpl, backing *faiss.IndexImpl
 }
 
 func (b *faissBinaryIndex) add(vecs *vectorSet) error {
-	// add the binaryData from the vectorSet to the binary index
+	// add float data to backing index and the binary data to binary index
+	err := b.backing.Add(vecs.floatData)
+	if err != nil {
+		return err
+	}
 	return b.binary.Add(vecs.binaryData)
 }
 
 func (b *faissBinaryIndex) close() {
 	b.binary.Close()
-	if b.backing != nil {
-		b.backing.Close()
-	}
+	b.backing.Close()
 }
 
 func (b *faissBinaryIndex) dim() int {
@@ -59,10 +62,7 @@ func (b *faissBinaryIndex) dim() int {
 }
 
 func (b *faissBinaryIndex) metricType() int {
-	if b.backing != nil {
-		return b.backing.MetricType()
-	}
-	return b.binary.MetricType()
+	return b.backing.MetricType()
 }
 
 func (b *faissBinaryIndex) ntotal() int64 {
@@ -70,8 +70,8 @@ func (b *faissBinaryIndex) ntotal() int64 {
 }
 
 func (b *faissBinaryIndex) reconstructBatch(vecIDs []int64, prealloc []float32) ([]float32, error) {
-	// binary indexes do not support reconstruction
-	return nil, errNotSupported
+	// reconstruct vectors from backing index
+	return b.backing.ReconstructBatch(vecIDs, prealloc)
 }
 
 func (b *faissBinaryIndex) search(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
@@ -85,36 +85,59 @@ func (b *faissBinaryIndex) search(qVector *vectorSet, k int64, selector faiss.Se
 	if err != nil {
 		return nil, nil, err
 	}
-	var scores []float32
-	var labels []int64
-	// if we have a backing index for re-ranking, compute the distances/scores for the
+
+	// use backing index for re-ranking, compute the distances/scores for the
 	// retrieved binary IDs and then get the top K results based on those distances/scores.
-	if b.backing != nil {
-		distances, err := b.backing.DistCompute(qVector.floatData, binIDs)
-		if err != nil {
-			return nil, nil, err
-		}
-		// quick select algorithm for inplace partial sorting to get top K results
-		// based on distances/scores
-		scores, labels = topNIDsByDistance(distances, binIDs, int(k))
-	} else {
-		// if we don't have a backing index for re-ranking, we return error since we cannot return meaningful
-		// scores without a backing index to compute distances/scores for the retrieved binary IDs.
-		return nil, nil, errNotSupported
+	distances, err := b.backing.DistCompute(qVector.floatData, binIDs)
+	if err != nil {
+		return nil, nil, err
 	}
+	// quick select algorithm for inplace partial sorting to get top K results
+	// based on distances/scores
+	scores, labels := topNIDsByDistance(distances, binIDs, int(k))
 	return scores, labels, nil
 }
 
-func (b *faissBinaryIndex) serialize() ([]byte, error) {
-	return faiss.WriteBinaryIndexIntoBuffer(b.binary)
+func (b *faissBinaryIndex) write(buf []byte, w *FileWriter) error {
+	backingBytes, err := faiss.WriteIndexIntoBuffer(b.backing)
+	if err != nil {
+		return err
+	}
+
+	// write the length of the serialized vector index bytes
+	n := binary.PutUvarint(buf, uint64(len(backingBytes)))
+	_, err = w.Write(buf[:n])
+	if err != nil {
+		return err
+	}
+
+	backingBytes = w.process(backingBytes)
+	_, err = w.Write(backingBytes)
+	if err != nil {
+		return err
+	}
+
+	binaryBytes, err := faiss.WriteBinaryIndexIntoBuffer(b.binary)
+	if err != nil {
+		return err
+	}
+	// write the length of the serialized vector index bytes
+	n = binary.PutUvarint(buf, uint64(len(binaryBytes)))
+	_, err = w.Write(buf[:n])
+	if err != nil {
+		return err
+	}
+
+	binaryBytes = w.process(binaryBytes)
+	_, err = w.Write(binaryBytes)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (b *faissBinaryIndex) size() uint64 {
-	sizeInBytes := b.binary.Size()
-	if b.backing != nil {
-		sizeInBytes += b.backing.Size()
-	}
-	return sizeInBytes
+	return b.binary.Size() + b.backing.Size()
 }
 
 // -----------------------------------------------------------------
@@ -192,24 +215,17 @@ func (b *faissBinaryIndex) searchClusters(eligibleCentroidIDs []int64, centroidD
 	if err != nil {
 		return nil, nil, err
 	}
-	var scores []float32
-	var labels []int64
-	// if we have a backing index for re-ranking, compute the distances/scores for the
+
+	// use backing index for re-ranking, compute the distances/scores for the
 	// retrieved binary IDs and then get the top K results based on those distances/scores.
-	if b.backing != nil {
-		// reranking is still necessary since hamming distance has a lot of collisions
-		distances, err := b.backing.DistCompute(qVector.floatData, binIDs)
-		if err != nil {
-			return nil, nil, err
-		}
-		// quick select algorithm for inplace partial sorting to get top K results
-		// based on distances/scores
-		scores, labels = topNIDsByDistance(distances, binIDs, int(k))
-	} else {
-		// if we don't have a backing index for re-ranking, we return error since we cannot return meaningful
-		// scores without a backing index to compute distances/scores for the retrieved binary IDs.
-		return nil, nil, errNotSupported
+	// reranking is still necessary since hamming distance has a lot of collisions
+	distances, err := b.backing.DistCompute(qVector.floatData, binIDs)
+	if err != nil {
+		return nil, nil, err
 	}
+	// quick select algorithm for inplace partial sorting to get top K results
+	// based on distances/scores
+	scores, labels := topNIDsByDistance(distances, binIDs, int(k))
 	return scores, labels, nil
 }
 
@@ -222,15 +238,24 @@ func (b *faissBinaryIndex) setNProbe(nprobe int32) {
 }
 
 func (b *faissBinaryIndex) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
-	err := b.binary.Train(trainingData.binaryData)
+	// train the backing index with the floatData
+	var err error
+	if b.backing != nil && b.backing.IsSQIndex() {
+		err = b.backing.Train(trainingData.floatData)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = b.binary.Train(trainingData.binaryData)
 	if err != nil {
 		return err
 	}
 	return b.add(vecsToAdd)
 }
 
-func (b *faissBinaryIndex) setQuantizers(centroidIndex faissIndexIVF) error {
-	// not supported for binary indexes, return error
+func (b *faissBinaryIndex) setQuantizers(trainedIndex faissIndexIVF) error {
+	// not supported for binary indexes, returns error
 	return errNotSupported
 }
 

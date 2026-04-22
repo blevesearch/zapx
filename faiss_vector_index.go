@@ -46,9 +46,9 @@ type faissIndex interface {
 	// performs a search on the index using the provided query vector and and retrieves the top K nearest neighbors.
 	// Optional search constraints can be applied using the selector and additional search parameters.
 	search(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error)
-	// serializes the index into a byte slice,
-	// which can be stored or transmitted.
-	serialize() ([]byte, error)
+	// write out the index content into the provide fileWriter using a reusable buffer
+	// returns any error encountered during the write process.
+	write(buf []byte, w *FileWriter) error
 	// returns the size of the index in bytes.
 	size() uint64
 	// -----------------------------------------------------------------

@@ -33,7 +33,7 @@ type faissBinaryIndex struct {
 }
 
 func newFaissBinaryIndex(binary *faiss.BinaryIndexImpl, backing *faiss.IndexImpl) (index faissIndex, err error) {
-	// the binary index cannot be nil, but the backing index can be nil, depending on the use case.
+	// we always create this object only with valid backing and binary indexes
 	if binary == nil || backing == nil {
 		return nil, errNilIndex
 	}

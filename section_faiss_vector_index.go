@@ -359,7 +359,9 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex faissIndexIVF, dims, 
 		vecCount := len(vecIndexes[i].vecIds)
 		if vecCount == 0 {
 			continue
-		} else if vecIndexes[i].indexOptimizedFor == index.IndexIVFRaBitQ || vecCount >= ivfSq8Threshold {
+		} else if (vecIndexes[i].indexOptimizedFor == index.IndexIVFRaBitQ &&
+			vecIndexes[i].index.castIVF() != nil) ||
+			vecCount >= ivfSq8Threshold {
 			// merging only the large indexes (IVFSQ8 family)
 			// all IVF<same class> indexes are eligible for merging
 			//
@@ -558,7 +560,10 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 	// fast merge only applicable for:
 	// - IVFSQ8 indexes beyond a certain size threshold.
 	// - the centroid index is available.
-	if nvecs >= ivfSq8Threshold && centroidIndex != nil && indexType == faissFP32Index {
+	// - RabitQ optimization
+	if centroidIndex != nil &&
+		(indexOptimizedFor == index.IndexIVFRaBitQ ||
+			(nvecs >= ivfSq8Threshold && indexType == faissFP32Index)) {
 		err := v.fastMergeIndexes(centroidIndex, dims, metric, indexType, indexOptimizedFor, vecIndexes, w, closeCh)
 		if err != nil {
 			return err

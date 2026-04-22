@@ -240,7 +240,7 @@ func (b *faissBinaryIndex) setNProbe(nprobe int32) {
 func (b *faissBinaryIndex) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
 	// train the backing index with the floatData
 	var err error
-	if b.backing != nil && b.backing.IsSQIndex() {
+	if b.backing.IsSQIndex() {
 		err = b.backing.Train(trainingData.floatData)
 		if err != nil {
 			return err

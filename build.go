@@ -21,6 +21,7 @@ import (
 	"math"
 	"os"
 
+	"github.com/RoaringBitmap/roaring/v2"
 	index "github.com/blevesearch/bleve_index_api"
 )
 
@@ -46,6 +47,20 @@ func (sb *SegmentBase) WriteTo(w io.Writer) (int64, error) {
 
 // PersistSegmentBase persists SegmentBase in the zap file format.
 func PersistSegmentBase(sb *SegmentBase, path string) error {
+	// since in-memory data is not processed by any writer callback,
+	// check with the latest writer to see if data needs to be processed
+	writer, err := NewFileWriter(nil, []byte(path))
+	if err != nil {
+		return err
+	}
+	if writer.id != sb.fileReader.id {
+		// rewrite the segment base with the latest writer callback
+		err = rewriteSegmentBase(sb, path)
+		if err != nil {
+			return err
+		}
+	}
+
 	flag := os.O_RDWR | os.O_CREATE
 
 	f, err := os.OpenFile(path, flag, 0600)
@@ -77,6 +92,19 @@ func PersistSegmentBase(sb *SegmentBase, path string) error {
 	}
 
 	return err
+}
+
+// rewrites the segment base with the latest writer callback by leveraging
+// the merge path
+func rewriteSegmentBase(sb *SegmentBase, path string) error {
+	closeCh := make(chan struct{})
+	defer close(closeCh)
+	_, _, err := mergeSegmentBases([]*SegmentBase{sb}, []*roaring.Bitmap{nil},
+		path, DefaultChunkMode, closeCh, nil, nil)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 type bufWriter struct {

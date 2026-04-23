@@ -286,6 +286,7 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *FileWriter,
 	vecToDocID []uint64, indexes []*vecIndexInfo) error {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 	fieldStart := w.Count()
+
 	// marking the fact that for vector index, doc values are not valid by
 	// storing fieldNotUninverted values.
 	n := binary.PutUvarint(tempBuf, fieldNotUninverted)
@@ -298,6 +299,7 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *FileWriter,
 	if err != nil {
 		return err
 	}
+
 	// write the index optimization type
 	n = binary.PutUvarint(tempBuf, uint64(index.SupportedVectorIndexOptimizations[indexes[0].indexOptimizedFor]))
 	_, err = w.Write(tempBuf[:n])
@@ -310,6 +312,7 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *FileWriter,
 	if err != nil {
 		return err
 	}
+
 	buf := make([]byte, binary.MaxVarintLen64*len(vecToDocID))
 	bufPos := 0
 	for _, docID := range vecToDocID {
@@ -329,6 +332,7 @@ func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *FileWriter,
 	if err != nil {
 		return err
 	}
+
 	// record the fieldStart value for this section.
 	v.fieldAddrs[uint16(fieldID)] = fieldStart
 	return nil
@@ -378,6 +382,7 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex faissIndexIVF, dims, 
 		}
 		nvecs += vecCount
 	}
+
 	nprobe, nlist := centroidIndex.ivfParams()
 	// set a custom nlist value in the config for the merged index,
 	//  which is same as the centroid index's nlist.
@@ -388,6 +393,7 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex faissIndexIVF, dims, 
 		return err
 	}
 	defer faissIndex.close()
+
 	// cast to IVF index to be able to set the quantizer for the fast merge
 	ivfIdx := faissIndex.castIVF()
 	if ivfIdx == nil {
@@ -400,9 +406,6 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex faissIndexIVF, dims, 
 	// setting the same nprobe value in the merged index as the centroid
 	// index to ensure that we probe the same number of clusters
 	ivfIdx.setNProbe(int32(nprobe))
-	// reconstruction will be needed for the smaller indexes that are not
-	// eligible for fast merge, so we prepare a buffer for that.
-	reconsVecs := make([]float32, 0, reconsCap)
 	// The centroid index will be an IVFSQ8 index - but with no vectors in it.
 	// The coarse quantizer of that index will be cloned over here
 	err = ivfIdx.setQuantizers(centroidIndex)
@@ -410,6 +413,9 @@ func (v *vectorIndexOpaque) fastMergeIndexes(centroidIndex faissIndexIVF, dims, 
 		return err
 	}
 
+	// reconstruction will be needed for the smaller indexes that are not
+	// eligible for fast merge, so we prepare a buffer for that.
+	reconsVecs := make([]float32, 0, reconsCap)
 	for i := 0; i < len(vecIndexes); i++ {
 		if isClosed(closeCh) {
 			return seg.ErrClosed
@@ -466,6 +472,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 	var indexOptimizedFor string
 	var indexType faissIndexType
 	var validMerge bool
+
 	for segI, segBase := range sbs {
 		// Considering merge operations on vector indexes are expensive, it is
 		// worth including an early exit if the merge is aborted, saving us
@@ -481,6 +488,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 		if currNumVecs == 0 {
 			continue
 		}
+
 		// read the serialized index bytes
 		indexBytes, err := segBase.fileReader.process(segBase.mem[currVecIndex.startOffset : currVecIndex.startOffset+int(currVecIndex.indexSize)])
 		if err != nil {
@@ -497,6 +505,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 			freeReconstructedIndexes(vecIndexes)
 			return err
 		}
+
 		// set the dims and metric values from the constructed index.
 		dims = faissIndex.D()
 		// at least one valid index to be merged, mark the merge as valid.
@@ -510,6 +519,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 			reconsCap = indexReconsLen
 		}
 		indexDataCap += indexReconsLen
+
 		// track the reconstruct index for this vector index, which will be used
 		// to reconstruct the vectors corresponding to the valid vector IDs for this index.
 		fIndex, err := newFaissFloat32Index(faissIndex)
@@ -536,7 +546,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 				freeReconstructedIndexes(vecIndexes)
 				return err
 			}
-
 			vecIndexes[segI].index, err = newFaissBinaryIndex(binaryIndex, faissIndex)
 			if err != nil {
 				freeReconstructedIndexes(vecIndexes)
@@ -545,6 +554,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 		}
 		nvecs += currNumVecs
 	}
+
 	// not a valid merge operation as there are no valid indexes to merge.
 	if !validMerge {
 		return nil
@@ -556,6 +566,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 		freeReconstructedIndexes(vecIndexes)
 		return nil
 	}
+
 	// Fast Merge Path:
 	// fast merge only applicable for:
 	// - IVFSQ8 indexes beyond a certain size threshold.
@@ -572,6 +583,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 		freeReconstructedIndexes(vecIndexes)
 		return nil
 	}
+
 	// Reconstruct Merge Path:
 	// merging of indexes with reconstruction method.
 	// the vecIds in each index contain only the valid vectors,
@@ -600,6 +612,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 			indexData = append(indexData, recons...)
 		}
 	}
+
 	// freeing the reconstructed indexes immediately - waiting till the end
 	// to do the same is not needed because the following operations don't need
 	// the reconstructed ones anymore and doing so will hold up memory which can
@@ -612,14 +625,12 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(centroidIndex faissIndexI
 	if err != nil {
 		return err
 	}
-	err = v.writeFaissIndex(vecSet, config, w)
-	if err != nil {
-		return err
-	}
-	return err
+
+	return v.writeFaissIndex(vecSet, config, w)
 }
 
-// returns the serialized faiss index for the given vector data and index config.
+// constructs a faiss on the vectors according to the provided config and writes it out
+// the given writer
 func (v *vectorIndexOpaque) writeFaissIndex(vecs *vectorSet, config *faissIndexConfig, w *FileWriter) error {
 	// create the faiss index based on the provided description string, and the metric type.
 	index, err := faissIndexFactory(config)
@@ -781,11 +792,13 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 			// use the same FAISS metric for inner product and cosine similarity
 			metric = faiss.MetricInnerProduct
 		}
+
 		// create a vector set wrapping the vector data
 		vecSet, err := newVectorSet(content.dimension, content.vectors)
 		if err != nil {
 			return err
 		}
+
 		// record the fieldStart value for this section.
 		fieldStart := w.Count()
 		// writing out two offset values to indicate that the current field's
@@ -800,6 +813,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 		if err != nil {
 			return err
 		}
+
 		// write the index optimization type
 		n = binary.PutUvarint(tempBuf, uint64(index.SupportedVectorIndexOptimizations[content.optimizedFor]))
 		_, err = w.Write(tempBuf[:n])
@@ -812,6 +826,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 		if err != nil {
 			return err
 		}
+
 		buf := make([]byte, binary.MaxVarintLen64*len(content.vecDocIDs))
 		bufPos := 0
 		for _, docID := range content.vecDocIDs {
@@ -831,16 +846,17 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 		if err != nil {
 			return err
 		}
-		// determine the type of vector index to be created based on the index optimization
-		indexType := determineIndexTypeFromOptimization(content.optimizedFor)
 
-		// create the faiss float32 index for the vectors associated with this field and get the
-		// serialized index bytes to be written out to the segment.
+		// determine the type of vector index to be created based on the index optimization
+		// and create the faiss index for the vectors associated with this field and
+		// write out the index into the segment writer.
+		indexType := determineIndexTypeFromOptimization(content.optimizedFor)
 		config := newFaissIndexConfig(indexType, content.optimizedFor, content.dimension, metric, nvecs, determineCentroids(nvecs), false)
 		err = vo.writeFaissIndex(vecSet, config, w)
 		if err != nil {
 			return err
 		}
+
 		// accounts for whatever data has been written out to the writer.
 		vo.incrementBytesWritten(uint64(w.Count() - fieldStart))
 		vo.fieldAddrs[fieldID] = fieldStart

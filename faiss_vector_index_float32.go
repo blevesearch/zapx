@@ -73,6 +73,7 @@ func (f *faissFloat32Index) write(buf []byte, w *FileWriter) error {
 	if err != nil {
 		return err
 	}
+	idxBytes = w.process(idxBytes)
 
 	// write the length of the serialized vector index bytes
 	n := binary.PutUvarint(buf, uint64(len(idxBytes)))
@@ -81,7 +82,6 @@ func (f *faissFloat32Index) write(buf []byte, w *FileWriter) error {
 		return err
 	}
 
-	idxBytes = w.process(idxBytes)
 	_, err = w.Write(idxBytes)
 	if err != nil {
 		return err

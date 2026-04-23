@@ -103,6 +103,7 @@ func (b *faissBinaryIndex) write(buf []byte, w *FileWriter) error {
 	if err != nil {
 		return err
 	}
+	backingBytes = w.process(backingBytes)
 
 	// write the length of the serialized vector index bytes
 	n := binary.PutUvarint(buf, uint64(len(backingBytes)))
@@ -111,7 +112,6 @@ func (b *faissBinaryIndex) write(buf []byte, w *FileWriter) error {
 		return err
 	}
 
-	backingBytes = w.process(backingBytes)
 	_, err = w.Write(backingBytes)
 	if err != nil {
 		return err
@@ -121,6 +121,8 @@ func (b *faissBinaryIndex) write(buf []byte, w *FileWriter) error {
 	if err != nil {
 		return err
 	}
+	binaryBytes = w.process(binaryBytes)
+
 	// write the length of the serialized vector index bytes
 	n = binary.PutUvarint(buf, uint64(len(binaryBytes)))
 	_, err = w.Write(buf[:n])
@@ -128,7 +130,6 @@ func (b *faissBinaryIndex) write(buf []byte, w *FileWriter) error {
 		return err
 	}
 
-	binaryBytes = w.process(binaryBytes)
 	_, err = w.Write(binaryBytes)
 	if err != nil {
 		return err

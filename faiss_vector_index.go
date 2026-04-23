@@ -96,14 +96,6 @@ type faissIndexIVF interface {
 	mergeFrom(other faissIndex, offset int64) error
 }
 
-// Interface for SQ-specific operations on Faiss vector indices.
-type faissIndexSQ interface {
-	// trains the SQ index on the provided training data and adds the vectors to
-	// the trained index. The training step performs quantization of the vector space,
-	// which enables efficient storage and search of high-dimensional vectors.
-	trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error
-}
-
 // faissIndexGPU is implemented by any index type that can reside in GPU memory.
 type faissIndexGPU interface {
 	// inGPURam reports whether the index is currently loaded in GPU memory.

@@ -57,9 +57,6 @@ type faissIndex interface {
 	// returns the underlying IVF index if this is an IVF index,
 	// and a boolean indicating whether the cast was successful.
 	castIVF() faissIndexIVF
-	// returns the underlying SQ index if this is an SQ index,
-	// and a boolean indicating whether the cast was successful.
-	castSQ() faissIndexSQ
 }
 
 // Interface for IVF-specific operations on Faiss vector indices.

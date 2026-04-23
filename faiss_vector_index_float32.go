@@ -106,16 +106,6 @@ func (f *faissFloat32Index) castIVF() faissIndexIVF {
 	return nil
 }
 
-func (f *faissFloat32Index) castSQ() faissIndexSQ {
-	if f.idx.IsSQIndex() {
-		// return f itself, as the SQ interface is implemented by the same
-		// struct as the non-SQ interface in go-faiss.
-		return f
-	}
-	// not an SQ index, return nil.
-	return nil
-}
-
 // -----------------------------------------------------------------
 // IVF-Index specific operations
 // -----------------------------------------------------------------

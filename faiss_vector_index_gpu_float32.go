@@ -202,13 +202,6 @@ func (f *faissGPUFloat32Index) castIVF() faissIndexIVF {
 	return nil
 }
 
-func (f *faissGPUFloat32Index) castSQ() faissIndexSQ {
-	if f.cpuIdx.IsSQIndex() {
-		return f
-	}
-	return nil
-}
-
 // -----------------------------------------------------------------
 // IVF-Index specific operations (delegate to CPU index)
 // -----------------------------------------------------------------

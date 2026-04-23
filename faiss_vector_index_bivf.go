@@ -153,11 +153,6 @@ func (b *faissBinaryIndex) castIVF() faissIndexIVF {
 	return nil
 }
 
-// Binary indexes don't support SQ, so this always returns nil.
-func (b *faissBinaryIndex) castSQ() faissIndexSQ {
-	return nil
-}
-
 // -----------------------------------------------------------------
 // IVF-Index specific operations
 // -----------------------------------------------------------------

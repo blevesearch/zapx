@@ -254,7 +254,7 @@ func (b *faissBinaryIndex) setQuantizers(trainedIndex faissIndexIVF) error {
 	if idx, ok := trainedIndex.(*faissBinaryIndex); ok {
 		// set quantizers for the binary and the backing index if its an SQ8 index
 		var err error
-		if idx.backing != nil && idx.backing.IsSQIndex() {
+		if idx.backing.IsSQIndex() {
 			err = b.backing.SetQuantizers(idx.backing)
 			if err != nil {
 				return err

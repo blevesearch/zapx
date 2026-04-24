@@ -356,7 +356,8 @@ func (v *vectorIndexOpaque) canMerge(indexInfo *vecIndexInfo, indexType faissInd
 	switch indexType {
 	case faissBIVFIndex:
 		// since all the bivf indexes are of the same class, its safe to merge them
-		return true
+		// note: currently we support fast merge only on the SQ8 backing indexes
+		return indexInfo.indexOptimizedFor == index.IndexBIVFWithBackingSQ8
 	case faissFP32Index:
 		// for FP32 IVF indexes, we can do a fast merge using faiss's native merge capabilities
 		// only if the indexes use the same quantizer. We merge indexes which are

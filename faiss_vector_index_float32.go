@@ -18,6 +18,7 @@
 package zap
 
 import (
+	"encoding/binary"
 	"encoding/json"
 
 	faiss "github.com/blevesearch/go-faiss"
@@ -67,8 +68,25 @@ func (f *faissFloat32Index) search(qVector *vectorSet, k int64, selector faiss.S
 	return f.idx.SearchWithOptions(qVector.floatData, k, selector, params)
 }
 
-func (f *faissFloat32Index) serialize() ([]byte, error) {
-	return faiss.WriteIndexIntoBuffer(f.idx)
+func (f *faissFloat32Index) write(buf []byte, w *FileWriter) error {
+	idxBytes, err := faiss.WriteIndexIntoBuffer(f.idx)
+	if err != nil {
+		return err
+	}
+	idxBytes = w.process(idxBytes)
+
+	// write the length of the serialized vector index bytes
+	n := binary.PutUvarint(buf, uint64(len(idxBytes)))
+	_, err = w.Write(buf[:n])
+	if err != nil {
+		return err
+	}
+
+	_, err = w.Write(idxBytes)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (f *faissFloat32Index) size() uint64 {
@@ -85,16 +103,6 @@ func (f *faissFloat32Index) castIVF() faissIndexIVF {
 		return f
 	}
 	// not an IVF index, return nil.
-	return nil
-}
-
-func (f *faissFloat32Index) castSQ() faissIndexSQ {
-	if f.idx.IsSQIndex() {
-		// return f itself, as the SQ interface is implemented by the same
-		// struct as the non-SQ interface in go-faiss.
-		return f
-	}
-	// not an SQ index, return nil.
 	return nil
 }
 

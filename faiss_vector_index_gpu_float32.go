@@ -18,6 +18,7 @@
 package zap
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"sync/atomic"
 
@@ -160,8 +161,25 @@ func (f *faissGPUFloat32Index) search(qVector *vectorSet, k int64, selector fais
 	return f.cpuIdx.SearchWithOptions(qVector.floatData, k, selector, params)
 }
 
-func (f *faissGPUFloat32Index) serialize() ([]byte, error) {
-	return faiss.WriteIndexIntoBuffer(f.cpuIdx)
+func (f *faissGPUFloat32Index) write(buf []byte, w *FileWriter) error {
+	idxBytes, err := faiss.WriteIndexIntoBuffer(f.cpuIdx)
+	if err != nil {
+		return err
+	}
+	idxBytes = w.process(idxBytes)
+
+	// write the length of the serialized vector index bytes
+	n := binary.PutUvarint(buf, uint64(len(idxBytes)))
+	_, err = w.Write(buf[:n])
+	if err != nil {
+		return err
+	}
+
+	_, err = w.Write(idxBytes)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (f *faissGPUFloat32Index) size() uint64 {
@@ -179,13 +197,6 @@ func (f *faissGPUFloat32Index) inGPURam() bool {
 // -----------------------------------------------------------------
 func (f *faissGPUFloat32Index) castIVF() faissIndexIVF {
 	if f.cpuIdx.IsIVFIndex() {
-		return f
-	}
-	return nil
-}
-
-func (f *faissGPUFloat32Index) castSQ() faissIndexSQ {
-	if f.cpuIdx.IsSQIndex() {
 		return f
 	}
 	return nil

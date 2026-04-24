@@ -46,9 +46,9 @@ type faissIndex interface {
 	// performs a search on the index using the provided query vector and and retrieves the top K nearest neighbors.
 	// Optional search constraints can be applied using the selector and additional search parameters.
 	search(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error)
-	// serializes the index into a byte slice,
-	// which can be stored or transmitted.
-	serialize() ([]byte, error)
+	// write out the index content into the provide fileWriter using a reusable buffer
+	// returns any error encountered during the write process.
+	write(buf []byte, w *FileWriter) error
 	// returns the size of the index in bytes.
 	size() uint64
 	// -----------------------------------------------------------------
@@ -57,9 +57,6 @@ type faissIndex interface {
 	// returns the underlying IVF index if this is an IVF index,
 	// and a boolean indicating whether the cast was successful.
 	castIVF() faissIndexIVF
-	// returns the underlying SQ index if this is an SQ index,
-	// and a boolean indicating whether the cast was successful.
-	castSQ() faissIndexSQ
 }
 
 // Interface for IVF-specific operations on Faiss vector indices.
@@ -97,14 +94,6 @@ type faissIndexIVF interface {
 	// merged another faiss index into the current IVF index,
 	// with an offset to adjust vector IDs from the other index.
 	mergeFrom(other faissIndex, offset int64) error
-}
-
-// Interface for SQ-specific operations on Faiss vector indices.
-type faissIndexSQ interface {
-	// trains the SQ index on the provided training data and adds the vectors to
-	// the trained index. The training step performs quantization of the vector space,
-	// which enables efficient storage and search of high-dimensional vectors.
-	trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error
 }
 
 // faissIndexGPU is implemented by any index type that can reside in GPU memory.

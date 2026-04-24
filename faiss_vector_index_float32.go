@@ -146,10 +146,10 @@ func (f *faissFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *vect
 	return f.add(vecsToAdd)
 }
 
-func (f *faissFloat32Index) setQuantizers(centroidIndex faissIndexIVF) error {
-	centroidFaissIndex, ok := centroidIndex.(*faissFloat32Index)
+func (f *faissFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {
+	centroidFaissIndex, ok := trainedIndex.(*faissFloat32Index)
 	if !ok {
-		// if not a float32 centroid index, we cannot set it as the quantizer
+		// if not a float32 trained index, we cannot set it as the quantizer
 		// for the current index, return an error.
 		return errNotSupported
 	}

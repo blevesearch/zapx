@@ -90,7 +90,7 @@ type faissIndexIVF interface {
 	// sets the quantizers for the IVF index. The quantizer is a separate
 	// IVF index that is trained on the same data and used to assign vectors
 	// to clusters in the IVF index.
-	setQuantizers(centroidIndex faissIndexIVF) error
+	setQuantizers(trainedIndex faissIndexIVF) error
 	// merged another faiss index into the current IVF index,
 	// with an offset to adjust vector IDs from the other index.
 	mergeFrom(other faissIndex, offset int64) error

@@ -251,11 +251,40 @@ func (b *faissBinaryIndex) trainAndAdd(trainingData *vectorSet, vecsToAdd *vecto
 }
 
 func (b *faissBinaryIndex) setQuantizers(trainedIndex faissIndexIVF) error {
-	// not supported for binary indexes, returns error
+	if idx, ok := trainedIndex.(*faissBinaryIndex); ok {
+		// set quantizers for the binary and the backing index if its an SQ8 index
+		var err error
+		if idx.backing != nil && idx.backing.IsSQIndex() {
+			err = b.backing.SetQuantizers(idx.backing)
+			if err != nil {
+				return err
+			}
+		}
+		err = b.binary.SetQuantizers(idx.binary)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
 	return errNotSupported
 }
 
 func (b *faissBinaryIndex) mergeFrom(other faissIndex, offset int64) error {
-	// merging is not supported for binary indexes, return error
+	if idx, ok := other.(*faissBinaryIndex); ok {
+		// merge the binary and the backing index, both flat and SQ8 indexes support
+		// merge_from API underneath the hood. the add_id is kept to 0 since we will
+		// be merging the largest set of indexes which will be sequential in the list
+		// of segments being merged, so there won't be any ID conflicts.
+		err := b.backing.MergeFrom(idx.backing, 0)
+		if err != nil {
+			return err
+		}
+		err = b.binary.MergeFrom(idx.binary, offset)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}
 	return errNotSupported
 }

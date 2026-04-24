@@ -272,7 +272,7 @@ func (f *faissGPUFloat32Index) trainAndAddCPU(trainingData *vectorSet, vecsToAdd
 	return f.cpuIdx.Add(vecsToAdd.floatData)
 }
 
-func (f *faissGPUFloat32Index) setQuantizers(centroidIndex faissIndexIVF) error {
+func (f *faissGPUFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {
 	return errNotSupported
 }
 

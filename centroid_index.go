@@ -57,14 +57,26 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	}
 
 	// type of index
-	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	indexType, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
 
+	// todo: might wanna use the vector cache here, early tests didn't show a big diff
 	faissIndex, err := faiss.ReadIndexFromBuffer(sb.mem[pos:pos+int(indexSize)], faissIOFlags)
 	if err != nil {
 		return nil, err
 	}
-	return faissIndex, nil
+	pos += int(indexSize)
+
+	if faissIndexType(indexType) == faissBIVFIndex {
+		binaryIndexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += n
+		binaryIndex, err := faiss.ReadBinaryIndexFromBuffer(sb.mem[pos:pos+int(binaryIndexSize)], faissIOFlags)
+		if err != nil {
+			return nil, err
+		}
+		return newFaissBinaryIndex(binaryIndex, faissIndex)
+	}
+	return newFaissFloat32Index(faissIndex)
 }

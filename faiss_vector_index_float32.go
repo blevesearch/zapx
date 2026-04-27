@@ -29,6 +29,7 @@ import (
 // Faiss Float32 Index
 // ---------------------------------
 type faissFloat32Index struct {
+	cfg *faissIndexConfig
 	idx *faiss.IndexImpl
 }
 
@@ -39,6 +40,20 @@ func newFaissFloat32Index(idx *faiss.IndexImpl) (index faissIndex, err error) {
 	return &faissFloat32Index{
 		idx: idx,
 	}, nil
+}
+
+func newFaissFloat32IndexWithConfig(idx *faiss.IndexImpl, cfg *faissIndexConfig) (index faissIndex, err error) {
+	if idx == nil {
+		return nil, errNilIndex
+	}
+	return &faissFloat32Index{
+		idx: idx,
+		cfg: cfg,
+	}, nil
+}
+
+func (f *faissFloat32Index) quantization() string {
+	return quantizationType(f.cfg.optimizationType, f.idx.Ntotal())
 }
 
 func (f *faissFloat32Index) add(vecs *vectorSet) error {
@@ -158,9 +173,12 @@ func (f *faissFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {
 }
 
 func (f *faissFloat32Index) isMergeable(optimizedFor string) bool {
-	// only the ones that are of IVF index family and optimized for IVF RabitQ or
-	// are large enough to have SQ8 quantization are eligible for fast merge
-	return f.idx.IsIVFIndex() && (optimizedFor == index.IndexIVFRaBitQ || f.ntotal() >= ivfSq8Threshold)
+	// merge criteria:
+	// - optimization is ivf,rabitq
+	// - optimization is memory efficient
+	// - total vecs > ivfSq8Threshold => SQ8 quantization is used
+	return f.idx.IsIVFIndex() && (optimizedFor == index.IndexIVFRaBitQ ||
+		optimizedFor == index.IndexOptimizedForMemoryEfficient || f.ntotal() >= ivfSq8Threshold)
 }
 
 func (f *faissFloat32Index) mergeFrom(other faissIndex, offset int64) error {

@@ -572,8 +572,9 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 	// create the faiss index to hold the merged data, either via fast merge or reconstruction
 	config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, determineCentroids(nvecs), useGPU)
 	// if we have a trained index use the fast merge to perform the merge without
-	// re-training and reconstructing the vectors
-	if trainedIndex != nil {
+	// re-training and reconstructing the vectors. we perform the fast merge
+	// only if the quantization type matches between the trained index and the final merged index
+	if trainedIndex != nil && trainedIndex.quantization() == quantizationType(indexOptimizedFor, int64(nvecs)) {
 		err := v.fastMergeIndexes(trainedIndex, config, drops, vecIndexes, w, closeCh)
 		if err != nil {
 			return err
@@ -995,6 +996,22 @@ type faissIndexConfig struct {
 	optimizationType string
 	nlist            int
 	useGPU           bool
+}
+
+func quantizationType(opt string, ntotal int64) string {
+	if opt == index.IndexIVFRaBitQ {
+		return "RaBitQ"
+	} else if opt == index.IndexOptimizedForMemoryEfficient {
+		return "SQ4"
+	} else if opt == index.IndexBIVFWithBackingSQ8 {
+		return "SQ8"
+	} else if opt == index.IndexBIVFWithBackingFlat {
+		return "Flat"
+	} else if ntotal >= ivfSq8Threshold {
+		return "SQ8"
+	}
+	return "Flat"
+
 }
 
 func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimension, metricType, numVecs, nlist int, useGPU bool) *faissIndexConfig {

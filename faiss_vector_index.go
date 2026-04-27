@@ -94,6 +94,9 @@ type faissIndexIVF interface {
 	// IVF index that is trained on the same data and used to assign vectors
 	// to clusters in the IVF index.
 	setQuantizers(trainedIndex faissIndexIVF) error
+	// quantization return the type of quantization used which can help determing if
+	// the fast merge path is applicable or not using the trained index
+	quantization() string
 	// merged another faiss index into the current IVF index,
 	// with an offset to adjust vector IDs from the other index.
 	mergeFrom(other faissIndex, offset int64) error

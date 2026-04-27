@@ -29,6 +29,7 @@ import (
 // Faiss Binary IVF Index
 // ---------------------------------
 type faissBinaryIndex struct {
+	cfg     *faissIndexConfig
 	backing *faiss.IndexImpl
 	binary  *faiss.BinaryIndexImpl
 }
@@ -42,6 +43,21 @@ func newFaissBinaryIndex(binary *faiss.BinaryIndexImpl, backing *faiss.IndexImpl
 		backing: backing,
 		binary:  binary,
 	}, nil
+}
+
+func newFaissBinaryIndexWithConfig(binary *faiss.BinaryIndexImpl, backing *faiss.IndexImpl, cfg *faissIndexConfig) (index faissIndex, err error) {
+	if binary == nil || backing == nil {
+		return nil, errNilIndex
+	}
+	return &faissBinaryIndex{
+		cfg:     cfg,
+		backing: backing,
+		binary:  binary,
+	}, nil
+}
+
+func (b *faissBinaryIndex) quantization() string {
+	return quantizationType(b.cfg.optimizationType, b.binary.Ntotal())
 }
 
 func (b *faissBinaryIndex) add(vecs *vectorSet) error {

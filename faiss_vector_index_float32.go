@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 
+	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 )
 
@@ -154,6 +155,12 @@ func (f *faissFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {
 		return errNotSupported
 	}
 	return f.idx.SetQuantizers(centroidFaissIndex.idx)
+}
+
+func (f *faissFloat32Index) isMergeable(optimizedFor string) bool {
+	// only the ones that are of IVF index family and optimized for IVF RabitQ or
+	// are large enough to have SQ8 quantization are eligible for fast merge
+	return f.idx.IsIVFIndex() && (optimizedFor == index.IndexIVFRaBitQ || f.ntotal() >= ivfSq8Threshold)
 }
 
 func (f *faissFloat32Index) mergeFrom(other faissIndex, offset int64) error {

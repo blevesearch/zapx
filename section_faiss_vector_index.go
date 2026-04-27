@@ -348,33 +348,11 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 	return nprobe
 }
 
-func (v *vectorIndexOpaque) canMerge(indexInfo *vecIndexInfo, indexType faissIndexType) bool {
-	if indexInfo.index.castIVF() == nil {
-		// cant do fast merge on a non-IVF index
-		return false
-	}
-	switch indexType {
-	case faissBIVFIndex:
-		// since all the bivf indexes are of the same class, its safe to merge them
-		// note: currently we support fast merge only on the SQ8 backing indexes
-		return indexInfo.indexOptimizedFor == index.IndexBIVFWithBackingSQ8
-	case faissFP32Index:
-		// for FP32 IVF indexes, we can do a fast merge using faiss's native merge capabilities
-		// only if the indexes use the same quantizer. We merge indexes which are
-		// optimized for RaBitQ or above a certain threshold after which only SQ8
-		// kicks in for the IVF indexes.
-		return indexInfo.indexOptimizedFor == index.IndexIVFRaBitQ ||
-			indexInfo.index.ntotal() >= ivfSq8Threshold
-	default:
-		return false
-	}
-}
-
 // todo: need to detect and handle data drift in a more intelligent way
 func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *faissIndexConfig,
 	drops bool, vecIndexes []*vecIndexInfo, w *FileWriter, closeCh chan struct{}) error {
-	finalMergeCandidate := -1
-	var nvecs, reconsCap int
+	var reconsCap int
+	fastMergeCandidates := make(map[int]struct{}, len(vecIndexes))
 	for i := 0; i < len(vecIndexes); i++ {
 		if isClosed(closeCh) {
 			return seg.ErrClosed
@@ -382,12 +360,9 @@ func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *fa
 		vecCount := len(vecIndexes[i].vecIds)
 		if vecCount == 0 {
 			continue
-		} else if !drops && v.canMerge(vecIndexes[i], cfg.indexType) {
-			// try to seek the pointer in the vecIndexes list to a point after
-			// which all indexes are not eligible for fast merge.
-			if i > finalMergeCandidate {
-				finalMergeCandidate = i
-			}
+		}
+		if !drops && vecIndexes[i].index.isMergeable(cfg.optimizationType) {
+			fastMergeCandidates[i] = struct{}{}
 		} else {
 			// if there are some deletes or updates in the segments being merged,
 			// we can't say definitely which mutation can cause a data drift solely
@@ -398,7 +373,6 @@ func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *fa
 				reconsCap = indexReconsLen
 			}
 		}
-		nvecs += vecCount
 	}
 
 	// create a faissIndex for merged index using nlist and nprobe from trained index's
@@ -432,32 +406,38 @@ func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *fa
 		return err
 	}
 
-	// reconstruction will be needed for the smaller indexes that are not
-	// eligible for fast merge, so we prepare a buffer for that.
+	// reconstruction will be needed indexes that are not eligible or
+	// failed to fast merge, so we prepare a buffer for that.
 	reconsVecs := make([]float32, 0, reconsCap)
 	for i := 0; i < len(vecIndexes); i++ {
 		if isClosed(closeCh) {
 			return seg.ErrClosed
 		}
+
 		childIdx := vecIndexes[i].index
 		vecs := vecIndexes[i].vecIds
 		numVecs := len(vecs)
-		// note: the merge candidates are almost always in descending order of size
-		// chances are they'll be the first "n" indexes in the vecIndexes list
-		//
-		// the reasoning is that scorch passes this as a sorted list and at this
-		// point we can be sure of no updates/deletes -> the candidates will be
-		// in a continuous block from the beginning.
-		if i <= finalMergeCandidate {
-			err = ivfIdx.mergeFrom(childIdx, faissIndex.ntotal())
-			if err != nil {
-				return err
+		neededReconsLen := numVecs * cfg.dimension
+		reconsAndAdd := true
+		if _, ok := fastMergeCandidates[i]; ok {
+			delete(fastMergeCandidates, i)
+			if err = ivfIdx.mergeFrom(childIdx, faissIndex.ntotal()); err == nil {
+				reconsAndAdd = false
+			} else {
+				// fall back to reconstruction and grow the recons buffer if
+				// the current capacity is insufficient.
+				if neededReconsLen > cap(reconsVecs) {
+					reconsVecs = make([]float32, 0, neededReconsLen)
+				}
 			}
-		} else {
-			// reconstruction will be done on IVFFlat and Flat indexes
-			neededReconsLen := numVecs * cfg.dimension
+		}
+
+		// for indexes that are not eligible for fast merge and the ones that error'd
+		// out in the process fall back to reconstructing and adding the vectors
+		// in order of the vecIndexes list to be in-line the vector ID mapping.
+		if reconsAndAdd {
 			reconsVecs = reconsVecs[:neededReconsLen]
-			reconsVecs, err := childIdx.reconstructBatch(vecs, reconsVecs)
+			reconsVecs, err = childIdx.reconstructBatch(vecs, reconsVecs)
 			if err != nil {
 				return err
 			}
@@ -591,13 +571,9 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 
 	// create the faiss index to hold the merged data, either via fast merge or reconstruction
 	config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, determineCentroids(nvecs), useGPU)
-	// Fast Merge Path:
-	// fast merge only applicable for:
-	// - IVFSQ8 indexes beyond a certain size threshold.
-	// - the trained index is available.
-	// - RabitQ optimization
-	if trainedIndex != nil &&
-		(indexOptimizedFor == index.IndexIVFRaBitQ || nvecs >= ivfSq8Threshold) {
+	// if we have a trained index use the fast merge to perform the merge without
+	// re-training and reconstructing the vectors
+	if trainedIndex != nil {
 		err := v.fastMergeIndexes(trainedIndex, config, drops, vecIndexes, w, closeCh)
 		if err != nil {
 			return err
@@ -667,7 +643,6 @@ func (v *vectorIndexOpaque) writeFaissIndex(vecs *vectorSet, config *faissIndexC
 	// if we are using an IVF index, train and add first, then set the direct map
 	// and nprobe. The order matters for GPU indexes: CloneToCPU (done inside
 	// trainAndAdd) clears the direct map and nprobe, so they must be set after.
-	// binarize the vectors for BIVF indexes
 	if ivfIndex := index.castIVF(); ivfIndex != nil {
 		// train the vector index and add the vectors to it. The training step
 		// performs k-means clustering to partition the data space such that during

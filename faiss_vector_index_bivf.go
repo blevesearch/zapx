@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 
+	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 )
 
@@ -267,6 +268,11 @@ func (b *faissBinaryIndex) setQuantizers(trainedIndex faissIndexIVF) error {
 		return nil
 	}
 	return errNotSupported
+}
+
+func (b *faissBinaryIndex) isMergeable(optimizedFor string) bool {
+	// note: currently the only the bivf-sq8 type indexes are eligible for fast merge
+	return b.binary.IsIVFIndex() && optimizedFor == index.IndexBIVFWithBackingSQ8
 }
 
 func (b *faissBinaryIndex) mergeFrom(other faissIndex, offset int64) error {

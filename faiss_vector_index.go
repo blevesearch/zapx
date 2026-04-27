@@ -41,6 +41,9 @@ type faissIndex interface {
 	metricType() int
 	// ntotal returns the total number of vectors currently stored in the index.
 	ntotal() int64
+	// based on the optimization type and the index details we decide and return a
+	// boolean indicating whether the index is eligible for fast merge.
+	isMergeable(optimizedFor string) bool
 	// reconstructBatch reconstructs the original vectors for the given vector IDs in the index.
 	reconstructBatch(vecIDs []int64, prealloc []float32) ([]float32, error)
 	// performs a search on the index using the provided query vector and and retrieves the top K nearest neighbors.

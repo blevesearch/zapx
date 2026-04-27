@@ -276,6 +276,10 @@ func (f *faissGPUFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {
 	return errNotSupported
 }
 
+func (f *faissGPUFloat32Index) isMergeable(optimizedFor string) bool {
+	return false
+}
+
 func (f *faissGPUFloat32Index) mergeFrom(other faissIndex, offset int64) error {
 	return errNotSupported
 }

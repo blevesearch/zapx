@@ -25,6 +25,7 @@ import (
 )
 
 var (
+	errNilConfig    error = errors.New("faiss index config is nil")
 	errNilIndex     error = errors.New("faiss index is nil")
 	errNotSupported error = errors.New("operation not supported")
 )
@@ -41,9 +42,8 @@ type faissIndex interface {
 	metricType() int
 	// ntotal returns the total number of vectors currently stored in the index.
 	ntotal() int64
-	// based on the optimization type and the index details we decide and return
-	// whether the participating child index is eligible to be fast merged or not
-	isMergeable(optimizedFor string) bool
+	// returns whether index is eligible for fast merge
+	isMergeable() bool
 	// reconstructBatch reconstructs the original vectors for the given vector IDs in the index.
 	reconstructBatch(vecIDs []int64, prealloc []float32) ([]float32, error)
 	// performs a search on the index using the provided query vector and and retrieves the top K nearest neighbors.
@@ -64,6 +64,7 @@ type faissIndex interface {
 
 // Interface for IVF-specific operations on Faiss vector indices.
 type faissIndexIVF interface {
+	faissIndex
 	// returns the count of the selected vector IDs in each
 	// cluster of the IVF index, based on the provided selector.
 	clusterVectorCounts(sel faiss.Selector, nlist int) ([]int64, error)
@@ -94,9 +95,6 @@ type faissIndexIVF interface {
 	// IVF index that is trained on the same data and used to assign vectors
 	// to clusters in the IVF index.
 	setQuantizers(trainedIndex faissIndexIVF) error
-	// quantization returns the type of quantization of the trained IVF index based
-	// on which we can determine if its viable to be used for fast merge or not
-	quantization() string
 	// merged another faiss index into the current IVF index,
 	// with an offset to adjust vector IDs from the other index.
 	mergeFrom(other faissIndex, offset int64) error

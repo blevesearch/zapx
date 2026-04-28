@@ -72,11 +72,6 @@ func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl) (faissIndex, error) {
 	return f, nil
 }
 
-func (f *faissGPUFloat32Index) quantization() string {
-	// not necessary for gpu indexes since this API is very specific to fast merge
-	return ""
-}
-
 // waitGPU blocks until initGPU has completed
 func (f *faissGPUFloat32Index) waitGPU() {
 	<-f.doneCh
@@ -281,7 +276,7 @@ func (f *faissGPUFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {
 	return errNotSupported
 }
 
-func (f *faissGPUFloat32Index) isMergeable(optimizedFor string) bool {
+func (f *faissGPUFloat32Index) isMergeable() bool {
 	return false
 }
 

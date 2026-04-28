@@ -351,106 +351,90 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 // todo: need to detect and handle data drift in a more intelligent way
 func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *faissIndexConfig,
 	drops bool, vecIndexes []*vecIndexInfo, w *FileWriter, closeCh chan struct{}) error {
-	var reconsCap int
-	fastMergeCandidates := make(map[int]struct{}, len(vecIndexes))
-	for i := 0; i < len(vecIndexes); i++ {
-		if isClosed(closeCh) {
-			return seg.ErrClosed
-		}
-		vecCount := len(vecIndexes[i].vecIds)
-		if vecCount == 0 {
-			continue
-		}
-		if !drops && vecIndexes[i].index.isMergeable(cfg.optimizationType) {
-			fastMergeCandidates[i] = struct{}{}
-		} else {
-			// if there are some deletes or updates in the segments being merged,
-			// we can't say definitely which mutation can cause a data drift solely
-			// by the vector count - as a fallback mechanism we reconstruct + add
-			// the vectors in this scenario using the trained template.
-			indexReconsLen := vecCount * cfg.dimension
-			if indexReconsLen > reconsCap {
-				reconsCap = indexReconsLen
-			}
-		}
-	}
-
 	// create a faissIndex for merged index using nlist and nprobe from trained index's
 	// config and we avoid using the GPU for fast merge since the underlying faiss
 	// code doesn't support merge_from API on GPU indexes.
 	nprobe, nlist := trainedIndex.ivfParams()
 	cfg.nlist = nlist
 	cfg.useGPU = false
-	faissIndex, err := faissIndexFactory(cfg)
+	mergedIdx, err := faissIndexFactory(cfg)
 	if err != nil {
 		return err
 	}
-	defer faissIndex.close()
+	defer mergedIdx.close()
 
 	// cast to IVF index to be able to set the quantizer for the fast merge
-	ivfIdx := faissIndex.castIVF()
-	if ivfIdx == nil {
+	ivfMergedIdx := mergedIdx.castIVF()
+	if ivfMergedIdx == nil {
 		return ErrorFastMergeIndexNotIVF
 	}
-	err = ivfIdx.setDirectMap(1)
+	err = ivfMergedIdx.setDirectMap(1)
 	if err != nil {
 		return err
 	}
 	// setting the same nprobe value in the merged index as the centroid
 	// index to ensure that we probe the same number of clusters
-	ivfIdx.setNProbe(int32(nprobe))
+	ivfMergedIdx.setNProbe(int32(nprobe))
 	// The trained index will be an IVFSQ8 index - but with no vectors in it.
 	// The coarse quantizer of that index will be cloned over here
-	err = ivfIdx.setQuantizers(trainedIndex)
+	err = ivfMergedIdx.setQuantizers(trainedIndex)
 	if err != nil {
 		return err
 	}
 
-	// reconstruction will be needed indexes that are not eligible or
-	// failed to fast merge, so we prepare a buffer for that.
-	reconsVecs := make([]float32, 0, reconsCap)
-	for i := 0; i < len(vecIndexes); i++ {
+	var reconsVecs []float32
+	reconsAndAddFrom := func(vecIDs []int64, srcIdx faissIndex) error {
+		neededReconsLen := len(vecIDs) * cfg.dimension
+		if cap(reconsVecs) < neededReconsLen {
+			reconsVecs = make([]float32, neededReconsLen)
+		}
+		reconsVecs = reconsVecs[:neededReconsLen]
+		reconsVecs, err = srcIdx.reconstructBatch(vecIDs, reconsVecs)
+		if err != nil {
+			return err
+		}
+
+		vecSet, err := newVectorSet(cfg.dimension, reconsVecs)
+		if err != nil {
+			return err
+		}
+		if cfg.indexType == faissBIVFIndex {
+			vecSet.binarize()
+		}
+		// add to target index the reconstructed vectors for the valid vector IDs from the source index.
+		err = mergedIdx.add(vecSet)
+		if err != nil {
+			return err
+		}
+		reconsVecs = reconsVecs[:0]
+		return nil
+	}
+
+	for _, vi := range vecIndexes {
 		if isClosed(closeCh) {
 			return seg.ErrClosed
 		}
-
-		childIdx := vecIndexes[i].index
-		vecs := vecIndexes[i].vecIds
-		numVecs := len(vecs)
-		neededReconsLen := numVecs * cfg.dimension
-		reconsAndAdd := true
-		if _, ok := fastMergeCandidates[i]; ok {
-			delete(fastMergeCandidates, i)
-			if err = ivfIdx.mergeFrom(childIdx, faissIndex.ntotal()); err == nil {
-				reconsAndAdd = false
-			} else {
-				// fall back to reconstruction and grow the recons buffer if
-				// the current capacity is insufficient.
-				if neededReconsLen > cap(reconsVecs) {
-					reconsVecs = make([]float32, 0, neededReconsLen)
+		childIdx := vi.index
+		if drops {
+			// if there are some deletes or updates in the segments being merged,
+			// we can't say definitely which mutation can cause a data drift solely
+			// by the vector count - as a fallback mechanism we reconstruct + add
+			// the vectors in this scenario using the trained template since we can't
+			// use merge_from.
+			err = reconsAndAddFrom(vi.vecIds, childIdx)
+			if err != nil {
+				return err
+			}
+		} else {
+			// if no drops, then we can use merge_from
+			if err = ivfMergedIdx.mergeFrom(childIdx, mergedIdx.ntotal()); err != nil {
+				// either the childIdx isn't compatible for fast merge or merge_from failed
+				// so, in either case we can fallback to reconstructing and adding the vectors
+				// one by one from the source index to the target index as a error handling mechanism.
+				err = reconsAndAddFrom(vi.vecIds, childIdx)
+				if err != nil {
+					return err
 				}
-			}
-		}
-
-		// for indexes that are not eligible for fast merge and the ones that error'd
-		// out in the process fall back to reconstructing and adding the vectors
-		// in order of the vecIndexes list to be in-line the vector ID mapping.
-		if reconsAndAdd {
-			reconsVecs = reconsVecs[:neededReconsLen]
-			reconsVecs, err = childIdx.reconstructBatch(vecs, reconsVecs)
-			if err != nil {
-				return err
-			}
-			vecSet, err := newVectorSet(cfg.dimension, reconsVecs)
-			if err != nil {
-				return err
-			}
-			if cfg.indexType == faissBIVFIndex {
-				vecSet.binarize()
-			}
-			err = faissIndex.add(vecSet)
-			if err != nil {
-				return err
 			}
 		}
 	}
@@ -463,7 +447,7 @@ func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *fa
 		return err
 	}
 
-	return faissIndex.write(tempBuf, w)
+	return mergedIdx.write(tempBuf, w)
 }
 
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIVF, sbs []*SegmentBase,
@@ -524,7 +508,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 
 		// track the reconstruct index for this vector index, which will be used
 		// to reconstruct the vectors corresponding to the valid vector IDs for this index.
-		fIndex, err := newFaissFloat32Index(faissIndex)
+		config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, currNumVecs, determineCentroids(currNumVecs), useGPU)
+		fIndex, err := newFaissFloat32IndexWithConfig(faissIndex, config)
 		if err != nil {
 			freeReconstructedIndexes(vecIndexes)
 			return err
@@ -548,7 +533,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 				freeReconstructedIndexes(vecIndexes)
 				return err
 			}
-			vecIndexes[segI].index, err = newFaissBinaryIndex(binaryIndex, faissIndex)
+			vecIndexes[segI].index, err = newFaissBinaryIndexWithConfig(binaryIndex, faissIndex, config)
 			if err != nil {
 				freeReconstructedIndexes(vecIndexes)
 				return err
@@ -574,7 +559,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 	// if we have a trained index use the fast merge to perform the merge without
 	// re-training and reconstructing the vectors. we perform the fast merge
 	// only if the quantization type matches between the trained index and the final merged index
-	if trainedIndex != nil && trainedIndex.quantization() == quantizationType(indexOptimizedFor, int64(nvecs)) {
+	if trainedIndex != nil && trainedIndex.isMergeable() && canFastMerge(indexOptimizedFor, nvecs) {
 		err := v.fastMergeIndexes(trainedIndex, config, drops, vecIndexes, w, closeCh)
 		if err != nil {
 			return err
@@ -600,7 +585,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 		// reconstruct the vectors only if present, it could be that
 		// some of the indexes had all of their vectors updated/deleted.
 		if currNumVecs > 0 && vecIndexes[idx] != nil {
-			neededReconsLen := currNumVecs * dims
+			neededReconsLen := currNumVecs * config.dimension
 			recons = recons[:neededReconsLen]
 			var err error
 			fIndex := vecIndexes[idx].index
@@ -619,7 +604,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 	// be detrimental while creating indexes during introduction.
 	freeReconstructedIndexes(vecIndexes)
 
-	vecSet, err := newVectorSet(dims, indexData)
+	vecSet, err := newVectorSet(config.dimension, indexData)
 	if err != nil {
 		return err
 	}
@@ -998,19 +983,17 @@ type faissIndexConfig struct {
 	useGPU           bool
 }
 
-func quantizationType(opt string, ntotal int64) string {
-	if opt == index.IndexIVFRaBitQ {
-		return "RaBitQ"
-	} else if opt == index.IndexOptimizedForMemoryEfficient {
-		return "SQ4"
-	} else if opt == index.IndexBIVFWithBackingSQ8 {
-		return "SQ8"
-	} else if opt == index.IndexBIVFWithBackingFlat {
-		return "Flat"
-	} else if ntotal >= ivfSq8Threshold {
-		return "SQ8"
+func canFastMerge(opt string, nvecs int) bool {
+	switch opt {
+	case index.IndexBIVFWithBackingFlat, index.IndexBIVFWithBackingSQ8:
+		fallthrough
+	case index.IndexOptimizedForMemoryEfficient:
+		fallthrough
+	case index.IndexIVFRaBitQ:
+		return nvecs > 1000
+	default:
+		return nvecs > ivfSq8Threshold
 	}
-	return "Flat"
 
 }
 

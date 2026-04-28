@@ -49,15 +49,15 @@ func newFaissBinaryIndexWithConfig(binary *faiss.BinaryIndexImpl, backing *faiss
 	if binary == nil || backing == nil {
 		return nil, errNilIndex
 	}
+	if cfg == nil {
+		return nil, errNilConfig
+	}
+
 	return &faissBinaryIndex{
 		cfg:     cfg,
 		backing: backing,
 		binary:  binary,
 	}, nil
-}
-
-func (b *faissBinaryIndex) quantization() string {
-	return quantizationType(b.cfg.optimizationType, b.binary.Ntotal())
 }
 
 func (b *faissBinaryIndex) add(vecs *vectorSet) error {
@@ -286,13 +286,21 @@ func (b *faissBinaryIndex) setQuantizers(trainedIndex faissIndexIVF) error {
 	return errNotSupported
 }
 
-func (b *faissBinaryIndex) isMergeable(optimizedFor string) bool {
-	// note: currently the only the bivf-sq8 type indexes are eligible for fast merge
-	return b.binary.IsIVFIndex() && optimizedFor == index.IndexBIVFWithBackingSQ8
+func (b *faissBinaryIndex) isMergeable() bool {
+	if b.cfg != nil {
+		switch b.cfg.optimizationType {
+		case index.IndexBIVFWithBackingFlat, index.IndexBIVFWithBackingSQ8:
+			return b.backing.Ntotal() > 1000
+		}
+	}
+	return false
 }
 
 func (b *faissBinaryIndex) mergeFrom(other faissIndex, offset int64) error {
 	if idx, ok := other.(*faissBinaryIndex); ok {
+		if !idx.isMergeable() {
+			return errNotSupported
+		}
 		// merge the binary and the backing index, both flat and SQ8 indexes support
 		// merge_from API underneath the hood. the add_id is kept to 0 since we will
 		// be merging the largest set of indexes which will be sequential in the list

@@ -46,14 +46,14 @@ func newFaissFloat32IndexWithConfig(idx *faiss.IndexImpl, cfg *faissIndexConfig)
 	if idx == nil {
 		return nil, errNilIndex
 	}
+	if cfg == nil {
+		return nil, errNilConfig
+	}
+
 	return &faissFloat32Index{
 		idx: idx,
 		cfg: cfg,
 	}, nil
-}
-
-func (f *faissFloat32Index) quantization() string {
-	return quantizationType(f.cfg.optimizationType, f.idx.Ntotal())
 }
 
 func (f *faissFloat32Index) add(vecs *vectorSet) error {
@@ -172,13 +172,24 @@ func (f *faissFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {
 	return f.idx.SetQuantizers(centroidFaissIndex.idx)
 }
 
-func (f *faissFloat32Index) isMergeable(optimizedFor string) bool {
-	// merge criteria:
-	// - optimization is ivf,rabitq
-	// - optimization is memory efficient
-	// - total vecs > ivfSq8Threshold => SQ8 quantization is used
-	return f.idx.IsIVFIndex() && (optimizedFor == index.IndexIVFRaBitQ ||
-		optimizedFor == index.IndexOptimizedForMemoryEfficient || f.ntotal() >= ivfSq8Threshold)
+func (f *faissFloat32Index) isMergeable() bool {
+	if f.cfg != nil {
+		switch f.cfg.optimizationType {
+		case index.IndexBIVFWithBackingFlat:
+			// currently if the backing index is flat, we're not going to perform fast merge
+			return false
+		case index.IndexBIVFWithBackingSQ8:
+			fallthrough
+		case index.IndexOptimizedForMemoryEfficient:
+			fallthrough
+		case index.IndexIVFRaBitQ:
+			return f.idx.Ntotal() > 1000
+		default:
+			return f.idx.Ntotal() > 10000
+
+		}
+	}
+	return false
 }
 
 func (f *faissFloat32Index) mergeFrom(other faissIndex, offset int64) error {
@@ -186,5 +197,9 @@ func (f *faissFloat32Index) mergeFrom(other faissIndex, offset int64) error {
 	if !ok {
 		return errNotSupported
 	}
-	return f.idx.MergeFrom(otherFaissIndex.idx, offset)
+
+	if otherFaissIndex.isMergeable() {
+		return f.idx.MergeFrom(otherFaissIndex.idx, offset)
+	}
+	return errNotSupported
 }

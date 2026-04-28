@@ -41,8 +41,8 @@ type faissIndex interface {
 	metricType() int
 	// ntotal returns the total number of vectors currently stored in the index.
 	ntotal() int64
-	// based on the optimization type and the index details we decide and return a
-	// boolean indicating whether the index is eligible for fast merge.
+	// based on the optimization type and the index details we decide and return
+	// whether the participating child index is eligible to be fast merged or not
 	isMergeable(optimizedFor string) bool
 	// reconstructBatch reconstructs the original vectors for the given vector IDs in the index.
 	reconstructBatch(vecIDs []int64, prealloc []float32) ([]float32, error)
@@ -94,8 +94,8 @@ type faissIndexIVF interface {
 	// IVF index that is trained on the same data and used to assign vectors
 	// to clusters in the IVF index.
 	setQuantizers(trainedIndex faissIndexIVF) error
-	// quantization return the type of quantization used which can help determing if
-	// the fast merge path is applicable or not using the trained index
+	// quantization returns the type of quantization of the trained IVF index based
+	// on which we can determine if its viable to be used for fast merge or not
 	quantization() string
 	// merged another faiss index into the current IVF index,
 	// with an offset to adjust vector IDs from the other index.

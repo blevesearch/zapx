@@ -54,11 +54,10 @@ func PersistSegmentBase(sb *SegmentBase, path string) error {
 		return err
 	}
 	if writer.id != sb.fileReader.id {
-		// rewrite the segment base with the latest writer callback
-		err = rewriteSegmentBase(sb, path)
-		if err != nil {
-			return err
-		}
+		// rewrite the segment base with the latest writer callback;
+		// the rewrite will persist the segment to the given path (upon
+		// success), so we should return early to avoid overwriting again.
+		return rewriteSegmentBase(sb, path)
 	}
 
 	flag := os.O_RDWR | os.O_CREATE

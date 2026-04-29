@@ -17,8 +17,8 @@
 
 package zap
 
-import(
-    "testing"
+import (
+	"testing"
 )
 
 // Initializes encryption related file callbacks and

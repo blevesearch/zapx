@@ -25,6 +25,7 @@ import (
 )
 
 var (
+	errNilConfig    error = errors.New("faiss index config is nil")
 	errNilIndex     error = errors.New("faiss index is nil")
 	errNotSupported error = errors.New("operation not supported")
 )
@@ -61,6 +62,7 @@ type faissIndex interface {
 
 // Interface for IVF-specific operations on Faiss vector indices.
 type faissIndexIVF interface {
+	faissIndex
 	// returns the count of the selected vector IDs in each
 	// cluster of the IVF index, based on the provided selector.
 	clusterVectorCounts(sel faiss.Selector, nlist int) ([]int64, error)
@@ -90,7 +92,9 @@ type faissIndexIVF interface {
 	// sets the quantizers for the IVF index. The quantizer is a separate
 	// IVF index that is trained on the same data and used to assign vectors
 	// to clusters in the IVF index.
-	setQuantizers(centroidIndex faissIndexIVF) error
+	setQuantizers(trainedIndex faissIndexIVF) error
+	// returns whether the participating index is eligible for fast merge
+	isMergeable() bool
 	// merged another faiss index into the current IVF index,
 	// with an offset to adjust vector IDs from the other index.
 	mergeFrom(other faissIndex, offset int64) error

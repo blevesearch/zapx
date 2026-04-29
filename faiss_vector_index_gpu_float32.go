@@ -272,8 +272,12 @@ func (f *faissGPUFloat32Index) trainAndAddCPU(trainingData *vectorSet, vecsToAdd
 	return f.cpuIdx.Add(vecsToAdd.floatData)
 }
 
-func (f *faissGPUFloat32Index) setQuantizers(centroidIndex faissIndexIVF) error {
+func (f *faissGPUFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {
 	return errNotSupported
+}
+
+func (f *faissGPUFloat32Index) isMergeable() bool {
+	return false
 }
 
 func (f *faissGPUFloat32Index) mergeFrom(other faissIndex, offset int64) error {

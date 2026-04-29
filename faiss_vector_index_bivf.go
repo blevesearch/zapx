@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 
+	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 )
 
@@ -28,6 +29,7 @@ import (
 // Faiss Binary IVF Index
 // ---------------------------------
 type faissBinaryIndex struct {
+	cfg     *faissIndexConfig
 	backing *faiss.IndexImpl
 	binary  *faiss.BinaryIndexImpl
 }
@@ -38,6 +40,21 @@ func newFaissBinaryIndex(binary *faiss.BinaryIndexImpl, backing *faiss.IndexImpl
 		return nil, errNilIndex
 	}
 	return &faissBinaryIndex{
+		backing: backing,
+		binary:  binary,
+	}, nil
+}
+
+func newFaissBinaryIndexWithConfig(binary *faiss.BinaryIndexImpl, backing *faiss.IndexImpl, cfg *faissIndexConfig) (index faissIndex, err error) {
+	if binary == nil || backing == nil {
+		return nil, errNilIndex
+	}
+	if cfg == nil {
+		return nil, errNilConfig
+	}
+
+	return &faissBinaryIndex{
+		cfg:     cfg,
 		backing: backing,
 		binary:  binary,
 	}, nil
@@ -251,11 +268,56 @@ func (b *faissBinaryIndex) trainAndAdd(trainingData *vectorSet, vecsToAdd *vecto
 }
 
 func (b *faissBinaryIndex) setQuantizers(trainedIndex faissIndexIVF) error {
-	// not supported for binary indexes, returns error
+	if idx, ok := trainedIndex.(*faissBinaryIndex); ok {
+		// set quantizers for the binary and the backing index if its an SQ8 index
+		var err error
+		if idx.backing.IsSQIndex() {
+			err = b.backing.SetQuantizers(idx.backing)
+			if err != nil {
+				return err
+			}
+		}
+		err = b.binary.SetQuantizers(idx.binary)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
 	return errNotSupported
 }
 
+func (b *faissBinaryIndex) isMergeable() bool {
+	if b.cfg != nil {
+		switch b.cfg.optimizationType {
+		case index.IndexBIVFWithBackingFlat:
+			// the flat backing index currently doesn't support merge_from
+			return false
+		case index.IndexBIVFWithBackingSQ8:
+			return b.backing.Ntotal() > ivfThreshold
+		}
+	}
+	return false
+}
+
 func (b *faissBinaryIndex) mergeFrom(other faissIndex, offset int64) error {
-	// merging is not supported for binary indexes, return error
+	if idx, ok := other.(*faissBinaryIndex); ok {
+		if !idx.isMergeable() {
+			return errNotSupported
+		}
+		// merge the binary and the backing index, both flat and SQ8 indexes support
+		// merge_from API underneath the hood. the add_id is kept to 0 since we will
+		// be merging the largest set of indexes which will be sequential in the list
+		// of segments being merged, so there won't be any ID conflicts.
+		err := b.backing.MergeFrom(idx.backing, 0)
+		if err != nil {
+			return err
+		}
+		err = b.binary.MergeFrom(idx.binary, offset)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}
 	return errNotSupported
 }

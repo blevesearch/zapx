@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 
+	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 )
 
@@ -28,6 +29,7 @@ import (
 // Faiss Float32 Index
 // ---------------------------------
 type faissFloat32Index struct {
+	cfg *faissIndexConfig
 	idx *faiss.IndexImpl
 }
 
@@ -37,6 +39,20 @@ func newFaissFloat32Index(idx *faiss.IndexImpl) (index faissIndex, err error) {
 	}
 	return &faissFloat32Index{
 		idx: idx,
+	}, nil
+}
+
+func newFaissFloat32IndexWithConfig(idx *faiss.IndexImpl, cfg *faissIndexConfig) (index faissIndex, err error) {
+	if idx == nil {
+		return nil, errNilIndex
+	}
+	if cfg == nil {
+		return nil, errNilConfig
+	}
+
+	return &faissFloat32Index{
+		idx: idx,
+		cfg: cfg,
 	}, nil
 }
 
@@ -146,14 +162,28 @@ func (f *faissFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *vect
 	return f.add(vecsToAdd)
 }
 
-func (f *faissFloat32Index) setQuantizers(centroidIndex faissIndexIVF) error {
-	centroidFaissIndex, ok := centroidIndex.(*faissFloat32Index)
+func (f *faissFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {
+	centroidFaissIndex, ok := trainedIndex.(*faissFloat32Index)
 	if !ok {
-		// if not a float32 centroid index, we cannot set it as the quantizer
+		// if not a float32 trained index, we cannot set it as the quantizer
 		// for the current index, return an error.
 		return errNotSupported
 	}
 	return f.idx.SetQuantizers(centroidFaissIndex.idx)
+}
+
+func (f *faissFloat32Index) isMergeable() bool {
+	if f.cfg != nil {
+		switch f.cfg.optimizationType {
+		case index.IndexOptimizedForLatency, index.IndexOptimizedForRecall:
+			return f.ntotal() > ivfSq8Threshold
+		case index.IndexOptimizedForMemoryEfficient, index.IndexIVFRaBitQ:
+			return f.ntotal() > ivfThreshold
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func (f *faissFloat32Index) mergeFrom(other faissIndex, offset int64) error {
@@ -161,5 +191,9 @@ func (f *faissFloat32Index) mergeFrom(other faissIndex, offset int64) error {
 	if !ok {
 		return errNotSupported
 	}
-	return f.idx.MergeFrom(otherFaissIndex.idx, offset)
+
+	if otherFaissIndex.isMergeable() {
+		return f.idx.MergeFrom(otherFaissIndex.idx, offset)
+	}
+	return errNotSupported
 }

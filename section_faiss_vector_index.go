@@ -233,7 +233,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 
 		// we're going to use the trained index template regardless of whether there's
 		// a update/delete in the segments being merged and we let the fast merge
-		// path handle what exactly to in such cases.
+		// path handle what exactly to do in such cases.
 		trainedIndex, err := trainedIndexFromConfig(vo.config, fieldName)
 		if err != nil {
 			return err
@@ -355,11 +355,9 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *faissIndexConfig,
 	drops bool, vecIndexes []*vecIndexInfo, w *FileWriter, closeCh chan struct{}) error {
 	// create a faissIndex for merged index using nlist and nprobe from trained index's
-	// config and we avoid using the GPU for fast merge since the underlying faiss
-	// code doesn't support merge_from API on GPU indexes.
+	// config and we're hitting the fast merge path only if we've not enabled GPU
 	nprobe, nlist := trainedIndex.ivfParams()
 	cfg.nlist = nlist
-	cfg.useGPU = false
 	mergedIdx, err := faissIndexFactory(cfg)
 	if err != nil {
 		return err
@@ -378,8 +376,8 @@ func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *fa
 	// setting the same nprobe value in the merged index as the centroid
 	// index to ensure that we probe the same number of clusters
 	ivfMergedIdx.setNProbe(int32(nprobe))
-	// The trained index will be an IVFSQ8 index - but with no vectors in it.
-	// The coarse quantizer of that index will be cloned over here
+	// using the trained index to copy the quantizers and set them in the final
+	// merged index if possible
 	err = ivfMergedIdx.setQuantizers(trainedIndex)
 	if err != nil {
 		return err
@@ -429,7 +427,6 @@ func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *fa
 				return err
 			}
 		} else {
-			// if no drops, then we can use merge_from
 			if err = ivfMergedIdx.mergeFrom(childIdx, mergedIdx.ntotal()); err != nil {
 				// either the childIdx isn't compatible for fast merge or merge_from failed
 				// so, in either case we can fallback to reconstructing and adding the vectors
@@ -559,9 +556,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 
 	// create the faiss index to hold the merged data, either via fast merge or reconstruction
 	config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, determineCentroids(nvecs), useGPU)
-	// if we have a trained index use the fast merge to perform the merge without
-	// re-training and reconstructing the vectors. we perform the fast merge
-	// only if the quantization type matches between the trained index and the final merged index
+	// we perform fast merge if we're not using the GPU and if the trained index
+	// is compatible to be used for fast merge
 	if !useGPU && canFastMerge(trainedIndex, indexOptimizedFor, nvecs) {
 		err := v.fastMergeIndexes(trainedIndex, config, drops, vecIndexes, w, closeCh)
 		if err != nil {

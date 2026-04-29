@@ -21,7 +21,6 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 )
 
@@ -39,13 +38,10 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 
 	pos := int(vectorSection)
 	// doc values and vector optimization type
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 3; i++ {
 		_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
 	}
-
-	optType, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += n
 
 	numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += n
@@ -73,10 +69,6 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	}
 	pos += int(indexSize)
 
-	// store the config in the faissIndex object itself since we want to know the
-	// whether we want to hit the fast merge path or not while merging the segments
-	indexConfig := newFaissIndexConfig(faissIndexType(indexType), index.VectorIndexOptimizationsReverseLookup[int(optType)],
-		faissIndex.D(), 0, int(numVecs), determineCentroids(int(numVecs)), false)
 	if faissIndexType(indexType) == faissBIVFIndex {
 		binaryIndexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
@@ -84,7 +76,7 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 		if err != nil {
 			return nil, err
 		}
-		return newFaissBinaryIndexWithConfig(binaryIndex, faissIndex, indexConfig)
+		return newFaissBinaryIndex(binaryIndex, faissIndex)
 	}
-	return newFaissFloat32IndexWithConfig(faissIndex, indexConfig)
+	return newFaissFloat32Index(faissIndex)
 }

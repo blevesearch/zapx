@@ -12,9 +12,6 @@
 // implied.  See the License for the specific language governing
 // permissions and limitations under the License.
 
-//go:build vectors
-// +build vectors
-
 package zap
 
 import (
@@ -148,11 +145,6 @@ func TestFileCallbacks(t *testing.T) {
 	TestDictionaryBug1156(t)
 
 	TestEnumerator(t)
-
-	TestVecPostingsIterator(t)
-	TestVectorSegment(t)
-	TestPersistedVectorSegment(t)
-	TestValidVectorMerge(t)
 
 	TestChunkIntCoder(t)
 	TestChunkLengthToOffsets(t)

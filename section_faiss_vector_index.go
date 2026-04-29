@@ -46,6 +46,9 @@ const (
 	// Divide the estimated nprobe with this value to optimize
 	// for latency.
 	nprobeLatencyOptimization = 2
+	// The threshold for number of vectors beyond which we start building the ivf class
+	// of indexes
+	ivfThreshold = 1000
 	// The threshold for number of vectors beyond which we consider fast merging
 	// using faiss's native merge capabilities, instead of reconstructing and adding
 	// vectors one by one
@@ -559,7 +562,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 	// if we have a trained index use the fast merge to perform the merge without
 	// re-training and reconstructing the vectors. we perform the fast merge
 	// only if the quantization type matches between the trained index and the final merged index
-	if trainedIndex != nil && trainedIndex.isMergeable() && canFastMerge(indexOptimizedFor, nvecs) {
+	if !useGPU && canFastMerge(trainedIndex, indexOptimizedFor, nvecs) {
 		err := v.fastMergeIndexes(trainedIndex, config, drops, vecIndexes, w, closeCh)
 		if err != nil {
 			return err
@@ -679,7 +682,7 @@ func (v *vectorIndexOpaque) writeFaissIndex(vecs *vectorSet, config *faissIndexC
 // index to be created based on the number of vectors and centroids.
 func determineBinaryIndexToUse(nvecs, nlist int) string {
 	switch {
-	case nvecs >= 1000:
+	case nvecs >= ivfThreshold:
 		return fmt.Sprintf("BIVF%d", nlist)
 	default:
 		return "BFlat"
@@ -720,7 +723,7 @@ func determineCentroids(nvecs int) int {
 	switch {
 	case nvecs >= 200000:
 		nlist = int(4 * math.Sqrt(float64(nvecs)))
-	case nvecs >= 1000:
+	case nvecs >= ivfThreshold:
 		// 100 points per cluster is a reasonable default, considering the default
 		// minimum and maximum points per cluster is 39 and 256 respectively.
 		// Since it's a recommendation to have a minimum of 10 clusters, 1000(100 * 10)
@@ -733,7 +736,7 @@ func determineCentroids(nvecs int) int {
 // determineFloat32IndexToUse returns a description string for the float32
 // index and quantizer type, and an index type constant.
 func determineFloat32IndexToUse(nvecs, nlist int, optimizationType string) string {
-	if nvecs < 1000 {
+	if nvecs < ivfThreshold {
 		return "Flat"
 	}
 	switch optimizationType {
@@ -983,20 +986,6 @@ type faissIndexConfig struct {
 	useGPU           bool
 }
 
-func canFastMerge(opt string, nvecs int) bool {
-	switch opt {
-	case index.IndexBIVFWithBackingFlat, index.IndexBIVFWithBackingSQ8:
-		fallthrough
-	case index.IndexOptimizedForMemoryEfficient:
-		fallthrough
-	case index.IndexIVFRaBitQ:
-		return nvecs > 1000
-	default:
-		return nvecs > ivfSq8Threshold
-	}
-
-}
-
 func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimension, metricType, numVecs, nlist int, useGPU bool) *faissIndexConfig {
 	return &faissIndexConfig{
 		indexType:        idxType,
@@ -1040,4 +1029,28 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 	default:
 		return nil, errNotSupported
 	}
+}
+
+// canFastMerge determines whether we can use the fast merge capabilities of faiss based on
+//   - the presence of a trained index
+//   - the optimization type of the index.
+//   - the total number of vectors being merged.
+func canFastMerge(trainedIndex faissIndexIVF, opt string, totalVecs int) bool {
+	// if the trained index isn't IVF or not available, fallback to naive merge
+	if trainedIndex == nil {
+		return false
+	}
+
+	var minVecsForFastMerge int
+	switch opt {
+	case index.IndexBIVFWithBackingFlat, index.IndexBIVFWithBackingSQ8:
+		fallthrough
+	case index.IndexOptimizedForMemoryEfficient:
+		fallthrough
+	case index.IndexIVFRaBitQ:
+		minVecsForFastMerge = ivfThreshold
+	default:
+		minVecsForFastMerge = ivfSq8Threshold
+	}
+	return trainedIndex.ntotal() > int64(minVecsForFastMerge) && totalVecs > minVecsForFastMerge
 }

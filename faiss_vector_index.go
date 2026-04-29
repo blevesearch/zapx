@@ -42,8 +42,6 @@ type faissIndex interface {
 	metricType() int
 	// ntotal returns the total number of vectors currently stored in the index.
 	ntotal() int64
-	// returns whether index is eligible for fast merge
-	isMergeable() bool
 	// reconstructBatch reconstructs the original vectors for the given vector IDs in the index.
 	reconstructBatch(vecIDs []int64, prealloc []float32) ([]float32, error)
 	// performs a search on the index using the provided query vector and and retrieves the top K nearest neighbors.
@@ -95,6 +93,8 @@ type faissIndexIVF interface {
 	// IVF index that is trained on the same data and used to assign vectors
 	// to clusters in the IVF index.
 	setQuantizers(trainedIndex faissIndexIVF) error
+	// returns whether the participating index is eligible for fast merge
+	isMergeable() bool
 	// merged another faiss index into the current IVF index,
 	// with an offset to adjust vector IDs from the other index.
 	mergeFrom(other faissIndex, offset int64) error

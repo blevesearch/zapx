@@ -289,8 +289,11 @@ func (b *faissBinaryIndex) setQuantizers(trainedIndex faissIndexIVF) error {
 func (b *faissBinaryIndex) isMergeable() bool {
 	if b.cfg != nil {
 		switch b.cfg.optimizationType {
-		case index.IndexBIVFWithBackingFlat, index.IndexBIVFWithBackingSQ8:
-			return b.backing.Ntotal() > 1000
+		case index.IndexBIVFWithBackingFlat:
+			// the flat backing index currently doesn't support merge_from
+			return false
+		case index.IndexBIVFWithBackingSQ8:
+			return b.backing.Ntotal() > ivfThreshold
 		}
 	}
 	return false

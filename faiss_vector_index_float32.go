@@ -155,7 +155,11 @@ func (f *faissFloat32Index) setNProbe(nprobe int32) {
 }
 
 func (f *faissFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
-	err := f.idx.Train(trainingData.floatData)
+	nvecsToTrain := f.cfg.nlist * 40 * f.cfg.dimension
+	if len(trainingData.floatData) < nvecsToTrain {
+		nvecsToTrain = len(trainingData.floatData)
+	}
+	err := f.idx.Train(trainingData.floatData[:nvecsToTrain])
 	if err != nil {
 		return err
 	}

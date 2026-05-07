@@ -506,7 +506,11 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 		indexDataCap += indexReconsLen
 		// track the reconstruct index for this vector index, which will be used
 		// to reconstruct the vectors corresponding to the valid vector IDs for this index.
-		reconParams := newFaissIndexParams(indexOptimizedFor, currNumVecs)
+
+		// Here currNumVecs is the count of valid vectors for this index, so we pass in ntotal
+		// as the vector count in the index for the params because the underlying faiss index still has all the vectors.
+		totCurrVecs := int(faissIndex.Ntotal())
+		reconParams := newFaissIndexParams(indexOptimizedFor, totCurrVecs)
 		fIndex, err := newFaissFloat32Index(faissIndex, reconParams)
 		if err != nil {
 			freeReconstructedIndexes(vecIndexes)

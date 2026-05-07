@@ -29,20 +29,20 @@ import (
 // Faiss Float32 Index
 // ---------------------------------
 type faissFloat32Index struct {
-	idx          *faiss.IndexImpl
-	optimization string
+	idx    *faiss.IndexImpl
+	params *faissIndexParams
 }
 
-func newFaissFloat32Index(idx *faiss.IndexImpl, optStr string) (faissIndex, error) {
+func newFaissFloat32Index(idx *faiss.IndexImpl, params *faissIndexParams) (faissIndex, error) {
 	if idx == nil {
 		return nil, errNilIndex
 	}
-	if _, ok := index.SupportedVectorIndexOptimizations[optStr]; !ok {
-		return nil, errInvalidOptimizationString
+	if params == nil {
+		return nil, errNilParams
 	}
 	return &faissFloat32Index{
-		idx:          idx,
-		optimization: optStr,
+		idx:    idx,
+		params: params,
 	}, nil
 }
 
@@ -163,11 +163,11 @@ func (f *faissFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {
 }
 
 func (f *faissFloat32Index) isMergeable() bool {
-	switch f.optimization {
+	switch f.params.optimization {
 	case index.IndexOptimizedForLatency, index.IndexOptimizedForRecall:
-		return f.ntotal() >= ivfSq8Threshold
+		return f.params.numVecs >= ivfSq8Threshold
 	case index.IndexOptimizedForMemoryEfficient, index.IndexIVFRaBitQ:
-		return f.ntotal() >= ivfThreshold
+		return f.params.numVecs >= ivfThreshold
 	default:
 		return false
 	}

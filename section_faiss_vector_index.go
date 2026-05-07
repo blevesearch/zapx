@@ -506,7 +506,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 		indexDataCap += indexReconsLen
 		// track the reconstruct index for this vector index, which will be used
 		// to reconstruct the vectors corresponding to the valid vector IDs for this index.
-		fIndex, err := newFaissFloat32Index(faissIndex, indexOptimizedFor)
+		reconParams := newFaissIndexParams(indexOptimizedFor, currNumVecs)
+		fIndex, err := newFaissFloat32Index(faissIndex, reconParams)
 		if err != nil {
 			freeReconstructedIndexes(vecIndexes)
 			return err
@@ -529,7 +530,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 				freeReconstructedIndexes(vecIndexes)
 				return err
 			}
-			vecIndexes[segI].index, err = newFaissBinaryIndex(binaryIndex, faissIndex, indexOptimizedFor)
+			vecIndexes[segI].index, err = newFaissBinaryIndex(binaryIndex, faissIndex, reconParams)
 			if err != nil {
 				freeReconstructedIndexes(vecIndexes)
 				return err
@@ -992,6 +993,7 @@ func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimens
 
 // Factory function to create a faissIndex for the given index config.
 func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
+	params := newFaissIndexParams(cfg.optimizationType, cfg.numVecs)
 	switch cfg.indexType {
 	case faissFP32Index:
 		description := determineFloat32IndexToUse(cfg.numVecs, cfg.nlist, cfg.optimizationType)
@@ -1000,9 +1002,9 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 			return nil, err
 		}
 		if cfg.useGPU {
-			return newFaissGPUFloat32Index(idx, cfg.optimizationType, cfg.numVecs)
+			return newFaissGPUFloat32Index(idx, params)
 		}
-		return newFaissFloat32Index(idx, cfg.optimizationType)
+		return newFaissFloat32Index(idx, params)
 	case faissBIVFIndex:
 		description := determineBinaryIndexToUse(cfg.numVecs, cfg.nlist)
 		binaryIdx, err := faiss.BinaryIndexFactory(cfg.dimension, description)
@@ -1015,7 +1017,7 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 		if err != nil {
 			return nil, err
 		}
-		return newFaissBinaryIndex(binaryIdx, backingIdx, cfg.optimizationType)
+		return newFaissBinaryIndex(binaryIdx, backingIdx, params)
 	default:
 		return nil, errNotSupported
 	}

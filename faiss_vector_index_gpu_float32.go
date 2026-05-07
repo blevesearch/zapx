@@ -48,9 +48,7 @@ func (gs *gpuState) batchSearch(qVector *vectorSet, k int64) ([]float32, []int64
 // operations, serialization, etc.) are delegated to the CPU index.
 type faissGPUFloat32Index struct {
 	cpuIdx *faiss.IndexImpl
-
-	optimization string
-	nvecs        int
+	params *faissIndexParams
 
 	// doneCh is closed when initGPU completes.
 	doneCh chan struct{}
@@ -64,18 +62,17 @@ type faissGPUFloat32Index struct {
 // newFaissGPUFloat32Index creates a GPU-backed float32 index. The GPU clone is
 // always performed asynchronously; search falls back to CPU until it
 // completes. All other GPU-operating methods block on doneCh before proceeding.
-func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl, optimization string, nvecs int) (faissIndex, error) {
+func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl, params *faissIndexParams) (faissIndex, error) {
 	if cpuIdx == nil {
 		return nil, errNilIndex
 	}
-	if _, ok := index.SupportedVectorIndexOptimizations[optimization]; !ok {
-		return nil, errInvalidOptimizationString
+	if params == nil {
+		return nil, errNilParams
 	}
 	f := &faissGPUFloat32Index{
-		cpuIdx:       cpuIdx,
-		doneCh:       make(chan struct{}),
-		optimization: optimization,
-		nvecs:        nvecs,
+		cpuIdx: cpuIdx,
+		params: params,
+		doneCh: make(chan struct{}),
 	}
 	go f.initGPU()
 	return f, nil
@@ -319,11 +316,11 @@ func (f *faissGPUFloat32Index) syncGPUToCPU() error {
 }
 
 func (f *faissGPUFloat32Index) canUseGPU() bool {
-	switch f.optimization {
+	switch f.params.optimization {
 	case index.IndexOptimizedForLatency, index.IndexOptimizedForRecall:
-		return f.nvecs >= ivfSq8Threshold
+		return f.params.numVecs >= ivfSq8Threshold
 	case index.IndexOptimizedForMemoryEfficient:
-		return f.nvecs >= ivfThreshold
+		return f.params.numVecs >= ivfThreshold
 	default:
 		return false
 	}

@@ -107,17 +107,20 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	if n <= 0 {
 		return nil, nil, nil, fmt.Errorf("could not read numVecs")
 	}
+	pos += n
+
 	// if no vectors or no documents, return empty cache entry
 	if numVecs == 0 || numDocs == 0 {
 		return nil, nil, nil, nil
 	}
-	pos += n
+
 	// read the length of the docID list
 	listLen, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	if n <= 0 {
 		return nil, nil, nil, fmt.Errorf("could not read docID list length")
 	}
 	pos += n
+
 	// read the entierity of the docID list through the file reader
 	buf, err := r.process(mem[pos : pos+int(listLen)])
 	if err != nil {
@@ -126,6 +129,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	pos += int(listLen)
 	bufPos := 0
 	bufLen := len(buf)
+
 	// create a mapping using the numVecs and numDocs
 	mapping = newIDMapping(uint32(numVecs), numDocs)
 	for vecID := uint32(0); vecID < uint32(numVecs); vecID++ {
@@ -136,12 +140,14 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		bufPos += n
 		mapping.add(vecID, uint32(docID))
 	}
+
 	// read the type of the vector index
 	indexType, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	if n <= 0 {
 		return nil, nil, nil, fmt.Errorf("could not read faiss index type")
 	}
 	pos += n
+
 	// read the faiss index size
 	indexSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	if n <= 0 {
@@ -161,6 +167,8 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		return nil, nil, nil, fmt.Errorf("faiss index load error: %v", err)
 	}
 	pos += int(indexSize)
+
+	params := newFaissIndexParams(optStr, int(numVecs))
 	if faissIndexType(indexType) == faissBIVFIndex {
 		// read the faiss binary index size
 		binSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
@@ -176,15 +184,15 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 			return nil, nil, nil, fmt.Errorf("faiss binary index load error: %v", err)
 		}
 		pos += int(binSize)
-		index, err = newFaissBinaryIndex(bIndex, fIndex, optStr)
+		index, err = newFaissBinaryIndex(bIndex, fIndex, params)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("faiss binary index creation error: %v", err)
 		}
 	} else {
 		if useGPU {
-			index, err = newFaissGPUFloat32Index(fIndex, optStr, int(numVecs))
+			index, err = newFaissGPUFloat32Index(fIndex, params)
 		} else {
-			index, err = newFaissFloat32Index(fIndex, optStr)
+			index, err = newFaissFloat32Index(fIndex, params)
 		}
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("faiss float32 index creation error: %v", err)

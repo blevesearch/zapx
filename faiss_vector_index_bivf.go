@@ -29,23 +29,23 @@ import (
 // Faiss Binary IVF Index
 // ---------------------------------
 type faissBinaryIndex struct {
-	backing      *faiss.IndexImpl
-	binary       *faiss.BinaryIndexImpl
-	optimization string
+	backing *faiss.IndexImpl
+	binary  *faiss.BinaryIndexImpl
+	params  *faissIndexParams
 }
 
-func newFaissBinaryIndex(binary *faiss.BinaryIndexImpl, backing *faiss.IndexImpl, optimization string) (faissIndex, error) {
+func newFaissBinaryIndex(binary *faiss.BinaryIndexImpl, backing *faiss.IndexImpl, params *faissIndexParams) (faissIndex, error) {
 	// we always create this object only with valid backing and binary indexes
 	if binary == nil || backing == nil {
 		return nil, errNilIndex
 	}
-	if _, ok := index.SupportedVectorIndexOptimizations[optimization]; !ok {
-		return nil, errInvalidOptimizationString
+	if params == nil {
+		return nil, errNilParams
 	}
 	return &faissBinaryIndex{
-		backing:      backing,
-		binary:       binary,
-		optimization: optimization,
+		backing: backing,
+		binary:  binary,
+		params:  params,
 	}, nil
 }
 
@@ -276,12 +276,12 @@ func (b *faissBinaryIndex) setQuantizers(trainedIndex faissIndexIVF) error {
 }
 
 func (b *faissBinaryIndex) isMergeable() bool {
-	switch b.optimization {
+	switch b.params.optimization {
 	case index.IndexBIVFWithBackingFlat:
 		// the flat backing index currently doesn't support merge_from
 		return false
 	case index.IndexBIVFWithBackingSQ8:
-		return b.ntotal() >= ivfThreshold
+		return b.params.numVecs >= ivfThreshold
 	default:
 		return false
 	}

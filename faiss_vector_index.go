@@ -25,10 +25,38 @@ import (
 )
 
 var (
-	errInvalidOptimizationString error = errors.New("faiss index optimization string is invalid")
-	errNilIndex                  error = errors.New("faiss index is nil")
-	errNotSupported              error = errors.New("operation not supported")
+	errNilIndex     error = errors.New("faiss index is nil")
+	errNilParams    error = errors.New("faiss index params is nil")
+	errNotSupported error = errors.New("operation not supported")
 )
+
+// -------------------------------------------
+// Parameters for constructing a Faiss index
+// -------------------------------------------
+// faissIndexParams holds the construction-time parameters required by a
+// faissIndex implementation that cannot be derived from the underlying
+// faiss index objects themselves (e.g. dimension and metric type are
+// already available on the faiss index).
+type faissIndexParams struct {
+	// optimization is the index optimization type string (e.g. latency,
+	// recall, memory-efficient, BIVF flavours).
+	optimization string
+	// numVecs is the number of vectors expected to populate the index.
+	// It is needed at construction time because the underlying faiss
+	// index reports zero vectors until trainAndAdd/add is called, but
+	// some construction-time decisions (e.g. whether to clone to GPU)
+	// depend on the eventual vector count.
+	numVecs int
+}
+
+// newFaissIndexParams constructs a faissIndexParams with the given optimization
+// type and expected vector count.
+func newFaissIndexParams(optimization string, numVecs int) *faissIndexParams {
+	return &faissIndexParams{
+		optimization: optimization,
+		numVecs:      numVecs,
+	}
+}
 
 // Abstract interface for Faiss vector indices, which are returned by the go-faiss library.
 type faissIndex interface {

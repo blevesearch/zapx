@@ -75,7 +75,7 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	}
 	pos += indexSize
 
-	cfg := newFaissIndexParams(optStr, int(numVecs))
+	params := newFaissIndexParams(optStr, int(numVecs))
 	if faissIndexType(indexType) == faissBIVFIndex {
 		binaryIndexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
@@ -83,7 +83,7 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 		if err != nil {
 			return nil, err
 		}
-		return newFaissBinaryIndex(binaryIndex, faissIndex, cfg)
+		return newFaissBinaryIndex(binaryIndex, faissIndex, params)
 	}
-	return newFaissFloat32Index(faissIndex, cfg)
+	return newFaissFloat32Index(faissIndex, params)
 }

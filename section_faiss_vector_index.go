@@ -1000,7 +1000,7 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 			return nil, err
 		}
 		if cfg.useGPU {
-			return newFaissGPUFloat32Index(idx, cfg.optimizationType)
+			return newFaissGPUFloat32Index(idx, cfg.optimizationType, cfg.numVecs)
 		}
 		return newFaissFloat32Index(idx, cfg.optimizationType)
 	case faissBIVFIndex:

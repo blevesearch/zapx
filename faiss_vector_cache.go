@@ -182,7 +182,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		}
 	} else {
 		if useGPU {
-			index, err = newFaissGPUFloat32Index(fIndex, optStr)
+			index, err = newFaissGPUFloat32Index(fIndex, optStr, int(numVecs))
 		} else {
 			index, err = newFaissFloat32Index(fIndex, optStr)
 		}

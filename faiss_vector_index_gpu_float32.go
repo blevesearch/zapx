@@ -50,6 +50,7 @@ type faissGPUFloat32Index struct {
 	cpuIdx *faiss.IndexImpl
 
 	optimization string
+	nvecs        int
 
 	// doneCh is closed when initGPU completes.
 	doneCh chan struct{}
@@ -63,7 +64,7 @@ type faissGPUFloat32Index struct {
 // newFaissGPUFloat32Index creates a GPU-backed float32 index. The GPU clone is
 // always performed asynchronously; search falls back to CPU until it
 // completes. All other GPU-operating methods block on doneCh before proceeding.
-func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl, optimization string) (faissIndex, error) {
+func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl, optimization string, nvecs int) (faissIndex, error) {
 	if cpuIdx == nil {
 		return nil, errNilIndex
 	}
@@ -74,6 +75,7 @@ func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl, optimization string) (fais
 		cpuIdx:       cpuIdx,
 		doneCh:       make(chan struct{}),
 		optimization: optimization,
+		nvecs:        nvecs,
 	}
 	go f.initGPU()
 	return f, nil
@@ -317,12 +319,11 @@ func (f *faissGPUFloat32Index) syncGPUToCPU() error {
 }
 
 func (f *faissGPUFloat32Index) canUseGPU() bool {
-	nvecs := f.ntotal()
 	switch f.optimization {
 	case index.IndexOptimizedForLatency, index.IndexOptimizedForRecall:
-		return nvecs >= ivfSq8Threshold
+		return f.nvecs >= ivfSq8Threshold
 	case index.IndexOptimizedForMemoryEfficient:
-		return nvecs >= ivfThreshold
+		return f.nvecs >= ivfThreshold
 	default:
 		return false
 	}

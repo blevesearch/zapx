@@ -29,34 +29,23 @@ import (
 // Faiss Binary IVF Index
 // ---------------------------------
 type faissBinaryIndex struct {
-	cfg     *faissIndexConfig
-	backing *faiss.IndexImpl
-	binary  *faiss.BinaryIndexImpl
+	backing      *faiss.IndexImpl
+	binary       *faiss.BinaryIndexImpl
+	optimization string
 }
 
-func newFaissBinaryIndex(binary *faiss.BinaryIndexImpl, backing *faiss.IndexImpl) (index faissIndex, err error) {
+func newFaissBinaryIndex(binary *faiss.BinaryIndexImpl, backing *faiss.IndexImpl, optimization string) (faissIndex, error) {
 	// we always create this object only with valid backing and binary indexes
 	if binary == nil || backing == nil {
 		return nil, errNilIndex
 	}
-	return &faissBinaryIndex{
-		backing: backing,
-		binary:  binary,
-	}, nil
-}
-
-func newFaissBinaryIndexWithConfig(binary *faiss.BinaryIndexImpl, backing *faiss.IndexImpl, cfg *faissIndexConfig) (index faissIndex, err error) {
-	if binary == nil || backing == nil {
-		return nil, errNilIndex
+	if _, ok := index.SupportedVectorIndexOptimizations[optimization]; !ok {
+		return nil, errInvalidOptimizationString
 	}
-	if cfg == nil {
-		return nil, errNilConfig
-	}
-
 	return &faissBinaryIndex{
-		cfg:     cfg,
-		backing: backing,
-		binary:  binary,
+		backing:      backing,
+		binary:       binary,
+		optimization: optimization,
 	}, nil
 }
 
@@ -287,16 +276,15 @@ func (b *faissBinaryIndex) setQuantizers(trainedIndex faissIndexIVF) error {
 }
 
 func (b *faissBinaryIndex) isMergeable() bool {
-	if b.cfg != nil {
-		switch b.cfg.optimizationType {
-		case index.IndexBIVFWithBackingFlat:
-			// the flat backing index currently doesn't support merge_from
-			return false
-		case index.IndexBIVFWithBackingSQ8:
-			return b.backing.Ntotal() > ivfThreshold
-		}
+	switch b.optimization {
+	case index.IndexBIVFWithBackingFlat:
+		// the flat backing index currently doesn't support merge_from
+		return false
+	case index.IndexBIVFWithBackingSQ8:
+		return b.ntotal() > ivfThreshold
+	default:
+		return false
 	}
-	return false
 }
 
 func (b *faissBinaryIndex) mergeFrom(other faissIndex, offset int64) error {

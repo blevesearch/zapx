@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"sync/atomic"
 
+	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 )
 
@@ -48,6 +49,8 @@ func (gs *gpuState) batchSearch(qVector *vectorSet, k int64) ([]float32, []int64
 type faissGPUFloat32Index struct {
 	cpuIdx *faiss.IndexImpl
 
+	optimization string
+
 	// doneCh is closed when initGPU completes.
 	doneCh chan struct{}
 
@@ -60,13 +63,14 @@ type faissGPUFloat32Index struct {
 // newFaissGPUFloat32Index creates a GPU-backed float32 index. The GPU clone is
 // always performed asynchronously; search falls back to CPU until it
 // completes. All other GPU-operating methods block on doneCh before proceeding.
-func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl) (faissIndex, error) {
+func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl, optimization string) (faissIndex, error) {
 	if cpuIdx == nil {
 		return nil, errNilIndex
 	}
 	f := &faissGPUFloat32Index{
-		cpuIdx: cpuIdx,
-		doneCh: make(chan struct{}),
+		cpuIdx:       cpuIdx,
+		doneCh:       make(chan struct{}),
+		optimization: optimization,
 	}
 	go f.initGPU()
 	return f, nil
@@ -80,7 +84,13 @@ func (f *faissGPUFloat32Index) waitGPU() {
 // initGPU clones the CPU index to the GPU and sets up the request batcher.
 // It always closes doneCh when it returns, signalling completion to waiters.
 func (f *faissGPUFloat32Index) initGPU() {
+	// ensure doneCh is closed on exit, even if the GPU clone/setup fails.
 	defer close(f.doneCh)
+	// Check if we can use the GPU before attempting the clone,
+	// to avoid unnecessary overhead when the GPU is not expected to help.
+	if !f.canUseGPU() {
+		return
+	}
 	gpuIdx, err := faiss.CloneToGPU(f.cpuIdx)
 	if err != nil || gpuIdx == nil {
 		return
@@ -301,4 +311,16 @@ func (f *faissGPUFloat32Index) syncGPUToCPU() error {
 	f.cpuIdx = cpuIdx
 	oldCPUIdx.Close()
 	return nil
+}
+
+func (f *faissGPUFloat32Index) canUseGPU() bool {
+	nvecs := f.ntotal()
+	switch f.optimization {
+	case index.IndexOptimizedForLatency, index.IndexOptimizedForRecall:
+		return nvecs > ivfSq8Threshold
+	case index.IndexOptimizedForMemoryEfficient:
+		return nvecs > ivfThreshold
+	default:
+		return false
+	}
 }

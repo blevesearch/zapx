@@ -46,12 +46,11 @@ const (
 	// Divide the estimated nprobe with this value to optimize
 	// for latency.
 	nprobeLatencyOptimization = 2
-	// The threshold for number of vectors beyond which we start building the ivf class
-	// of indexes
+	// The threshold for number of vectors beyond which we start building
+	// the IVF class of indexes.
 	ivfThreshold = 1000
-	// The threshold for number of vectors beyond which we consider fast merging
-	// using faiss's native merge capabilities, instead of reconstructing and adding
-	// vectors one by one
+	// The threshold for number of vectors beyond which we start building
+	// the IVF class of indexes with SQ8 quantization for memory efficiency.
 	ivfSq8Threshold = 10000
 )
 
@@ -505,17 +504,14 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 			reconsCap = indexReconsLen
 		}
 		indexDataCap += indexReconsLen
-
 		// track the reconstruct index for this vector index, which will be used
 		// to reconstruct the vectors corresponding to the valid vector IDs for this index.
-		config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, currNumVecs, determineCentroids(currNumVecs), useGPU)
-		fIndex, err := newFaissFloat32IndexWithConfig(faissIndex, config)
+		fIndex, err := newFaissFloat32Index(faissIndex, indexOptimizedFor)
 		if err != nil {
 			freeReconstructedIndexes(vecIndexes)
 			return err
 		}
 		vecIndexes[segI].index = fIndex
-
 		// load binary index from disk if present
 		if currVecIndex.indexType == faissBIVFIndex {
 			// get to the bivf part of the vector index section
@@ -533,7 +529,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 				freeReconstructedIndexes(vecIndexes)
 				return err
 			}
-			vecIndexes[segI].index, err = newFaissBinaryIndexWithConfig(binaryIndex, faissIndex, config)
+			vecIndexes[segI].index, err = newFaissBinaryIndex(binaryIndex, faissIndex, indexOptimizedFor)
 			if err != nil {
 				freeReconstructedIndexes(vecIndexes)
 				return err
@@ -1003,12 +999,10 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 		if err != nil {
 			return nil, err
 		}
-		// we restrict GPU to IVF indexes only; flat and SQ indexes do not get a noticeable speedup
-		// when run on GPU, and the GPU overhead can actually make them slower than CPU.
-		if cfg.useGPU && idx.IsIVFIndex() {
-			return newFaissGPUFloat32Index(idx)
+		if cfg.useGPU {
+			return newFaissGPUFloat32Index(idx, cfg.optimizationType)
 		}
-		return newFaissFloat32Index(idx)
+		return newFaissFloat32Index(idx, cfg.optimizationType)
 	case faissBIVFIndex:
 		description := determineBinaryIndexToUse(cfg.numVecs, cfg.nlist)
 		binaryIdx, err := faiss.BinaryIndexFactory(cfg.dimension, description)
@@ -1021,7 +1015,7 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 		if err != nil {
 			return nil, err
 		}
-		return newFaissBinaryIndex(binaryIdx, backingIdx)
+		return newFaissBinaryIndex(binaryIdx, backingIdx, cfg.optimizationType)
 	default:
 		return nil, errNotSupported
 	}

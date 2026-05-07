@@ -25,9 +25,9 @@ import (
 )
 
 var (
-	errNilConfig    error = errors.New("faiss index config is nil")
-	errNilIndex     error = errors.New("faiss index is nil")
-	errNotSupported error = errors.New("operation not supported")
+	errInvalidOptimizationString error = errors.New("faiss index optimization string is invalid")
+	errNilIndex                  error = errors.New("faiss index is nil")
+	errNotSupported              error = errors.New("operation not supported")
 )
 
 // Abstract interface for Faiss vector indices, which are returned by the go-faiss library.

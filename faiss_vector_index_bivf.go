@@ -281,7 +281,7 @@ func (b *faissBinaryIndex) isMergeable() bool {
 		// the flat backing index currently doesn't support merge_from
 		return false
 	case index.IndexBIVFWithBackingSQ8:
-		return b.ntotal() > ivfThreshold
+		return b.ntotal() >= ivfThreshold
 	default:
 		return false
 	}

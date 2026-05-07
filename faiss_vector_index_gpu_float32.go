@@ -67,6 +67,9 @@ func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl, optimization string) (fais
 	if cpuIdx == nil {
 		return nil, errNilIndex
 	}
+	if _, ok := index.SupportedVectorIndexOptimizations[optimization]; !ok {
+		return nil, errInvalidOptimizationString
+	}
 	f := &faissGPUFloat32Index{
 		cpuIdx:       cpuIdx,
 		doneCh:       make(chan struct{}),
@@ -317,9 +320,9 @@ func (f *faissGPUFloat32Index) canUseGPU() bool {
 	nvecs := f.ntotal()
 	switch f.optimization {
 	case index.IndexOptimizedForLatency, index.IndexOptimizedForRecall:
-		return nvecs > ivfSq8Threshold
+		return nvecs >= ivfSq8Threshold
 	case index.IndexOptimizedForMemoryEfficient:
-		return nvecs > ivfThreshold
+		return nvecs >= ivfThreshold
 	default:
 		return false
 	}

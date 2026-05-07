@@ -165,9 +165,9 @@ func (f *faissFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {
 func (f *faissFloat32Index) isMergeable() bool {
 	switch f.optimization {
 	case index.IndexOptimizedForLatency, index.IndexOptimizedForRecall:
-		return f.ntotal() > ivfSq8Threshold
+		return f.ntotal() >= ivfSq8Threshold
 	case index.IndexOptimizedForMemoryEfficient, index.IndexIVFRaBitQ:
-		return f.ntotal() > ivfThreshold
+		return f.ntotal() >= ivfThreshold
 	default:
 		return false
 	}

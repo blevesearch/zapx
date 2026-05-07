@@ -46,10 +46,10 @@ const (
 	// Divide the estimated nprobe with this value to optimize
 	// for latency.
 	nprobeLatencyOptimization = 2
-	// The threshold for number of vectors beyond which we start building
+	// The threshold for number of vectors at or beyond which we start building
 	// the IVF class of indexes.
 	ivfThreshold = 1000
-	// The threshold for number of vectors beyond which we start building
+	// The threshold for number of vectors at or beyond which we start building
 	// the IVF class of indexes with SQ8 quantization for memory efficiency.
 	ivfSq8Threshold = 10000
 )
@@ -1042,5 +1042,5 @@ func canFastMerge(trainedIndex faissIndexIVF, opt string, totalVecs int) bool {
 	default:
 		minVecsForFastMerge = ivfSq8Threshold
 	}
-	return trainedIndex.ntotal() > int64(minVecsForFastMerge) && totalVecs > minVecsForFastMerge
+	return trainedIndex.ntotal() >= int64(minVecsForFastMerge) && totalVecs >= minVecsForFastMerge
 }

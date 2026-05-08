@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"reflect"
 	"slices"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
@@ -29,6 +30,15 @@ import (
 	faiss "github.com/blevesearch/go-faiss"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
+
+var (
+	reflectStaticSizeMapping uint64
+)
+
+func init() {
+	var m idMapping
+	reflectStaticSizeMapping = uint64(reflect.TypeOf(m).Size())
+}
 
 const (
 	// maxMultiVectorDocSearchRetries limits repeated searches when deduplicating
@@ -48,11 +58,10 @@ const (
 
 // vectorIndexWrapper conforms to scorch_segment_api's VectorIndex interface
 type vectorIndexWrapper struct {
-	index        faissIndex
-	mapping      *idMapping
-	exclude      *bitmap
-	fieldID      uint16
-	vecIndexSize uint64
+	index   faissIndex
+	mapping *idMapping
+	exclude *bitmap
+	fieldID uint16
 
 	// nestedMode indicates if the vector index is operating in nested document mode.
 	// if so we have a reusable ancestry slice to help with docID lookups
@@ -272,7 +281,14 @@ func (v *vectorIndexWrapper) Close() {
 }
 
 func (v *vectorIndexWrapper) Size() uint64 {
-	return v.vecIndexSize
+	var rv uint64
+	if v.index != nil {
+		rv += v.index.size()
+	}
+	if v.mapping != nil {
+		rv += v.mapping.size()
+	}
+	return rv
 }
 
 func (v *vectorIndexWrapper) ObtainKCentroidCardinalitiesFromIVFIndex(limit int, descending bool) (
@@ -914,6 +930,18 @@ func (m *idMapping) vecsForDoc(docID uint32) ([]uint32, bool) {
 		return nil, false
 	}
 	return m.docToVec[docID], true
+}
+
+func (m *idMapping) size() uint64 {
+	var sizeInBytes uint64
+	sizeInBytes = reflectStaticSizeMapping + uint64(SizeOfPtr)
+	// size of vecToDoc slice
+	sizeInBytes += uint64(len(m.vecToDoc)) * uint64(SizeOfUint32)
+	// size of docToVec slice
+	for _, vecs := range m.docToVec {
+		sizeInBytes += uint64(SizeOfSlice) + uint64(len(vecs))*uint64(SizeOfUint32)
+	}
+	return sizeInBytes
 }
 
 // ------------------------------------------------------------------------------

@@ -20,10 +20,18 @@ package zap
 import (
 	"encoding/binary"
 	"encoding/json"
+	"reflect"
 
 	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 )
+
+var reflectStaticSizeBinaryIndex uint64
+
+func init() {
+	var b faissBinaryIndex
+	reflectStaticSizeBinaryIndex = uint64(reflect.TypeOf(b).Size())
+}
 
 // ---------------------------------
 // Faiss Binary IVF Index
@@ -144,7 +152,8 @@ func (b *faissBinaryIndex) write(buf []byte, w *FileWriter) error {
 }
 
 func (b *faissBinaryIndex) size() uint64 {
-	return b.binary.Size() + b.backing.Size()
+	// do not call Size() API for the FAISS indices as we are memory mapping them
+	return reflectStaticSizeBinaryIndex
 }
 
 // -----------------------------------------------------------------

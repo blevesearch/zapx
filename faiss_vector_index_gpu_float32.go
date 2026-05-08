@@ -20,11 +20,19 @@ package zap
 import (
 	"encoding/binary"
 	"encoding/json"
+	"reflect"
 	"sync/atomic"
 
 	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 )
+
+var reflectStaticSizeGPUFloat32Index uint64
+
+func init() {
+	var f faissGPUFloat32Index
+	reflectStaticSizeGPUFloat32Index = uint64(reflect.TypeOf(f).Size())
+}
 
 // gpuState holds all the resources related to gpu vector search,
 // the gpu index and the request batcher to the gpu
@@ -195,7 +203,8 @@ func (f *faissGPUFloat32Index) write(buf []byte, w *FileWriter) error {
 }
 
 func (f *faissGPUFloat32Index) size() uint64 {
-	return f.cpuIdx.Size()
+	// do not call Size() API for the FAISS index as we are memory mapping it
+	return reflectStaticSizeGPUFloat32Index
 }
 
 // inGPURam reports if the index is currently running on the GPU.

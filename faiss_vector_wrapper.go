@@ -33,11 +33,14 @@ import (
 
 var (
 	reflectStaticSizeMapping uint64
+	reflectStaticSizeBitmap  uint64
 )
 
 func init() {
 	var m idMapping
 	reflectStaticSizeMapping = uint64(reflect.TypeOf(m).Size())
+	var b bitmap
+	reflectStaticSizeBitmap = uint64(reflect.TypeOf(b).Size())
 }
 
 const (
@@ -287,6 +290,9 @@ func (v *vectorIndexWrapper) Size() uint64 {
 	}
 	if v.mapping != nil {
 		rv += v.mapping.size()
+	}
+	if v.exclude != nil {
+		rv += v.exclude.size()
 	}
 	return rv
 }
@@ -788,22 +794,22 @@ func (rs *resultSetSlice) size() int64 {
 
 // bitmap is a simple, fixed-size bitmap.
 type bitmap struct {
-	bits []byte
-	size uint32
+	bits    []byte
+	numBits uint32
 }
 
 // newBitmap creates a new bitmap with the given number of bits
 func newBitmap(numBits uint32) *bitmap {
 	bitsetSize := (numBits + 7) / 8
 	return &bitmap{
-		bits: make([]byte, bitsetSize),
-		size: numBits,
+		bits:    make([]byte, bitsetSize),
+		numBits: numBits,
 	}
 }
 
 // set the bit at the given position
 func (b *bitmap) set(pos uint32) {
-	if pos >= b.size {
+	if pos >= b.numBits {
 		return
 	}
 	// set the bit in the byte slice
@@ -815,7 +821,7 @@ func (b *bitmap) set(pos uint32) {
 
 // clear the bit at the given position
 func (b *bitmap) clear(pos uint32) {
-	if pos >= b.size {
+	if pos >= b.numBits {
 		return
 	}
 	// clear the bit in the byte slice
@@ -827,7 +833,7 @@ func (b *bitmap) clear(pos uint32) {
 
 // test if the bit at the given position is set
 func (b *bitmap) test(pos uint32) bool {
-	if pos >= b.size {
+	if pos >= b.numBits {
 		return false
 	}
 	return (b.bits[pos>>3]>>(pos&7))&1 != 0
@@ -859,11 +865,16 @@ func (b *bitmap) isEmpty() bool {
 	return true
 }
 
+// size returns the memory size of the bitmap in bytes
+func (b *bitmap) size() uint64 {
+	return reflectStaticSizeBitmap + uint64(SizeOfPtr) + uint64(len(b.bits))
+}
+
 // creates a clone of the bitmap
 func (b *bitmap) clone() *bitmap {
 	newB := &bitmap{}
 	newB.bits = slices.Clone(b.bits)
-	newB.size = b.size
+	newB.numBits = b.numBits
 	return newB
 }
 

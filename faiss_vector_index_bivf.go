@@ -152,9 +152,10 @@ func (b *faissBinaryIndex) write(buf []byte, w *FileWriter) error {
 }
 
 func (b *faissBinaryIndex) size() uint64 {
-	// do not call Size() API for the FAISS indices as we are memory mapping them
 	return reflectStaticSizeBinaryIndex +
-		b.params.size()
+		b.params.size() +
+		b.backing.Size() +
+		b.binary.Size()
 }
 
 // -----------------------------------------------------------------

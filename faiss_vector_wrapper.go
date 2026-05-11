@@ -32,13 +32,16 @@ import (
 )
 
 var (
-	reflectStaticSizeMapping uint64
-	reflectStaticSizeBitmap  uint64
+	reflectStaticSizeIndexWrapper uint64
+	reflectStaticSizeIDMapping    uint64
+	reflectStaticSizeBitmap       uint64
 )
 
 func init() {
+	var w vectorIndexWrapper
+	reflectStaticSizeIndexWrapper = uint64(reflect.TypeOf(w).Size())
 	var m idMapping
-	reflectStaticSizeMapping = uint64(reflect.TypeOf(m).Size())
+	reflectStaticSizeIDMapping = uint64(reflect.TypeOf(m).Size())
 	var b bitmap
 	reflectStaticSizeBitmap = uint64(reflect.TypeOf(b).Size())
 }
@@ -284,17 +287,17 @@ func (v *vectorIndexWrapper) Close() {
 }
 
 func (v *vectorIndexWrapper) Size() uint64 {
-	var rv uint64
+	sizeInBytes := reflectStaticSizeIndexWrapper
 	if v.index != nil {
-		rv += v.index.size()
+		sizeInBytes += v.index.size()
 	}
 	if v.mapping != nil {
-		rv += v.mapping.size()
+		sizeInBytes += v.mapping.size()
 	}
 	if v.exclude != nil {
-		rv += v.exclude.size()
+		sizeInBytes += v.exclude.size()
 	}
-	return rv
+	return sizeInBytes
 }
 
 func (v *vectorIndexWrapper) ObtainKCentroidCardinalitiesFromIVFIndex(limit int, descending bool) (
@@ -867,7 +870,7 @@ func (b *bitmap) isEmpty() bool {
 
 // size returns the memory size of the bitmap in bytes
 func (b *bitmap) size() uint64 {
-	return reflectStaticSizeBitmap + uint64(SizeOfPtr) + uint64(len(b.bits))
+	return reflectStaticSizeBitmap + uint64(len(b.bits))
 }
 
 // creates a clone of the bitmap
@@ -944,13 +947,9 @@ func (m *idMapping) vecsForDoc(docID uint32) ([]uint32, bool) {
 }
 
 func (m *idMapping) size() uint64 {
-	var sizeInBytes uint64
-	sizeInBytes = reflectStaticSizeMapping + uint64(SizeOfPtr)
-	// size of vecToDoc slice
-	sizeInBytes += uint64(len(m.vecToDoc)) * uint64(SizeOfUint32)
-	// size of docToVec slice
+	sizeInBytes := reflectStaticSizeIDMapping + uint64(len(m.vecToDoc)*SizeOfUint32)
 	for _, vecs := range m.docToVec {
-		sizeInBytes += uint64(SizeOfSlice) + uint64(len(vecs))*uint64(SizeOfUint32)
+		sizeInBytes += uint64(SizeOfSlice + (len(vecs) * SizeOfUint32))
 	}
 	return sizeInBytes
 }

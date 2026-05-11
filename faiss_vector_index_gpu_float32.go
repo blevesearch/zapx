@@ -203,9 +203,9 @@ func (f *faissGPUFloat32Index) write(buf []byte, w *FileWriter) error {
 }
 
 func (f *faissGPUFloat32Index) size() uint64 {
-	// do not call Size() API for the FAISS index as we are memory mapping it
 	return reflectStaticSizeGPUFloat32Index +
-		f.params.size()
+		f.params.size() +
+		f.cpuIdx.Size()
 }
 
 // inGPURam reports if the index is currently running on the GPU.

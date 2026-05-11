@@ -27,11 +27,16 @@ import (
 	faiss "github.com/blevesearch/go-faiss"
 )
 
-var reflectStaticSizeGPUFloat32Index uint64
+var (
+	reflectStaticSizeGPUFloat32Index uint64
+	reflectStaticSizeGPUState        uint64
+)
 
 func init() {
 	var f faissGPUFloat32Index
 	reflectStaticSizeGPUFloat32Index = uint64(reflect.TypeOf(f).Size())
+	var gs gpuState
+	reflectStaticSizeGPUState = uint64(reflect.TypeOf(gs).Size())
 }
 
 // gpuState holds all the resources related to gpu vector search,
@@ -45,6 +50,13 @@ type gpuState struct {
 // holds a reference to the index without going through the atomic pointer.
 func (gs *gpuState) batchSearch(qVector *vectorSet, k int64) ([]float32, []int64, error) {
 	return gs.idx.Search(qVector.floatData, k)
+}
+
+// size returns the amount of memory used by the gpuState.
+func (gs *gpuState) size() uint64 {
+	return reflectStaticSizeGPUState +
+		gs.idx.Size() +
+		gs.batcher.size()
 }
 
 // ---------------------------------
@@ -203,9 +215,13 @@ func (f *faissGPUFloat32Index) write(buf []byte, w *FileWriter) error {
 }
 
 func (f *faissGPUFloat32Index) size() uint64 {
-	return reflectStaticSizeGPUFloat32Index +
+	sizeInBytes := reflectStaticSizeGPUFloat32Index +
 		f.params.size() +
 		f.cpuIdx.Size()
+	if gpuState := f.gpu.Load(); gpuState != nil {
+		sizeInBytes += gpuState.size()
+	}
+	return sizeInBytes
 }
 
 // inGPURam reports if the index is currently running on the GPU.

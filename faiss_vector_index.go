@@ -67,7 +67,7 @@ func newFaissIndexParams(optimization string, numVecs int) *faissIndexParams {
 }
 
 func (p *faissIndexParams) size() uint64 {
-	return reflectStaticSizefaissIndexParams + uint64(len(p.optimization))
+	return reflectStaticSizeFaissIndexParams + uint64(len(p.optimization))
 }
 
 // -------------------------------------------

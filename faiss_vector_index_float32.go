@@ -105,7 +105,8 @@ func (f *faissFloat32Index) write(buf []byte, w *FileWriter) error {
 
 func (f *faissFloat32Index) size() uint64 {
 	// do not call Size() API for the FAISS index as we are memory mapping it
-	return reflectStaticSizeFloat32Index
+	return reflectStaticSizeFloat32Index +
+		f.params.size()
 }
 
 // -----------------------------------------------------------------

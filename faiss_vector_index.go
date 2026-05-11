@@ -20,6 +20,7 @@ package zap
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 
 	"github.com/blevesearch/go-faiss"
 )
@@ -29,6 +30,13 @@ var (
 	errNilParams    error = errors.New("faiss index params is nil")
 	errNotSupported error = errors.New("operation not supported")
 )
+
+var reflectStaticSizefaissIndexParams uint64
+
+func init() {
+	var f faissIndexParams
+	reflectStaticSizefaissIndexParams = uint64(reflect.TypeOf(f).Size())
+}
 
 // -------------------------------------------
 // Parameters for constructing a Faiss index
@@ -57,6 +65,14 @@ func newFaissIndexParams(optimization string, numVecs int) *faissIndexParams {
 		numVecs:      numVecs,
 	}
 }
+
+func (p *faissIndexParams) size() uint64 {
+	return reflectStaticSizefaissIndexParams + uint64(len(p.optimization))
+}
+
+// -------------------------------------------
+// Faiss Index Interface
+// -------------------------------------------
 
 // Abstract interface for Faiss vector indices, which are returned by the go-faiss library.
 type faissIndex interface {

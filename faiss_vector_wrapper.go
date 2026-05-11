@@ -947,9 +947,9 @@ func (m *idMapping) vecsForDoc(docID uint32) ([]uint32, bool) {
 }
 
 func (m *idMapping) size() uint64 {
-	sizeInBytes := reflectStaticSizeIDMapping + uint64(len(m.vecToDoc)*SizeOfUint32)
+	sizeInBytes := reflectStaticSizeIDMapping + (uint64(len(m.vecToDoc)) * uint64(SizeOfUint32))
 	for _, vecs := range m.docToVec {
-		sizeInBytes += uint64(SizeOfSlice + (cap(vecs) * SizeOfUint32))
+		sizeInBytes += uint64(SizeOfSlice) + (uint64(cap(vecs)) * uint64(SizeOfUint32))
 	}
 	return sizeInBytes
 }

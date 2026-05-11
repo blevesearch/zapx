@@ -31,11 +31,11 @@ var (
 	errNotSupported error = errors.New("operation not supported")
 )
 
-var reflectStaticSizefaissIndexParams uint64
+var reflectStaticSizeFaissIndexParams uint64
 
 func init() {
 	var f faissIndexParams
-	reflectStaticSizefaissIndexParams = uint64(reflect.TypeOf(f).Size())
+	reflectStaticSizeFaissIndexParams = uint64(reflect.TypeOf(f).Size())
 }
 
 // -------------------------------------------

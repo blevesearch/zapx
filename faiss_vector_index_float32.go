@@ -29,30 +29,20 @@ import (
 // Faiss Float32 Index
 // ---------------------------------
 type faissFloat32Index struct {
-	cfg *faissIndexConfig
-	idx *faiss.IndexImpl
+	idx    *faiss.IndexImpl
+	params *faissIndexParams
 }
 
-func newFaissFloat32Index(idx *faiss.IndexImpl) (index faissIndex, err error) {
+func newFaissFloat32Index(idx *faiss.IndexImpl, params *faissIndexParams) (faissIndex, error) {
 	if idx == nil {
 		return nil, errNilIndex
 	}
-	return &faissFloat32Index{
-		idx: idx,
-	}, nil
-}
-
-func newFaissFloat32IndexWithConfig(idx *faiss.IndexImpl, cfg *faissIndexConfig) (index faissIndex, err error) {
-	if idx == nil {
-		return nil, errNilIndex
+	if params == nil {
+		return nil, errNilParams
 	}
-	if cfg == nil {
-		return nil, errNilConfig
-	}
-
 	return &faissFloat32Index{
-		idx: idx,
-		cfg: cfg,
+		idx:    idx,
+		params: params,
 	}, nil
 }
 
@@ -173,17 +163,14 @@ func (f *faissFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {
 }
 
 func (f *faissFloat32Index) isMergeable() bool {
-	if f.cfg != nil {
-		switch f.cfg.optimizationType {
-		case index.IndexOptimizedForLatency, index.IndexOptimizedForRecall:
-			return f.ntotal() > ivfSq8Threshold
-		case index.IndexOptimizedForMemoryEfficient, index.IndexIVFRaBitQ:
-			return f.ntotal() > ivfThreshold
-		default:
-			return false
-		}
+	switch f.params.optimization {
+	case index.IndexOptimizedForLatency, index.IndexOptimizedForRecall:
+		return f.params.numVecs >= ivfSq8Threshold
+	case index.IndexOptimizedForMemoryEfficient, index.IndexIVFRaBitQ:
+		return f.params.numVecs >= ivfThreshold
+	default:
+		return false
 	}
-	return false
 }
 
 func (f *faissFloat32Index) mergeFrom(other faissIndex, offset int64) error {

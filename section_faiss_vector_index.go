@@ -46,12 +46,11 @@ const (
 	// Divide the estimated nprobe with this value to optimize
 	// for latency.
 	nprobeLatencyOptimization = 2
-	// The threshold for number of vectors beyond which we start building the ivf class
-	// of indexes
+	// The threshold for number of vectors at or beyond which we start building
+	// the IVF class of indexes.
 	ivfThreshold = 1000
-	// The threshold for number of vectors beyond which we consider fast merging
-	// using faiss's native merge capabilities, instead of reconstructing and adding
-	// vectors one by one
+	// The threshold for number of vectors at or beyond which we start building
+	// the IVF class of indexes with SQ8 quantization for memory efficiency.
 	ivfSq8Threshold = 10000
 )
 
@@ -505,17 +504,19 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 			reconsCap = indexReconsLen
 		}
 		indexDataCap += indexReconsLen
-
 		// track the reconstruct index for this vector index, which will be used
 		// to reconstruct the vectors corresponding to the valid vector IDs for this index.
-		config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, currNumVecs, determineCentroids(currNumVecs), useGPU)
-		fIndex, err := newFaissFloat32IndexWithConfig(faissIndex, config)
+
+		// Here currNumVecs is the count of valid vectors for this index, so we pass in ntotal
+		// as the vector count in the index for the params because the underlying faiss index still has all the vectors.
+		totCurrVecs := int(faissIndex.Ntotal())
+		reconParams := newFaissIndexParams(indexOptimizedFor, totCurrVecs)
+		fIndex, err := newFaissFloat32Index(faissIndex, reconParams)
 		if err != nil {
 			freeReconstructedIndexes(vecIndexes)
 			return err
 		}
 		vecIndexes[segI].index = fIndex
-
 		// load binary index from disk if present
 		if currVecIndex.indexType == faissBIVFIndex {
 			// get to the bivf part of the vector index section
@@ -533,7 +534,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 				freeReconstructedIndexes(vecIndexes)
 				return err
 			}
-			vecIndexes[segI].index, err = newFaissBinaryIndexWithConfig(binaryIndex, faissIndex, config)
+			vecIndexes[segI].index, err = newFaissBinaryIndex(binaryIndex, faissIndex, reconParams)
 			if err != nil {
 				freeReconstructedIndexes(vecIndexes)
 				return err
@@ -996,6 +997,7 @@ func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimens
 
 // Factory function to create a faissIndex for the given index config.
 func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
+	params := newFaissIndexParams(cfg.optimizationType, cfg.numVecs)
 	switch cfg.indexType {
 	case faissFP32Index:
 		description := determineFloat32IndexToUse(cfg.numVecs, cfg.nlist, cfg.optimizationType)
@@ -1003,12 +1005,10 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 		if err != nil {
 			return nil, err
 		}
-		// we restrict GPU to IVF indexes only; flat and SQ indexes do not get a noticeable speedup
-		// when run on GPU, and the GPU overhead can actually make them slower than CPU.
-		if cfg.useGPU && idx.IsIVFIndex() {
-			return newFaissGPUFloat32Index(idx)
+		if cfg.useGPU {
+			return newFaissGPUFloat32Index(idx, params)
 		}
-		return newFaissFloat32Index(idx)
+		return newFaissFloat32Index(idx, params)
 	case faissBIVFIndex:
 		description := determineBinaryIndexToUse(cfg.numVecs, cfg.nlist)
 		binaryIdx, err := faiss.BinaryIndexFactory(cfg.dimension, description)
@@ -1021,7 +1021,7 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 		if err != nil {
 			return nil, err
 		}
-		return newFaissBinaryIndex(binaryIdx, backingIdx)
+		return newFaissBinaryIndex(binaryIdx, backingIdx, params)
 	default:
 		return nil, errNotSupported
 	}
@@ -1048,5 +1048,5 @@ func canFastMerge(trainedIndex faissIndexIVF, opt string, totalVecs int) bool {
 	default:
 		minVecsForFastMerge = ivfSq8Threshold
 	}
-	return trainedIndex.ntotal() > int64(minVecsForFastMerge) && totalVecs > minVecsForFastMerge
+	return trainedIndex.ntotal() >= int64(minVecsForFastMerge) && totalVecs >= minVecsForFastMerge
 }

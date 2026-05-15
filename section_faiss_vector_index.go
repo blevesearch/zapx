@@ -484,6 +484,9 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 		if trainedIndex == nil {
 			ioFlags = faissIOFlagsReadOnly
 		}
+		if segBase.fileReader.id != DefaultFileCallbackId {
+			ioFlags = faissIOFlagsFileCallbacks
+		}
 		// reconstruct the faiss index from the bytes
 		faissIndex, err := faiss.ReadIndexFromBuffer(indexBytes, ioFlags)
 		if err != nil {

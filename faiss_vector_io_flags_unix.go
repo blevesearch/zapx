@@ -20,6 +20,7 @@ package zap
 import faiss "github.com/blevesearch/go-faiss"
 
 const (
-	faissIOFlags         = faiss.IOFlagReadMmap | faiss.IOFlagSkipPrefetch
-	faissIOFlagsReadOnly = faissIOFlags | faiss.IOFlagReadOnly
+	faissIOFlags              = faiss.IOFlagReadMmap | faiss.IOFlagSkipPrefetch
+	faissIOFlagsReadOnly      = faissIOFlags | faiss.IOFlagReadOnly
+	faissIOFlagsFileCallbacks = faiss.IOFlagReadOnly
 )

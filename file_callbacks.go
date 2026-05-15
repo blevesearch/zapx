@@ -38,6 +38,8 @@ import (
 // An example implementation using AES-GCM encryption is provided in
 // file_callbacks_test.go within initFileCallbacks().
 
+const DefaultFileCallbackId = ""
+
 // FileWriter wraps a CountHashWriter and applies a user provided
 // writer callback to the data being written.
 type FileWriter struct {
@@ -113,7 +115,7 @@ func NewFileReader(id string, context []byte) (*FileReader, error) {
 		if err != nil {
 			return nil, err
 		}
-	} else if id != "" {
+	} else if id != DefaultFileCallbackId {
 		return nil, fmt.Errorf("reader callback id %s provided but no ReaderHook is set", id)
 	}
 

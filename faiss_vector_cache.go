@@ -161,8 +161,12 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		return nil, nil, nil, err
 	}
 
+	ioFlags := faissIOFlagsReadOnly
+	if r.id != DefaultFileCallbackId {
+		ioFlags = faissIOFlagsFileCallbacks
+	}
 	// read the serialized vector index
-	fIndex, err := faiss.ReadIndexFromBuffer(buf, faissIOFlagsReadOnly)
+	fIndex, err := faiss.ReadIndexFromBuffer(buf, ioFlags)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("faiss index load error: %v", err)
 	}
@@ -179,7 +183,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 			return nil, nil, nil, err
 		}
 		// read the serialized binary vector index
-		bIndex, err := faiss.ReadBinaryIndexFromBuffer(buf, faissIOFlagsReadOnly)
+		bIndex, err := faiss.ReadBinaryIndexFromBuffer(buf, ioFlags)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("faiss binary index load error: %v", err)
 		}

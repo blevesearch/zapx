@@ -68,8 +68,12 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
+	ioFlags := faissIOFlags
+	if sb.fileReader.id != DefaultFileCallbackId {
+		ioFlags = faissIOFlagsFileCallbacks
+	}
 	// todo: might wanna use the vector cache here, early tests didn't show a big diff
-	faissIndex, err := faiss.ReadIndexFromBuffer(sb.mem[pos:pos+indexSize], faissIOFlags)
+	faissIndex, err := faiss.ReadIndexFromBuffer(sb.mem[pos:pos+int(indexSize)], ioFlags)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +83,7 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	if faissIndexType(indexType) == faissBIVFIndex {
 		binaryIndexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
-		binaryIndex, err := faiss.ReadBinaryIndexFromBuffer(sb.mem[pos:pos+binaryIndexSize], faissIOFlags)
+		binaryIndex, err := faiss.ReadBinaryIndexFromBuffer(sb.mem[pos:pos+binaryIndexSize], ioFlags)
 		if err != nil {
 			return nil, err
 		}

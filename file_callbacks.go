@@ -38,6 +38,7 @@ import (
 // An example implementation using AES-GCM encryption is provided in
 // file_callbacks_test.go within initFileCallbacks().
 
+// the default id to use for file callbacks that indicates a no op
 const DefaultFileCallbackId = ""
 
 // FileWriter wraps a CountHashWriter and applies a user provided

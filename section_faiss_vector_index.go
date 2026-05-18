@@ -101,6 +101,7 @@ type vecIndexInfo struct {
 	startOffset       int
 	indexSize         uint64
 	vecIds            []int64
+	nvecs             int
 	indexOptimizedFor string
 	indexType         faissIndexType
 	index             faissIndex
@@ -167,6 +168,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 			newIndexInfo := &vecIndexInfo{
 				indexOptimizedFor: index.VectorIndexOptimizationsReverseLookup[int(indexOptimizationTypeInt)],
 				vecIds:            make([]int64, 0, numVecs),
+				nvecs:             int(numVecs),
 			}
 
 			// read the length of the docID list
@@ -475,30 +477,45 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 		}
 
 		// read the serialized index bytes
-		indexBytes, err := segBase.fileReader.process(segBase.mem[currVecIndex.startOffset : currVecIndex.startOffset+int(currVecIndex.indexSize)])
+		fIndexBytes, err := segBase.fileReader.process(segBase.mem[currVecIndex.startOffset : currVecIndex.startOffset+int(currVecIndex.indexSize)])
 		if err != nil {
 			freeReconstructedIndexes(vecIndexes)
 			return err
 		}
-		ioFlags := faissIOFlags
-		if trainedIndex == nil {
-			ioFlags = faissIOFlagsReadOnly
-		}
+
+		var keepAlive bool
 		if segBase.fileReader.id != DefaultFileCallbackId {
-			ioFlags = faissIOFlagsFileCallbacks
+			keepAlive = true
 		}
-		// reconstruct the faiss index from the bytes
-		faissIndex, err := faiss.ReadIndexFromBuffer(indexBytes, ioFlags)
+		reconsParams := newFaissIndexParams(currVecIndex.indexOptimizedFor, currVecIndex.nvecs, keepAlive)
+
+		// load binary index from disk if present
+		if currVecIndex.indexType == faissBIVFIndex {
+			// get to the bivf part of the vector index section
+			pos := currVecIndex.startOffset + int(currVecIndex.indexSize)
+			binSize, n := binary.Uvarint(segBase.mem[pos : pos+binary.MaxVarintLen64])
+			pos += n
+			bIndexBytes, err := segBase.fileReader.process(segBase.mem[pos : pos+int(binSize)])
+			if err != nil {
+				freeReconstructedIndexes(vecIndexes)
+				return err
+			}
+
+			vecIndexes[segI].index, err = newFaissBinaryIndexFromBytes(bIndexBytes, fIndexBytes, reconsParams)
+		} else {
+			vecIndexes[segI].index, err = newFaissFloat32IndexFromBytes(fIndexBytes, reconsParams)
+
+		}
 		if err != nil {
 			freeReconstructedIndexes(vecIndexes)
 			return err
 		}
 
 		// set the dims and metric values from the constructed index.
-		dims = faissIndex.D()
+		dims = vecIndexes[segI].index.dim()
 		// at least one valid index to be merged, mark the merge as valid.
 		validMerge = true
-		metric = faissIndex.MetricType()
+		metric = vecIndexes[segI].index.metricType()
 		indexOptimizedFor = currVecIndex.indexOptimizedFor
 		indexType = currVecIndex.indexType
 		// update trackers for buffer capacities
@@ -507,42 +524,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 			reconsCap = indexReconsLen
 		}
 		indexDataCap += indexReconsLen
-		// track the reconstruct index for this vector index, which will be used
-		// to reconstruct the vectors corresponding to the valid vector IDs for this index.
 
-		// Here currNumVecs is the count of valid vectors for this index, so we pass in ntotal
-		// as the vector count in the index for the params because the underlying faiss index still has all the vectors.
-		totCurrVecs := int(faissIndex.Ntotal())
-		reconParams := newFaissIndexParams(indexOptimizedFor, totCurrVecs)
-		fIndex, err := newFaissFloat32Index(faissIndex, reconParams)
-		if err != nil {
-			freeReconstructedIndexes(vecIndexes)
-			return err
-		}
-		vecIndexes[segI].index = fIndex
-		// load binary index from disk if present
-		if currVecIndex.indexType == faissBIVFIndex {
-			// get to the bivf part of the vector index section
-			pos := currVecIndex.startOffset + int(currVecIndex.indexSize)
-			binSize, n := binary.Uvarint(segBase.mem[pos : pos+binary.MaxVarintLen64])
-			pos += n
-			indexBytes, err = segBase.fileReader.process(segBase.mem[pos : pos+int(binSize)])
-			if err != nil {
-				freeReconstructedIndexes(vecIndexes)
-				return err
-			}
-
-			binaryIndex, err := faiss.ReadBinaryIndexFromBuffer(indexBytes, ioFlags)
-			if err != nil {
-				freeReconstructedIndexes(vecIndexes)
-				return err
-			}
-			vecIndexes[segI].index, err = newFaissBinaryIndex(binaryIndex, faissIndex, reconParams)
-			if err != nil {
-				freeReconstructedIndexes(vecIndexes)
-				return err
-			}
-		}
 		nvecs += currNumVecs
 	}
 
@@ -1000,7 +982,7 @@ func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimens
 
 // Factory function to create a faissIndex for the given index config.
 func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
-	params := newFaissIndexParams(cfg.optimizationType, cfg.numVecs)
+	params := newFaissIndexParams(cfg.optimizationType, cfg.numVecs, false)
 	switch cfg.indexType {
 	case faissFP32Index:
 		description := determineFloat32IndexToUse(cfg.numVecs, cfg.nlist, cfg.optimizationType)

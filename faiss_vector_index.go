@@ -47,14 +47,18 @@ type faissIndexParams struct {
 	// some construction-time decisions (e.g. whether to clone to GPU)
 	// depend on the eventual vector count.
 	numVecs int
+	// keepAlive indicates whether the index bytes should be kept in memory
+	// to prevent garbage collection when file callbacks are used.
+	keepAlive bool
 }
 
 // newFaissIndexParams constructs a faissIndexParams with the given optimization
 // type and expected vector count.
-func newFaissIndexParams(optimization string, numVecs int) *faissIndexParams {
+func newFaissIndexParams(optimization string, numVecs int, keepAlive bool) *faissIndexParams {
 	return &faissIndexParams{
 		optimization: optimization,
 		numVecs:      numVecs,
+		keepAlive:    keepAlive,
 	}
 }
 

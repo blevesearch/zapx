@@ -22,7 +22,6 @@ import (
 	"fmt"
 
 	index "github.com/blevesearch/bleve_index_api"
-	faiss "github.com/blevesearch/go-faiss"
 )
 
 func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
@@ -68,26 +67,21 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
-	ioFlags := faissIOFlags
+	var keepAlive bool
 	if sb.fileReader.id != DefaultFileCallbackId {
-		ioFlags = faissIOFlagsFileCallbacks
+		keepAlive = true
 	}
+	params := newFaissIndexParams(optStr, int(numVecs), keepAlive)
+
 	// todo: might wanna use the vector cache here, early tests didn't show a big diff
-	faissIndex, err := faiss.ReadIndexFromBuffer(sb.mem[pos:pos+int(indexSize)], ioFlags)
-	if err != nil {
-		return nil, err
-	}
+	fIndexBytes := sb.mem[pos : pos+indexSize]
 	pos += indexSize
 
-	params := newFaissIndexParams(optStr, int(numVecs))
 	if faissIndexType(indexType) == faissBIVFIndex {
 		binaryIndexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
-		binaryIndex, err := faiss.ReadBinaryIndexFromBuffer(sb.mem[pos:pos+binaryIndexSize], ioFlags)
-		if err != nil {
-			return nil, err
-		}
-		return newFaissBinaryIndex(binaryIndex, faissIndex, params)
+		bIndexBytes := sb.mem[pos : pos+binaryIndexSize]
+		return newFaissBinaryIndexFromBytes(bIndexBytes, fIndexBytes, params)
 	}
-	return newFaissFloat32Index(faissIndex, params)
+	return newFaissFloat32IndexFromBytes(fIndexBytes, params)
 }

@@ -67,11 +67,7 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
-	var keepAlive bool
-	if sb.fileReader.id != DefaultFileCallbackId {
-		keepAlive = true
-	}
-	params := newFaissIndexParams(optStr, int(numVecs), keepAlive)
+	params := newFaissIndexParams(optStr, int(numVecs), sb.fileReader.hasFileCallback())
 
 	// todo: might wanna use the vector cache here, early tests didn't show a big diff
 	fIndexBytes := sb.mem[pos : pos+indexSize]

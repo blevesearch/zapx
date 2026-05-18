@@ -483,11 +483,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 			return err
 		}
 
-		var keepAlive bool
-		if segBase.fileReader.id != DefaultFileCallbackId {
-			keepAlive = true
-		}
-		reconsParams := newFaissIndexParams(currVecIndex.indexOptimizedFor, currVecIndex.nvecs, keepAlive)
+		reconsParams := newFaissIndexParams(currVecIndex.indexOptimizedFor,
+			currVecIndex.nvecs, segBase.fileReader.hasFileCallback())
 
 		// load binary index from disk if present
 		if currVecIndex.indexType == faissBIVFIndex {

@@ -47,8 +47,11 @@ type faissIndexParams struct {
 	// some construction-time decisions (e.g. whether to clone to GPU)
 	// depend on the eventual vector count.
 	numVecs int
-	// keepAlive indicates whether the index bytes should be kept in memory
-	// to prevent garbage collection when file callbacks are used.
+	// When file callbacks are used, we assume a copy of the
+	// data is created and mmapping is no longer possible. So we
+	// need to keep the entire index bytes in memory explicitly
+	// to prevent it from being garbage collected which would
+	// lead to dangling pointers within the C code of faiss
 	keepAlive bool
 }
 

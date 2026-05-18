@@ -161,16 +161,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	}
 	pos += int(indexSize)
 
-	// When file callbacks are used, we assume a copy of the
-	// data is created and mmapping is no longer possible. So we
-	// need to keep the entire index bytes in memory explicitly
-	// to prevent it from being garbage collected which would
-	// lead to dangling pointers within the C code of faiss
-	var keepAlive bool
-	if r.id != DefaultFileCallbackId {
-		keepAlive = true
-	}
-	params := newFaissIndexParams(optStr, int(numVecs), keepAlive)
+	params := newFaissIndexParams(optStr, int(numVecs), r.hasFileCallback())
 	if faissIndexType(indexType) == faissBIVFIndex {
 		// read the faiss binary index size
 		binSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])

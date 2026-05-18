@@ -161,7 +161,7 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	}
 	pos += int(indexSize)
 
-	params := newFaissIndexParams(optStr, int(numVecs), r.hasFileCallback())
+	params := newFaissIndexParams(optStr, int(numVecs))
 	if faissIndexType(indexType) == faissBIVFIndex {
 		// read the faiss binary index size
 		binSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])

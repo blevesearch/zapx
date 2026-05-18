@@ -130,7 +130,3 @@ func (r *FileReader) process(data []byte) ([]byte, error) {
 	}
 	return data, nil
 }
-
-func (r *FileReader) hasFileCallback() bool {
-	return r.id != DefaultFileCallbackId
-}

@@ -29,11 +29,12 @@ import (
 // Faiss Binary IVF Index
 // ---------------------------------
 type faissBinaryIndex struct {
-	backing      *faiss.IndexImpl
-	backingBytes []byte
+	backing *faiss.IndexImpl
+	binary  *faiss.BinaryIndexImpl
 
-	binary      *faiss.BinaryIndexImpl
-	binaryBytes []byte
+	// backingBytes and binaryBytes hold the original serialized index bytes to prevent GC.
+	backingBytes []byte
+	binaryBytes  []byte
 
 	params *faissIndexParams
 }
@@ -58,6 +59,10 @@ func newFaissBinaryIndexFromBytes(bIndexBytes, fIndexBytes []byte, params *faiss
 		return nil, errNilIndex
 	}
 
+	if params == nil {
+		return nil, errNilParams
+	}
+
 	backing, err := faiss.ReadIndexFromBuffer(bIndexBytes, faissIOFlagsReadOnly)
 	if err != nil {
 		return nil, err
@@ -68,19 +73,13 @@ func newFaissBinaryIndexFromBytes(bIndexBytes, fIndexBytes []byte, params *faiss
 		return nil, err
 	}
 
-	index, err := newFaissBinaryIndex(binary, backing, params)
-	if err != nil {
-		backing.Close()
-		binary.Close()
-		return nil, err
-	}
-
-	if params.keepAlive {
-		index.(*faissBinaryIndex).backingBytes = bIndexBytes
-		index.(*faissBinaryIndex).binaryBytes = fIndexBytes
-	}
-
-	return index, nil
+	return &faissBinaryIndex{
+		backing:      backing,
+		binary:       binary,
+		backingBytes: fIndexBytes,
+		binaryBytes:  bIndexBytes,
+		params:       params,
+	}, nil
 }
 
 func (b *faissBinaryIndex) add(vecs *vectorSet) error {
@@ -95,10 +94,8 @@ func (b *faissBinaryIndex) add(vecs *vectorSet) error {
 func (b *faissBinaryIndex) close() {
 	b.binary.Close()
 	b.backing.Close()
-	if b.params.keepAlive {
-		b.backingBytes = nil
-		b.binaryBytes = nil
-	}
+	b.backingBytes = nil
+	b.binaryBytes = nil
 }
 
 func (b *faissBinaryIndex) dim() int {

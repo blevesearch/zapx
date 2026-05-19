@@ -52,14 +52,9 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	pos += uint64(n)
 
 	// length of the vector to docID map
-	_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+	mapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
-
-	// vector to docID mapping
-	for i := 0; i < int(numVecs); i++ {
-		_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += uint64(n)
-	}
+	pos += mapLen
 
 	// type of index
 	indexType, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])

@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring/v2"
-	faiss "github.com/blevesearch/go-faiss"
 )
 
 // -----------------------------------------------------------------------------
@@ -156,15 +155,9 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 	pos += n
 
 	// read the index bytes through the file reader
-	buf, err = r.process(mem[pos : pos+int(indexSize)])
+	fIndexBytes, err := r.process(mem[pos : pos+int(indexSize)])
 	if err != nil {
 		return nil, nil, nil, err
-	}
-
-	// read the serialized vector index
-	fIndex, err := faiss.ReadIndexFromBuffer(buf, faissIOFlagsReadOnly)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("faiss index load error: %v", err)
 	}
 	pos += int(indexSize)
 
@@ -174,25 +167,20 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte,
 		binSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 		pos += n
 		// read the index bytes through the file reader
-		buf, err = r.process(mem[pos : pos+int(binSize)])
+		bIndexBytes, err := r.process(mem[pos : pos+int(binSize)])
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		// read the serialized binary vector index
-		bIndex, err := faiss.ReadBinaryIndexFromBuffer(buf, faissIOFlagsReadOnly)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("faiss binary index load error: %v", err)
-		}
 		pos += int(binSize)
-		index, err = newFaissBinaryIndex(bIndex, fIndex, params)
+		index, err = newFaissBinaryIndexFromBytes(bIndexBytes, fIndexBytes, params)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("faiss binary index creation error: %v", err)
 		}
 	} else {
 		if useGPU {
-			index, err = newFaissGPUFloat32Index(fIndex, params)
+			index, err = newFaissGPUFloat32IndexFromBytes(fIndexBytes, params)
 		} else {
-			index, err = newFaissFloat32Index(fIndex, params)
+			index, err = newFaissFloat32IndexFromBytes(fIndexBytes, params)
 		}
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("faiss float32 index creation error: %v", err)

@@ -37,8 +37,10 @@ func init() {
 // Faiss Float32 Index
 // ---------------------------------
 type faissFloat32Index struct {
-	idx    *faiss.IndexImpl
-	params *faissIndexParams
+	idx *faiss.IndexImpl
+	// idxBytes holds the original serialized index bytes to prevent GC.
+	idxBytes []byte
+	params   *faissIndexParams
 }
 
 func newFaissFloat32Index(idx *faiss.IndexImpl, params *faissIndexParams) (faissIndex, error) {
@@ -54,12 +56,34 @@ func newFaissFloat32Index(idx *faiss.IndexImpl, params *faissIndexParams) (faiss
 	}, nil
 }
 
+func newFaissFloat32IndexFromBytes(idxBytes []byte, params *faissIndexParams) (faissIndex, error) {
+	if idxBytes == nil {
+		return nil, errNilIndex
+	}
+
+	if params == nil {
+		return nil, errNilParams
+	}
+
+	idx, err := faiss.ReadIndexFromBuffer(idxBytes, faissIOFlagsReadOnly)
+	if err != nil {
+		return nil, err
+	}
+
+	return &faissFloat32Index{
+		idx:      idx,
+		idxBytes: idxBytes,
+		params:   params,
+	}, nil
+}
+
 func (f *faissFloat32Index) add(vecs *vectorSet) error {
 	return f.idx.Add(vecs.floatData)
 }
 
 func (f *faissFloat32Index) close() {
 	f.idx.Close()
+	f.idxBytes = nil
 }
 
 func (f *faissFloat32Index) dim() int {

@@ -48,7 +48,10 @@ func (gs *gpuState) batchSearch(qVector *vectorSet, k int64) ([]float32, []int64
 // operations, serialization, etc.) are delegated to the CPU index.
 type faissGPUFloat32Index struct {
 	cpuIdx *faiss.IndexImpl
-	params *faissIndexParams
+
+	// idxBytes holds the original serialized index bytes to prevent GC.
+	idxBytes []byte
+	params   *faissIndexParams
 
 	// doneCh is closed when initGPU completes.
 	doneCh chan struct{}
@@ -73,6 +76,30 @@ func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl, params *faissIndexParams) 
 		cpuIdx: cpuIdx,
 		params: params,
 		doneCh: make(chan struct{}),
+	}
+	go f.initGPU()
+	return f, nil
+}
+
+func newFaissGPUFloat32IndexFromBytes(idxBytes []byte, params *faissIndexParams) (faissIndex, error) {
+	if idxBytes == nil {
+		return nil, errNilIndex
+	}
+
+	if params == nil {
+		return nil, errNilParams
+	}
+
+	cpuIdx, err := faiss.ReadIndexFromBuffer(idxBytes, faissIOFlagsReadOnly)
+	if err != nil {
+		return nil, err
+	}
+
+	f := &faissGPUFloat32Index{
+		cpuIdx:   cpuIdx,
+		idxBytes: idxBytes,
+		params:   params,
+		doneCh:   make(chan struct{}),
 	}
 	go f.initGPU()
 	return f, nil
@@ -130,6 +157,7 @@ func (f *faissGPUFloat32Index) close() {
 	f.waitGPU()
 	f.teardownGPU()
 	f.cpuIdx.Close()
+	f.idxBytes = nil
 }
 
 // teardownGPU stops the batcher first (while gpuIdx is still live so that

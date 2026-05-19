@@ -86,6 +86,10 @@ func newFaissGPUFloat32IndexFromBytes(idxBytes []byte, params *faissIndexParams)
 		return nil, errNilIndex
 	}
 
+	if params == nil {
+		return nil, errNilParams
+	}
+
 	cpuIdx, err := faiss.ReadIndexFromBuffer(idxBytes, faissIOFlagsReadOnly)
 	if err != nil {
 		return nil, err
@@ -153,7 +157,6 @@ func (f *faissGPUFloat32Index) close() {
 	f.waitGPU()
 	f.teardownGPU()
 	f.cpuIdx.Close()
-	f.cpuIdx = nil
 	f.idxBytes = nil
 }
 

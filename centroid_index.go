@@ -70,7 +70,10 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	params := newFaissIndexParams(optStr, int(numVecs))
 
 	// todo: might wanna use the vector cache here, early tests didn't show a big diff
-	fIndexBytes := sb.mem[pos : pos+indexSize]
+	fIndexBytes, err := sb.fileReader.process(sb.mem[pos : pos+indexSize])
+	if err != nil {
+		return nil, err
+	}
 	pos += indexSize
 
 	if faissIndexType(indexType) == faissBIVFIndex {

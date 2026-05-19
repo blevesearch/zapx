@@ -74,7 +74,10 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	if faissIndexType(indexType) == faissBIVFIndex {
 		binaryIndexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
-		bIndexBytes := sb.mem[pos : pos+binaryIndexSize]
+		bIndexBytes, err := sb.fileReader.process(sb.mem[pos : pos+binaryIndexSize])
+		if err != nil {
+			return nil, err
+		}
 		return newFaissBinaryIndexFromBytes(bIndexBytes, fIndexBytes, params)
 	}
 	return newFaissFloat32IndexFromBytes(fIndexBytes, params)

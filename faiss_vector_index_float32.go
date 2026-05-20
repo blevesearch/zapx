@@ -57,7 +57,7 @@ func newFaissFloat32IndexFromBytes(idxBytes []byte, params *faissIndexParams) (f
 		return nil, errNilParams
 	}
 
-	idx, err := faiss.ReadIndexFromBuffer(idxBytes, faissIOFlagsReadOnly)
+	idx, err := faiss.ReadIndexFromBuffer(idxBytes, params.ioFlags)
 	if err != nil {
 		return nil, err
 	}

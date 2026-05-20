@@ -62,7 +62,7 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 
-	params := newFaissIndexParams(optStr, int(numVecs))
+	params := newFaissIndexParams(optStr, int(numVecs), faissIOFlagsReadOnly)
 
 	// todo: might wanna use the vector cache here, early tests didn't show a big diff
 	fIndexBytes, err := sb.fileReader.process(sb.mem[pos : pos+indexSize])

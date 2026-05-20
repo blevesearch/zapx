@@ -47,14 +47,17 @@ type faissIndexParams struct {
 	// some construction-time decisions (e.g. whether to clone to GPU)
 	// depend on the eventual vector count.
 	numVecs int
+	// ioFlags used to read the index from bytes
+	ioFlags int
 }
 
 // newFaissIndexParams constructs a faissIndexParams with the given optimization
 // type and expected vector count.
-func newFaissIndexParams(optimization string, numVecs int) *faissIndexParams {
+func newFaissIndexParams(optimization string, numVecs, ioFlags int) *faissIndexParams {
 	return &faissIndexParams{
 		optimization: optimization,
 		numVecs:      numVecs,
+		ioFlags:      ioFlags,
 	}
 }
 

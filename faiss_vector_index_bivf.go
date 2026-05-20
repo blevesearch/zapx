@@ -71,12 +71,12 @@ func newFaissBinaryIndexFromBytes(bIndexBytes, fIndexBytes []byte, params *faiss
 		return nil, errNilParams
 	}
 
-	backing, err := faiss.ReadIndexFromBuffer(bIndexBytes, faissIOFlagsReadOnly)
+	backing, err := faiss.ReadIndexFromBuffer(bIndexBytes, faissIOFlags)
 	if err != nil {
 		return nil, err
 	}
 
-	binary, err := faiss.ReadBinaryIndexFromBuffer(fIndexBytes, faissIOFlagsReadOnly)
+	binary, err := faiss.ReadBinaryIndexFromBuffer(fIndexBytes, faissIOFlags)
 	if err != nil {
 		return nil, err
 	}

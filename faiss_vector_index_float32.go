@@ -20,10 +20,18 @@ package zap
 import (
 	"encoding/binary"
 	"encoding/json"
+	"reflect"
 
 	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
 )
+
+var reflectStaticSizeFloat32Index uint64
+
+func init() {
+	var f faissFloat32Index
+	reflectStaticSizeFloat32Index = uint64(reflect.TypeOf(f).Size())
+}
 
 // ---------------------------------
 // Faiss Float32 Index
@@ -120,7 +128,9 @@ func (f *faissFloat32Index) write(buf []byte, w *FileWriter) error {
 }
 
 func (f *faissFloat32Index) size() uint64 {
-	return f.idx.Size()
+	return reflectStaticSizeFloat32Index +
+		f.params.size() +
+		f.idx.Size()
 }
 
 // -----------------------------------------------------------------

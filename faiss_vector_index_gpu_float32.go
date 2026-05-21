@@ -110,7 +110,7 @@ func newFaissGPUFloat32IndexFromBytes(idxBytes []byte, params *faissIndexParams)
 		return nil, errNilParams
 	}
 
-	cpuIdx, err := faiss.ReadIndexFromBuffer(idxBytes, faissIOFlagsReadOnly)
+	cpuIdx, err := faiss.ReadIndexFromBuffer(idxBytes, params.ioFlags)
 	if err != nil {
 		return nil, err
 	}

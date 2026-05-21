@@ -483,7 +483,11 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 			return err
 		}
 
-		reconsParams := newFaissIndexParams(currVecIndex.indexOptimizedFor, currVecIndex.nvecs)
+		ioFlags := faissIOFlags
+		if trainedIndex == nil {
+			ioFlags = faissIOFlagsReadOnly
+		}
+		reconsParams := newFaissIndexParams(currVecIndex.indexOptimizedFor, currVecIndex.nvecs, ioFlags)
 
 		// load binary index from disk if present
 		if currVecIndex.indexType == faissBIVFIndex {
@@ -978,7 +982,7 @@ func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimens
 
 // Factory function to create a faissIndex for the given index config.
 func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
-	params := newFaissIndexParams(cfg.optimizationType, cfg.numVecs)
+	params := newFaissIndexParams(cfg.optimizationType, cfg.numVecs, faissIOFlags)
 	switch cfg.indexType {
 	case faissFP32Index:
 		description := determineFloat32IndexToUse(cfg.numVecs, cfg.nlist, cfg.optimizationType)

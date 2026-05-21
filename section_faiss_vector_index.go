@@ -251,19 +251,19 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 
 func trainedIndexFromConfig(config map[string]interface{}, fieldName string) (faissIndexIVF, error) {
 	var trainedIndexFor index.TrainedIndexCallbackFn
-	var training bool
+	var trainingParams *index.TrainingParams
 	var rv faissIndex
 	if cb, ok := config[index.TrainedIndexCallback]; ok {
 		trainedIndexFor = cb.(index.TrainedIndexCallbackFn)
 	}
 	if tf, ok := config[index.TrainingKey]; ok {
-		training = tf.(bool)
+		trainingParams = tf.(*index.TrainingParams)
 	}
-	// if we have a callback registered AND if the training flag is not set:
+	// if we have a callback registered AND if the training params are not set:
 	//  - fastmerge is supported for this index
 	// 	- we're not in the training phase of index creation where you want to be
 	//    able to reconstruct the vectors for training
-	if trainedIndexFor != nil && !training {
+	if trainedIndexFor != nil && trainingParams == nil {
 		trainedIndex, err := trainedIndexFor(fieldName)
 		if err != nil {
 			return nil, err
@@ -541,7 +541,16 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 	}
 
 	// create the faiss index to hold the merged data, either via fast merge or reconstruction
-	config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, determineCentroids(nvecs), useGPU)
+	nlist := determineCentroids(nvecs)
+	if tf, ok := v.config[index.TrainingKey]; ok && tf.(bool) {
+		// when the training for fast merge is ongoing, we use the nlist value set in the
+		// config for the train process
+		if tp, ok := v.config[index.TrainingKey]; ok {
+			trainingParams := tp.(*index.TrainingParams)
+			nlist = trainingParams.NumCentroids
+		}
+	}
+	config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, nlist, useGPU)
 	// we perform fast merge if we're not using the GPU and if the trained index
 	// is compatible to be used for fast merge
 	if !useGPU && canFastMerge(trainedIndex, indexOptimizedFor, nvecs) {
@@ -814,11 +823,19 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 			return err
 		}
 
+		// training key is associated with some addtional params that might be specific to
+		// the fast merge path
+		nlist := determineCentroids(nvecs)
+		if tp, ok := vo.config[index.TrainingKey]; ok {
+			trainingParams := tp.(*index.TrainingParams)
+			nlist = trainingParams.NumCentroids
+		}
+
 		// determine the type of vector index to be created based on the index optimization
 		// and create the faiss index for the vectors associated with this field and
 		// write out the index into the segment writer.
 		indexType := determineIndexTypeFromOptimization(content.optimizedFor)
-		config := newFaissIndexConfig(indexType, content.optimizedFor, content.dimension, metric, nvecs, determineCentroids(nvecs), false)
+		config := newFaissIndexConfig(indexType, content.optimizedFor, content.dimension, metric, nvecs, nlist, false)
 		err = vo.writeFaissIndex(vecSet, config, w)
 		if err != nil {
 			return err

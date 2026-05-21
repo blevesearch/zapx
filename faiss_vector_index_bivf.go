@@ -62,8 +62,9 @@ func newFaissBinaryIndex(binary *faiss.BinaryIndexImpl, backing *faiss.IndexImpl
 	}, nil
 }
 
-func newFaissBinaryIndexFromBytes(bIndexBytes, fIndexBytes []byte, params *faissIndexParams) (faissIndex, error) {
-	if bIndexBytes == nil || fIndexBytes == nil {
+func newFaissBinaryIndexFromBytes(binaryIndexBytes, backingIndexBytes []byte,
+	params *faissIndexParams) (faissIndex, error) {
+	if binaryIndexBytes == nil || backingIndexBytes == nil {
 		return nil, errNilIndex
 	}
 
@@ -71,12 +72,12 @@ func newFaissBinaryIndexFromBytes(bIndexBytes, fIndexBytes []byte, params *faiss
 		return nil, errNilParams
 	}
 
-	backing, err := faiss.ReadIndexFromBuffer(bIndexBytes, params.ioFlags)
+	backing, err := faiss.ReadIndexFromBuffer(backingIndexBytes, params.ioFlags)
 	if err != nil {
 		return nil, err
 	}
 
-	binary, err := faiss.ReadBinaryIndexFromBuffer(fIndexBytes, params.ioFlags)
+	binary, err := faiss.ReadBinaryIndexFromBuffer(binaryIndexBytes, params.ioFlags)
 	if err != nil {
 		return nil, err
 	}
@@ -84,8 +85,8 @@ func newFaissBinaryIndexFromBytes(bIndexBytes, fIndexBytes []byte, params *faiss
 	return &faissBinaryIndex{
 		backing:      backing,
 		binary:       binary,
-		backingBytes: fIndexBytes,
-		binaryBytes:  bIndexBytes,
+		backingBytes: backingIndexBytes,
+		binaryBytes:  binaryIndexBytes,
 		params:       params,
 	}, nil
 }

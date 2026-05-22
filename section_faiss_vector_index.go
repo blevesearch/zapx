@@ -256,8 +256,8 @@ func trainedIndexFromConfig(config map[string]interface{}, fieldName string) (fa
 	if cb, ok := config[index.TrainedIndexCallback]; ok {
 		trainedIndexFor = cb.(index.TrainedIndexCallbackFn)
 	}
-	if tf, ok := config[index.TrainingKey]; ok {
-		trainingParams = tf.(*index.TrainingParams)
+	if tp, ok := config[index.TrainingKey]; ok {
+		trainingParams = tp.(*index.TrainingParams)
 	}
 	// if we have a callback registered AND if the training params are not set:
 	//  - fastmerge is supported for this index
@@ -542,7 +542,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 
 	// create the faiss index to hold the merged data, either via fast merge or reconstruction
 	nlist := determineCentroids(nvecs)
-	if tf, ok := v.config[index.TrainingKey]; ok && tf.(bool) {
+	if trainedIndex == nil {
 		// when the training for fast merge is ongoing, we use the nlist value set in the
 		// config for the train process
 		if tp, ok := v.config[index.TrainingKey]; ok {

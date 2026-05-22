@@ -140,13 +140,64 @@ func (f *faissGPUFloat32Index) initGPU() {
 	if !f.canUseGPU() {
 		return
 	}
-	gpuIdx, err := faiss.CloneToGPU(f.cpuIdx)
+	gpuIdx, err := faiss.CloneToGPU(f.cpuIdx, f.estimateGPUMemSize())
 	if err != nil || gpuIdx == nil {
 		return
 	}
 	gs := &gpuState{idx: gpuIdx}
 	gs.batcher = newRequestBatcher(gs)
 	f.gpu.Store(gs)
+}
+
+// gpuInterleavedWarpSize is the warp size used by the faiss GPU IVF
+// interleaved layout to pack vectors of an inverted list. Each list's
+// code storage is padded to a multiple of this many vectors. Matches
+// kWarpSize in faiss/gpu/utils/DeviceDefs.cuh for the CUDA / RDNA-32
+// case (the most common deployment). The per-list id storage is NOT
+// padded (see IVFBase::addIndicesFromCpu_), so only codes contribute.
+const gpuInterleavedWarpSize = 32
+
+// estimateGPUMemSize estimates the GPU memory footprint of the index in
+// bytes, used to reserve memory before cloning. For an index loaded from
+// a serialized form, the on-disk byte length is a good baseline for the
+// CPU footprint; the GPU IVF interleaved layout then adds per-list
+// code padding because each inverted list's code storage is rounded up
+// to a multiple of gpuInterleavedWarpSize vectors. The padding is
+// computed exactly by reading the actual size of each inverted list.
+func (f *faissGPUFloat32Index) estimateGPUMemSize() uint64 {
+	size := uint64(len(f.idxBytes))
+	if !f.cpuIdx.IsIVFIndex() {
+		return size
+	}
+	ntotal := f.cpuIdx.Ntotal()
+	if ntotal <= 0 {
+		// No vectors yet (e.g., the from-scratch path before training);
+		// nothing to pad.
+		return size
+	}
+	codeSize, err := f.cpuIdx.CodeSize()
+	if err != nil {
+		return size
+	}
+	_, nlist := f.cpuIdx.IVFParams()
+	// Passing nil selector to ObtainClusterVectorCountsFromIVFIndex includes
+	// all vectors (no ID filtering), which is exactly what we need here.
+	listCounts, err := f.cpuIdx.ObtainClusterVectorCountsFromIVFIndex(nil, nlist)
+	if err != nil {
+		return size
+	}
+	// Each list of n vectors uses ceil(n/gpuInterleavedWarpSize) *
+	// gpuInterleavedWarpSize slots for codes on the GPU, wasting
+	// (-n) mod gpuInterleavedWarpSize slots; each wasted slot costs
+	// one code.
+	var paddingVecs uint64
+	for _, n := range listCounts {
+		if rem := uint64(n) % gpuInterleavedWarpSize; rem != 0 {
+			paddingVecs += gpuInterleavedWarpSize - rem
+		}
+	}
+	size += paddingVecs * codeSize
+	return size
 }
 
 // attempt to add the vectors to the GPU index. If it fails,

@@ -540,16 +540,8 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 		return nil
 	}
 
-	// create the faiss index to hold the merged data, either via fast merge or reconstruction
-	nlist := determineCentroids(nvecs)
-	if trainedIndex == nil {
-		// when the training for fast merge is ongoing, we use the nlist value set in the
-		// config for the train process
-		if tp, ok := v.config[index.TrainingKey]; ok {
-			trainingParams := tp.(*index.TrainingParams)
-			nlist = trainingParams.NumCentroids
-		}
-	}
+	// create the faiss index config to hold the merged data, either via fast merge or reconstruction
+	nlist := v.numCentroids(nvecs)
 	config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, nlist, useGPU)
 	// we perform fast merge if we're not using the GPU and if the trained index
 	// is compatible to be used for fast merge
@@ -724,6 +716,16 @@ func determineCentroids(nvecs int) int {
 	return nlist
 }
 
+func (vo *vectorIndexOpaque) numCentroids(nvecs int) int {
+	nlist := determineCentroids(nvecs)
+	// training key is associated with some addtional params such as num centroids
+	// that might be specific to the fast merge path
+	if tp, ok := vo.config[index.TrainingKey].(*index.TrainingParams); ok {
+		nlist = tp.NumCentroids
+	}
+	return nlist
+}
+
 // determineFloat32IndexToUse returns a description string for the float32
 // index and quantizer type, and an index type constant.
 func determineFloat32IndexToUse(nvecs, nlist int, optimizationType string) string {
@@ -823,14 +825,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 			return err
 		}
 
-		// training key is associated with some addtional params that might be specific to
-		// the fast merge path
-		nlist := determineCentroids(nvecs)
-		if tp, ok := vo.config[index.TrainingKey]; ok {
-			trainingParams := tp.(*index.TrainingParams)
-			nlist = trainingParams.NumCentroids
-		}
-
+		nlist := vo.numCentroids(nvecs)
 		// determine the type of vector index to be created based on the index optimization
 		// and create the faiss index for the vectors associated with this field and
 		// write out the index into the segment writer.

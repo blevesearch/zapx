@@ -20,6 +20,7 @@ package zap
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"sync/atomic"
 
@@ -177,7 +178,6 @@ func (f *faissGPUFloat32Index) close() {
 	f.waitGPU()
 	f.teardownGPU()
 	f.cpuIdx.Close()
-	f.idxBytes = nil
 }
 
 // teardownGPU stops the batcher first (while gpuIdx is still live so that
@@ -317,8 +317,21 @@ func (f *faissGPUFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *v
 
 	err = gpuState.idx.Add(vecsToAdd.floatData)
 	if err != nil {
+		// Fallback to full CPU train and add if:
+		// 1. We get a non-OOM error from the GPU index
+		if !errors.Is(err, faiss.ErrGPUOutOfMemory) {
+			f.teardownGPU()
+			return f.trainAndAddCPU(trainingData, vecsToAdd)
+		}
+		// 2. We get an OOM error but syncing GPU to CPU fails.
+		if f.syncGPUToCPU() != nil {
+			f.teardownGPU()
+			return f.trainAndAddCPU(trainingData, vecsToAdd)
+		}
+		// OOM but CPU sync succeeded: both indexes are trained.
+		// Teardown GPU to avoid discrepancy, add to CPU instead.
 		f.teardownGPU()
-		return f.trainAndAddCPU(trainingData, vecsToAdd)
+		return f.cpuIdx.Add(vecsToAdd.floatData)
 	}
 
 	err = f.syncGPUToCPU()
@@ -353,6 +366,7 @@ func (f *faissGPUFloat32Index) mergeFrom(other faissIndex, offset int64) error {
 // syncGPUToCPU clones the current GPU index state back to the CPU index,
 // replacing the old CPU index.
 func (f *faissGPUFloat32Index) syncGPUToCPU() error {
+	f.waitGPU()
 	gpuState := f.gpu.Load()
 	if gpuState == nil {
 		return nil

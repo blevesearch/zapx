@@ -206,15 +206,6 @@ func (vc *vectorIndexCache) insertLOCKED(fieldID uint16,
 	vc.cache[fieldID] = createCacheEntry(index, mapping, 0.4)
 }
 
-func (vc *vectorIndexCache) incHit(fieldID uint16) {
-	vc.m.RLock()
-	entry, ok := vc.cache[fieldID]
-	if ok {
-		entry.incHit()
-	}
-	vc.m.RUnlock()
-}
-
 func (vc *vectorIndexCache) decRef(fieldID uint16) {
 	vc.m.RLock()
 	entry, ok := vc.cache[fieldID]

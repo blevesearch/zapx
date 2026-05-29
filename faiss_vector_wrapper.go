@@ -68,7 +68,6 @@ type vectorIndexWrapper struct {
 	mapping *idMapping
 	exclude *bitmap
 	fieldID uint16
-	size    uint64
 
 	// nestedMode indicates if the vector index is operating in nested document mode.
 	// if so we have a reusable ancestry slice to help with docID lookups
@@ -288,10 +287,6 @@ func (v *vectorIndexWrapper) Close() {
 }
 
 func (v *vectorIndexWrapper) Size() uint64 {
-	return v.size
-}
-
-func (v *vectorIndexWrapper) updateSize() {
 	sizeInBytes := reflectStaticSizeIndexWrapper
 	if v.index != nil {
 		sizeInBytes += v.index.size()
@@ -302,7 +297,7 @@ func (v *vectorIndexWrapper) updateSize() {
 	if v.exclude != nil {
 		sizeInBytes += v.exclude.size()
 	}
-	v.size = sizeInBytes
+	return sizeInBytes
 }
 
 func (v *vectorIndexWrapper) ObtainKCentroidCardinalitiesFromIVFIndex(limit int, descending bool) (

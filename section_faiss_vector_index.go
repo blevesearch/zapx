@@ -830,7 +830,7 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 		// and create the faiss index for the vectors associated with this field and
 		// write out the index into the segment writer.
 		indexType := determineIndexTypeFromOptimization(content.optimizedFor)
-		config := newFaissIndexConfig(indexType, content.optimizedFor, content.dimension, metric, nvecs, nlist, false)
+		config := newFaissIndexConfig(indexType, content.optimizedFor, content.dimension, metric, nvecs, nlist, content.useGPU)
 		err = vo.writeFaissIndex(vecSet, config, w)
 		if err != nil {
 			return err

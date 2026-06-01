@@ -250,6 +250,9 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 }
 
 func trainedIndexFromConfig(config map[string]interface{}, fieldName string) (faissIndexIVF, error) {
+	if config == nil {
+		return nil, nil
+	}
 	var trainedIndexFor index.TrainedIndexCallbackFn
 	var trainingParams *index.TrainingParams
 	var rv faissIndex
@@ -718,10 +721,12 @@ func determineCentroids(nvecs int) int {
 
 func (vo *vectorIndexOpaque) numCentroids(nvecs int) int {
 	nlist := determineCentroids(nvecs)
-	// training key is associated with some addtional params such as num centroids
-	// that might be specific to the fast merge path
-	if tp, ok := vo.config[index.TrainingKey].(*index.TrainingParams); ok {
-		nlist = tp.NumCentroids
+	if vo.config != nil {
+		// training key is associated with some additional parameters such as num centroids
+		// that might be specific to the fast merge path
+		if tp, ok := vo.config[index.TrainingKey].(*index.TrainingParams); ok {
+			nlist = tp.NumCentroids
+		}
 	}
 	return nlist
 }

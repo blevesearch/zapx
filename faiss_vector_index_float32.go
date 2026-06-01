@@ -41,6 +41,7 @@ type faissFloat32Index struct {
 	// idxBytes holds the original serialized index bytes to prevent GC.
 	idxBytes []byte
 	params   *faissIndexParams
+	batcher  *requestBatcher
 }
 
 func newFaissFloat32Index(idx *faiss.IndexImpl, params *faissIndexParams) (faissIndex, error) {
@@ -50,10 +51,12 @@ func newFaissFloat32Index(idx *faiss.IndexImpl, params *faissIndexParams) (faiss
 	if params == nil {
 		return nil, errNilParams
 	}
-	return &faissFloat32Index{
+	f := &faissFloat32Index{
 		idx:    idx,
 		params: params,
-	}, nil
+	}
+	f.batcher = newRequestBatcher(f)
+	return f, nil
 }
 
 func newFaissFloat32IndexFromBytes(idxBytes []byte, params *faissIndexParams) (faissIndex, error) {
@@ -70,11 +73,13 @@ func newFaissFloat32IndexFromBytes(idxBytes []byte, params *faissIndexParams) (f
 		return nil, err
 	}
 
-	return &faissFloat32Index{
+	f := &faissFloat32Index{
 		idx:      idx,
 		idxBytes: idxBytes,
 		params:   params,
-	}, nil
+	}
+	f.batcher = newRequestBatcher(f)
+	return f, nil
 }
 
 func (f *faissFloat32Index) add(vecs *vectorSet) error {
@@ -82,6 +87,9 @@ func (f *faissFloat32Index) add(vecs *vectorSet) error {
 }
 
 func (f *faissFloat32Index) close() {
+	// stop the batcher first to flush any pending requests against the live
+	// index before closing it.
+	f.batcher.stop()
 	f.idx.Close()
 	f.idxBytes = nil
 }
@@ -103,7 +111,14 @@ func (f *faissFloat32Index) reconstructBatch(vecIDs []int64, prealloc []float32)
 }
 
 func (f *faissFloat32Index) search(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
+	if selector == nil && len(params) == 0 {
+		return f.batcher.search(qVector, k)
+	}
 	return f.idx.SearchWithOptions(qVector.floatData, k, selector, params)
+}
+
+func (f *faissFloat32Index) batchSearch(qVector *vectorSet, k int64) ([]float32, []int64, error) {
+	return f.idx.Search(qVector.floatData, k)
 }
 
 func (f *faissFloat32Index) write(buf []byte, w *FileWriter) error {
@@ -130,7 +145,8 @@ func (f *faissFloat32Index) write(buf []byte, w *FileWriter) error {
 func (f *faissFloat32Index) size() uint64 {
 	return reflectStaticSizeFloat32Index +
 		f.params.size() +
-		f.idx.Size()
+		f.idx.Size() +
+		f.batcher.size()
 }
 
 // -----------------------------------------------------------------

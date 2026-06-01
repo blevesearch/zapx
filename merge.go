@@ -205,7 +205,9 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		"fieldsMap":     fieldsMap,
 		"numDocs":       numDocs,
 		"fieldsOptions": fieldsOptions,
-		"config":        config,
+	}
+	if config != nil {
+		args["config"] = config
 	}
 
 	if numDocs > 0 {

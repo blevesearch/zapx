@@ -224,8 +224,10 @@ func (s *interim) convert() (uint64, uint64, error) {
 		"chunkMode":     s.chunkMode,
 		"fieldsMap":     s.FieldsMap,
 		"fieldsInv":     s.FieldsInv,
-		"config":        s.config,
 		"fieldsOptions": s.FieldsOptions,
+	}
+	if s.config != nil {
+		args["config"] = s.config
 	}
 	if s.opaque == nil {
 		s.opaque = map[int]resetable{}

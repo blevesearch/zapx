@@ -81,7 +81,7 @@ func (v *faissVectorIndexSection) Process(opaque map[int]resetable, docNum uint3
 	}
 	if vf, ok := field.(index.VectorField); ok {
 		vo := v.getVectorIndexOpaque(opaque)
-		vo.process(vf, field.Name(), fieldID, docNum)
+		vo.process(vf, fieldID, docNum)
 	}
 }
 
@@ -843,15 +843,17 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 	return nil
 }
 
-func (vo *vectorIndexOpaque) process(field index.VectorField, fieldName string, fieldID uint16, docNum uint32) {
+func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, docNum uint32) {
 	if fieldID == math.MaxUint16 {
 		// doc processing checkpoint - no action needed
 		return
 	}
+	name := field.Name()
 	vec := field.Vector()
 	dim := field.Dims()
 	metric := field.Similarity()
 	indexOptimizedFor := field.IndexOptimizedFor()
+	useGPU := vo.fieldsOptions[name].UseGPU()
 	// caller is supposed to make sure len(vec) is a multiple of dim.
 	// Not double checking it here to avoid the overhead.
 	// This accounts for multi-vector fields, where a field can have
@@ -871,7 +873,7 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldName string, 
 				optimizedFor: indexOptimizedFor,
 				vectors:      make([]float32, 0, dim*numVectors),
 				vecDocIDs:    make([]uint32, 0, numVectors),
-				useGPU:       vo.fieldsOptions[fieldName].UseGPU(),
+				useGPU:       useGPU,
 			}
 			vo.fieldVectorIndex[fieldID] = content
 		}

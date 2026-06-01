@@ -722,7 +722,7 @@ func determineCentroids(nvecs int) int {
 func (vo *vectorIndexOpaque) numCentroids(nvecs int) int {
 	nlist := determineCentroids(nvecs)
 	if vo.config != nil {
-		// training key is associated with some addtional params such as num centroids
+		// training key is associated with some additional parameters such as num centroids
 		// that might be specific to the fast merge path
 		if tp, ok := vo.config[index.TrainingKey].(*index.TrainingParams); ok {
 			nlist = tp.NumCentroids

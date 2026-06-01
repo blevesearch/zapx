@@ -309,11 +309,6 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 	if err != nil {
 		return nil, err
 	}
-	// update the size of the wrapper if we have successfully loaded the vector index
-	if rv.index != nil {
-		rv.updateSize()
-	}
-
 	// get the number of nested documents in this segment, if any
 	// to determine if the wrapper needs to handle nested documents
 	rv.nestedMode = sb.countNested() > 0

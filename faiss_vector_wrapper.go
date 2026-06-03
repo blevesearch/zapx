@@ -1034,46 +1034,13 @@ func newVectorSet(dim int, data []float32) (*vectorSet, error) {
 	}, nil
 }
 
-// converts float32 vectors into binary format based on the sign bit
-// of the float32 values.
-func convertToBinary(vecs []float32, dims int) []uint8 {
-	nvecs := len(vecs) / dims
-	packed := make([]uint8, 0, nvecs*(dims+7)/8)
-	var cur uint8
-	var count int
-	for i := 0; i < nvecs; i++ {
-		count = 0
-		for j := 0; j < dims; j++ {
-			value := vecs[i*dims+j]
-			// Apply the threshold: convert the float32 to 1 or 0 based on threshold
-			if value >= 0.0 {
-				// Shift the bit into the correct position in the byte
-				cur |= (1 << (7 - count))
-			}
-			count++
-			// When we have 8 bits, store the byte and reset for the next byte
-			if count == 8 {
-				packed = append(packed, cur)
-				cur = 0
-				count = 0
-			}
-		}
-		// If there are any remaining bits, pack them into a byte and append
-		if count > 0 {
-			cur <<= (8 - count)
-			packed = append(packed, cur)
-		}
-	}
-	return packed
-}
-
 func (v *vectorSet) binarize() {
 	// if binaryData is already populated, no need to convert again
 	if v.binaryData != nil {
 		return
 	}
 	// convert the floatData to binary format and store in binaryData
-	v.binaryData = convertToBinary(v.floatData, v.dim)
+	v.binaryData = faiss.RealToBinary(v.floatData, v.dim)
 }
 
 func (v *vectorSet) clone() *vectorSet {

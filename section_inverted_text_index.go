@@ -1045,6 +1045,8 @@ type invertedIndexOpaque struct {
 
 	fieldsSame bool
 	numDocs    uint64
+
+	stats *Stats
 }
 
 func (io *invertedIndexOpaque) Reset() (err error) {
@@ -1097,6 +1099,7 @@ func (io *invertedIndexOpaque) Reset() (err error) {
 	io.fieldsSame = false
 	io.numDocs = 0
 
+	io.stats = nil
 	clear(io.fieldAddrs)
 
 	return err

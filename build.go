@@ -20,6 +20,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/v2"
 	index "github.com/blevesearch/bleve_index_api"
@@ -32,7 +33,14 @@ const Type string = "zap"
 const fieldNotUninverted uint64 = math.MaxUint64
 
 func (sb *SegmentBase) Persist(path string) error {
-	return PersistSegmentBase(sb, path)
+	atomic.AddUint64(&sb.stats.TotPersistBeg, 1)
+	err := PersistSegmentBase(sb, path)
+	if err != nil {
+		atomic.AddUint64(&sb.stats.TotPersistErrors, 1)
+		return err
+	}
+	atomic.AddUint64(&sb.stats.TotPersistEnd, 1)
+	return nil
 }
 
 // WriteTo is an implementation of io.WriterTo interface.
@@ -98,8 +106,10 @@ func PersistSegmentBase(sb *SegmentBase, path string) error {
 func rewriteSegmentBase(sb *SegmentBase, path string) error {
 	closeCh := make(chan struct{})
 	defer close(closeCh)
+	config := map[string]interface{}{statsKey: sb.stats}
+
 	_, _, err := mergeSegmentBases([]*SegmentBase{sb}, []*roaring.Bitmap{nil},
-		path, DefaultChunkMode, closeCh, nil, nil)
+		path, DefaultChunkMode, closeCh, nil, config)
 	if err != nil {
 		return err
 	}
@@ -206,6 +216,14 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		fieldsOptions: make(map[string]index.FieldIndexingOptions),
 		fieldsInv:     make([]string, 0),
 		config:        config,
+	}
+	// extract stats from config if present, otherwise allocate a throwaway
+	// instance so all increment sites remain nil-check-free.
+	sb.stats = new(Stats)
+	if config != nil {
+		if s, ok := config[statsKey].(*Stats); ok && s != nil {
+			sb.stats = s
+		}
 	}
 	sb.updateSize()
 

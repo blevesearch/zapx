@@ -60,6 +60,7 @@ type faissIndexParams struct {
 	nlist int
 	// ioFlags used to read the index from bytes
 	ioFlags int
+	stats   *Stats
 }
 
 // newFaissIndexParams constructs a faissIndexParams with the given optimization

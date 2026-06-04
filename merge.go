@@ -22,6 +22,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/v2"
 	index "github.com/blevesearch/bleve_index_api"
@@ -48,7 +49,7 @@ func (z *ZapPlugin) MergeUsing(segments []seg.Segment, drops []*roaring.Bitmap, 
 	return z.merge(segments, drops, path, closeCh, s, config)
 }
 
-func (*ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path string,
+func (z *ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path string,
 	closeCh chan struct{}, s seg.StatsReporter, config map[string]interface{}) (
 	[][]uint64, uint64, error) {
 	segmentBases := make([]*SegmentBase, len(segments))
@@ -62,7 +63,28 @@ func (*ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path st
 			panic(fmt.Sprintf("oops, unexpected segment type: %T", segment))
 		}
 	}
-	return mergeSegmentBases(segmentBases, drops, path, DefaultChunkMode, closeCh, s, config)
+
+	config[statsKey] = &z.stats
+
+	atomic.AddUint64(&z.stats.TotMergesBeg, 1)
+	atomic.AddUint64(&z.stats.TotMergeInputSegments, uint64(len(segments)))
+	var totalInputDocs, droppedDocs uint64
+	for i, sb := range segmentBases {
+		totalInputDocs += sb.numDocs
+		if drops[i] != nil {
+			droppedDocs += drops[i].GetCardinality()
+		}
+	}
+	atomic.AddUint64(&z.stats.TotMergeDroppedDocs, droppedDocs)
+	atomic.AddUint64(&z.stats.TotMergeOutputDocs, totalInputDocs-droppedDocs)
+
+	newDocNums, size, err := mergeSegmentBases(segmentBases, drops, path, DefaultChunkMode, closeCh, s, config)
+	if err != nil {
+		atomic.AddUint64(&z.stats.TotMergesErrors, 1)
+		return nil, 0, err
+	}
+	atomic.AddUint64(&z.stats.TotMergesEnd, 1)
+	return newDocNums, size, nil
 }
 
 func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, path string,
@@ -205,6 +227,7 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		"fieldsMap":     fieldsMap,
 		"numDocs":       numDocs,
 		"fieldsOptions": fieldsOptions,
+		"stats":         config[statsKey].(*Stats),
 	}
 	if config != nil {
 		args["config"] = config

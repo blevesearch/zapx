@@ -49,15 +49,18 @@ func (z *ZapPlugin) Open(path string) (segment.Segment, error) {
 	return z.open(path, nil)
 }
 
-func (*ZapPlugin) open(path string, config map[string]interface{}) (segment.Segment, error) {
+func (z *ZapPlugin) open(path string, config map[string]interface{}) (segment.Segment, error) {
+	atomic.AddUint64(&z.stats.TotOpenBeg, 1)
 	f, err := os.Open(path)
 	if err != nil {
+		atomic.AddUint64(&z.stats.TotOpenErrors, 1)
 		return nil, err
 	}
 	mm, err := mmap.Map(f, mmap.RDONLY, 0)
 	if err != nil {
 		// mmap failed, try to close the file
 		_ = f.Close()
+		atomic.AddUint64(&z.stats.TotOpenErrors, 1)
 		return nil, err
 	}
 
@@ -73,6 +76,7 @@ func (*ZapPlugin) open(path string, config map[string]interface{}) (segment.Segm
 			trainedIndexCache: newTrainedIndexCache(),
 			fieldDvReaders:    make([][]*docValueReader, len(segmentSections)),
 			config:            config,
+			stats:             &z.stats,
 		},
 		f:    f,
 		mm:   mm,
@@ -84,18 +88,21 @@ func (*ZapPlugin) open(path string, config map[string]interface{}) (segment.Segm
 	err = rv.loadConfig()
 	if err != nil {
 		_ = rv.Close()
+		atomic.AddUint64(&z.stats.TotOpenErrors, 1)
 		return nil, err
 	}
 
 	err = rv.loadFields()
 	if err != nil {
 		_ = rv.Close()
+		atomic.AddUint64(&z.stats.TotOpenErrors, 1)
 		return nil, err
 	}
 
 	err = rv.loadDvReaders()
 	if err != nil {
 		_ = rv.Close()
+		atomic.AddUint64(&z.stats.TotOpenErrors, 1)
 		return nil, err
 	}
 
@@ -103,9 +110,11 @@ func (*ZapPlugin) open(path string, config map[string]interface{}) (segment.Segm
 	err = rv.nstIndexCache.initialize(rv.numDocs, rv.getEdgeListOffset(), rv.mem)
 	if err != nil {
 		_ = rv.Close()
+		atomic.AddUint64(&z.stats.TotOpenErrors, 1)
 		return nil, err
 	}
 
+	atomic.AddUint64(&z.stats.TotOpenEnd, 1)
 	return rv, nil
 }
 
@@ -144,6 +153,9 @@ type SegmentBase struct {
 	synIndexCache     *synonymIndexCache
 	geoIndexCache     *geoIndexCache
 	nstIndexCache     *nestedIndexCache
+
+	// segment level stats that are tracked and reported as part of the segment's lifecycle
+	stats *Stats
 }
 
 func (sb *SegmentBase) Size() int {
@@ -712,6 +724,7 @@ func (s *Segment) closeActual() (err error) {
 		}
 	}
 
+	atomic.AddUint64(&s.stats.TotSegmentsClosed, 1)
 	return
 }
 

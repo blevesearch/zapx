@@ -72,6 +72,7 @@ type vectorCacheOptions struct {
 	optStr  string
 
 	skipMapping bool // if true, skip building the idMapping
+	stats       *Stats
 }
 
 func newVectorCacheOptions(mem []byte, numDocs uint32, except *roaring.Bitmap,

@@ -16,7 +16,14 @@ package zap
 
 // ZapPlugin implements the Plugin interface of
 // the blevesearch/scorch_segment_api pkg
-type ZapPlugin struct{}
+type ZapPlugin struct {
+	// ensures that a stats instance is always available for a plugin
+	stats Stats
+}
+
+func InitPlugin() *ZapPlugin {
+	return &ZapPlugin{}
+}
 
 func (*ZapPlugin) Type() string {
 	return Type

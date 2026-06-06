@@ -207,14 +207,10 @@ type coalesceQueue struct {
 	// safeguard to ensure that the stop() method is thread-safe and can only be called once,
 	// preventing multiple close operations on the stopCh.
 	stopOnce sync.Once
-	// safeguard for closing flusherDoneCh exactly once.
-	flusherDoneOnce sync.Once
 	// channel for signaling the batcher to stop processing requests and shut down.
 	stopCh chan struct{}
 	// closed when filler goroutine has exited after receiving a stop signal.
 	fillerDoneCh chan struct{}
-	// closed when all flusher goroutines have exited after receiving a stop signal.
-	flusherDoneCh chan struct{}
 	// number of flusher goroutines to run concurrently.
 	numFlushers int
 	// wait group to track completion of all flusher goroutines.
@@ -228,10 +224,9 @@ func newCoalesceQueue(idx faissQueryBatch, numFlushers int) *coalesceQueue {
 		idx:           idx,
 		enqueueCh:     make(chan *batchRequest),
 		flushCh:       make(chan []*batchRequest),
-		stopCh:        make(chan struct{}),
-		fillerDoneCh:  make(chan struct{}),
-		flusherDoneCh: make(chan struct{}),
-		numFlushers:   numFlushers,
+		stopCh:       make(chan struct{}),
+		fillerDoneCh: make(chan struct{}),
+		numFlushers:  numFlushers,
 		batchManager:  newBatchManager(),
 	}
 	go q.filler()
@@ -250,9 +245,6 @@ func (q *coalesceQueue) stop() {
 	<-q.fillerDoneCh
 	// wait for all flushers to drain and exit
 	q.flusherWG.Wait()
-	q.flusherDoneOnce.Do(func() {
-		close(q.flusherDoneCh)
-	})
 }
 
 // filler is the enqueuer goroutine. It receives incoming search requests,

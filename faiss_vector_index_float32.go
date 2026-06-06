@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"reflect"
+	"runtime"
 
 	index "github.com/blevesearch/bleve_index_api"
 	faiss "github.com/blevesearch/go-faiss"
@@ -55,7 +56,7 @@ func newFaissFloat32Index(idx *faiss.IndexImpl, params *faissIndexParams) (faiss
 		idx:    idx,
 		params: params,
 	}
-	f.batcher = newRequestBatcher(f)
+	f.batcher = newRequestBatcher(f, runtime.NumCPU())
 	return f, nil
 }
 
@@ -78,7 +79,7 @@ func newFaissFloat32IndexFromBytes(idxBytes []byte, params *faissIndexParams) (f
 		idxBytes: idxBytes,
 		params:   params,
 	}
-	f.batcher = newRequestBatcher(f)
+	f.batcher = newRequestBatcher(f, runtime.NumCPU())
 	return f, nil
 }
 

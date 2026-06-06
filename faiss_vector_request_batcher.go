@@ -48,9 +48,9 @@ type requestBatcher struct {
 	cq *coalesceQueue
 }
 
-func newRequestBatcher(idx faissQueryBatch) *requestBatcher {
+func newRequestBatcher(idx faissQueryBatch, numFlushers int) *requestBatcher {
 	b := &requestBatcher{
-		cq: newCoalesceQueue(idx),
+		cq: newCoalesceQueue(idx, numFlushers),
 	}
 	return b
 }
@@ -202,22 +202,28 @@ type coalesceQueue struct {
 	idx faissQueryBatch
 	// channel for enqueuing new batch requests into the queue.
 	enqueueCh chan *batchRequest
-	// channel for handing off coalesced batches to the flusher goroutine for execution.
+	// channel for handing off coalesced batches to the flusher goroutines for execution.
 	flushCh chan []*batchRequest
 	// safeguard to ensure that the stop() method is thread-safe and can only be called once,
 	// preventing multiple close operations on the stopCh.
 	stopOnce sync.Once
+	// safeguard for closing flusherDoneCh exactly once.
+	flusherDoneOnce sync.Once
 	// channel for signaling the batcher to stop processing requests and shut down.
 	stopCh chan struct{}
 	// closed when filler goroutine has exited after receiving a stop signal.
 	fillerDoneCh chan struct{}
-	// closed when flusher goroutine has exited after receiving a stop signal.
+	// closed when all flusher goroutines have exited after receiving a stop signal.
 	flusherDoneCh chan struct{}
+	// number of flusher goroutines to run concurrently.
+	numFlushers int
+	// wait group to track completion of all flusher goroutines.
+	flusherWG sync.WaitGroup
 	// a sync.Pool for reusing batch slices to reduce allocations and GC overhead.
 	batchManager *batchManager
 }
 
-func newCoalesceQueue(idx faissQueryBatch) *coalesceQueue {
+func newCoalesceQueue(idx faissQueryBatch, numFlushers int) *coalesceQueue {
 	q := &coalesceQueue{
 		idx:           idx,
 		enqueueCh:     make(chan *batchRequest),
@@ -225,10 +231,14 @@ func newCoalesceQueue(idx faissQueryBatch) *coalesceQueue {
 		stopCh:        make(chan struct{}),
 		fillerDoneCh:  make(chan struct{}),
 		flusherDoneCh: make(chan struct{}),
+		numFlushers:   numFlushers,
 		batchManager:  newBatchManager(),
 	}
 	go q.filler()
-	go q.flusher()
+	for i := 0; i < numFlushers; i++ {
+		q.flusherWG.Add(1)
+		go q.flusher()
+	}
 	return q
 }
 
@@ -236,9 +246,13 @@ func (q *coalesceQueue) stop() {
 	q.stopOnce.Do(func() {
 		close(q.stopCh)
 	})
-	// wait for all goroutines to exit
+	// wait for filler to exit
 	<-q.fillerDoneCh
-	<-q.flusherDoneCh
+	// wait for all flushers to drain and exit
+	q.flusherWG.Wait()
+	q.flusherDoneOnce.Do(func() {
+		close(q.flusherDoneCh)
+	})
 }
 
 // filler is the enqueuer goroutine. It receives incoming search requests,
@@ -268,9 +282,10 @@ func (q *coalesceQueue) filler() {
 	}
 }
 
-// flusher is the background goroutine that executes batches handed off by the monitor.
+// flusher is a background goroutine that executes batches handed off by the monitor.
+// Multiple flushers run concurrently, all reading from the same flushCh channel.
 func (q *coalesceQueue) flusher() {
-	defer close(q.flusherDoneCh)
+	defer q.flusherWG.Done()
 	for {
 		select {
 		case batch := <-q.flushCh:

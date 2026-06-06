@@ -62,7 +62,7 @@ func makeVectorSet(dim int, nvecs int) *vectorSet {
 
 func TestNewRequestBatcher(t *testing.T) {
 	idx := &mockFaissIndex{}
-	b := newRequestBatcher(idx)
+	b := newRequestBatcher(idx, 1)
 	if b == nil {
 		t.Fatal("expected non-nil batcher")
 	}
@@ -74,7 +74,7 @@ func TestNewRequestBatcher(t *testing.T) {
 
 func TestRequestBatcherSearch(t *testing.T) {
 	idx := &mockFaissIndex{}
-	b := newRequestBatcher(idx)
+	b := newRequestBatcher(idx, 1)
 	defer b.stop()
 
 	qv := makeVectorSet(3, 1)
@@ -92,7 +92,7 @@ func TestRequestBatcherSearch(t *testing.T) {
 
 func TestRequestBatcherSearchAfterStop(t *testing.T) {
 	idx := &mockFaissIndex{}
-	b := newRequestBatcher(idx)
+	b := newRequestBatcher(idx, 1)
 	b.stop()
 
 	qv := makeVectorSet(3, 1)
@@ -104,7 +104,7 @@ func TestRequestBatcherSearchAfterStop(t *testing.T) {
 
 func TestRequestBatcherConcurrentSearches(t *testing.T) {
 	idx := &mockFaissIndex{}
-	b := newRequestBatcher(idx)
+	b := newRequestBatcher(idx, 1)
 	defer b.stop()
 
 	var wg sync.WaitGroup
@@ -135,7 +135,7 @@ func TestRequestBatcherConcurrentSearches(t *testing.T) {
 
 func TestRequestBatcherConcurrentSearchesDifferentK(t *testing.T) {
 	idx := &mockFaissIndex{}
-	b := newRequestBatcher(idx)
+	b := newRequestBatcher(idx, 1)
 	defer b.stop()
 
 	var wg sync.WaitGroup
@@ -351,7 +351,7 @@ func TestBatchManagerGetPut(t *testing.T) {
 
 func TestCoalesceQueueBasic(t *testing.T) {
 	idx := &mockFaissIndex{}
-	q := newCoalesceQueue(idx)
+	q := newCoalesceQueue(idx, 1)
 	defer q.stop()
 
 	qv := makeVectorSet(3, 1)
@@ -368,7 +368,7 @@ func TestCoalesceQueueBasic(t *testing.T) {
 
 func TestCoalesceQueueStopIdempotent(t *testing.T) {
 	idx := &mockFaissIndex{}
-	q := newCoalesceQueue(idx)
+	q := newCoalesceQueue(idx, 1)
 	q.stop()
 	q.stop() // should not panic
 }
@@ -490,7 +490,7 @@ func TestCoalesceQueueExecuteBatchWithError(t *testing.T) {
 
 func TestCoalesceQueueStopWithPendingRequests(t *testing.T) {
 	idx := &mockFaissIndex{}
-	q := newCoalesceQueue(idx)
+	q := newCoalesceQueue(idx, 1)
 
 	qv := makeVectorSet(3, 1)
 	req, ch := newBatchRequest(qv, 2)
@@ -511,7 +511,7 @@ func TestSearchWithErrorFromIndex(t *testing.T) {
 			return nil, nil, testErr
 		},
 	}
-	b := newRequestBatcher(idx)
+	b := newRequestBatcher(idx, 1)
 	defer b.stop()
 
 	qv := makeVectorSet(3, 1)
@@ -571,7 +571,7 @@ func TestFillerDrainsOnStop(t *testing.T) {
 			return distances, ids, nil
 		},
 	}
-	b := newRequestBatcher(idx)
+	b := newRequestBatcher(idx, 1)
 
 	qv1 := makeVectorSet(3, 1)
 	req1, ch1 := newBatchRequest(qv1, 2)

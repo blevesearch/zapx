@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"runtime"
 	"sync/atomic"
 
 	index "github.com/blevesearch/bleve_index_api"
@@ -99,7 +100,7 @@ func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl, params *faissIndexParams) 
 		params: params,
 		doneCh: make(chan struct{}),
 	}
-	f.cpuBatcher = newRequestBatcher(f)
+	f.cpuBatcher = newRequestBatcher(f, runtime.NumCPU())
 	go f.initGPU()
 	return f, nil
 }
@@ -124,7 +125,7 @@ func newFaissGPUFloat32IndexFromBytes(idxBytes []byte, params *faissIndexParams)
 		params:   params,
 		doneCh:   make(chan struct{}),
 	}
-	f.cpuBatcher = newRequestBatcher(f)
+	f.cpuBatcher = newRequestBatcher(f, runtime.NumCPU())
 	go f.initGPU()
 	return f, nil
 }
@@ -149,7 +150,7 @@ func (f *faissGPUFloat32Index) initGPU() {
 		return
 	}
 	gs := &gpuState{idx: gpuIdx}
-	gs.batcher = newRequestBatcher(gs)
+	gs.batcher = newRequestBatcher(gs, 1)
 	f.gpu.Store(gs)
 }
 

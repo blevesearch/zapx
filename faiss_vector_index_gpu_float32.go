@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	"runtime"
 	"sync/atomic"
 
 	index "github.com/blevesearch/bleve_index_api"
@@ -69,8 +68,7 @@ func (gs *gpuState) size() uint64 {
 // other operations (filtered searches, IVF cluster searches, SQ/IVF
 // operations, serialization, etc.) are delegated to the CPU index.
 type faissGPUFloat32Index struct {
-	cpuIdx     *faiss.IndexImpl
-	cpuBatcher *requestBatcher
+	cpuIdx *faiss.IndexImpl
 
 	// idxBytes holds the original serialized index bytes to prevent GC.
 	idxBytes []byte
@@ -100,7 +98,6 @@ func newFaissGPUFloat32Index(cpuIdx *faiss.IndexImpl, params *faissIndexParams) 
 		params: params,
 		doneCh: make(chan struct{}),
 	}
-	f.cpuBatcher = newRequestBatcher(f, runtime.NumCPU())
 	go f.initGPU()
 	return f, nil
 }
@@ -125,7 +122,6 @@ func newFaissGPUFloat32IndexFromBytes(idxBytes []byte, params *faissIndexParams)
 		params:   params,
 		doneCh:   make(chan struct{}),
 	}
-	f.cpuBatcher = newRequestBatcher(f, runtime.NumCPU())
 	go f.initGPU()
 	return f, nil
 }
@@ -181,7 +177,6 @@ func (f *faissGPUFloat32Index) add(vecs *vectorSet) error {
 func (f *faissGPUFloat32Index) close() {
 	f.waitGPU()
 	f.teardownGPU()
-	f.cpuBatcher.stop()
 	f.cpuIdx.Close()
 }
 
@@ -221,14 +216,10 @@ func (f *faissGPUFloat32Index) search(qVector *vectorSet, k int64, selector fais
 		if gpuState := f.gpu.Load(); gpuState != nil {
 			return gpuState.batcher.search(qVector, k)
 		}
-		return f.cpuBatcher.search(qVector, k)
+		return f.cpuIdx.Search(qVector.floatData, k)
 	}
 	// GPU not ready, filtered search, or non-empty params — fall back to CPU
 	return f.cpuIdx.SearchWithOptions(qVector.floatData, k, selector, params)
-}
-
-func (f *faissGPUFloat32Index) batchSearch(qVector *vectorSet, k int64) ([]float32, []int64, error) {
-	return f.cpuIdx.Search(qVector.floatData, k)
 }
 
 func (f *faissGPUFloat32Index) write(buf []byte, w *FileWriter) error {
@@ -255,8 +246,7 @@ func (f *faissGPUFloat32Index) write(buf []byte, w *FileWriter) error {
 func (f *faissGPUFloat32Index) size() uint64 {
 	sizeInBytes := reflectStaticSizeGPUFloat32Index +
 		f.params.size() +
-		f.cpuIdx.Size() +
-		f.cpuBatcher.size()
+		f.cpuIdx.Size()
 	if gpuState := f.gpu.Load(); gpuState != nil {
 		sizeInBytes += gpuState.size()
 	}

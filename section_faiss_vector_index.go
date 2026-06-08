@@ -277,7 +277,7 @@ func trainedIndexFromConfig(config map[string]interface{}, fieldName string) (fa
 		}
 	}
 	if rv == nil {
-		return nil, nil, nil
+		return nil, func() error { return nil }, nil
 	}
 
 	return rv.getIndex().castIVF(), func() error { return rv.close() }, nil

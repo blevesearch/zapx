@@ -16,11 +16,18 @@ package zap
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/RoaringBitmap/roaring/v2"
 	index "github.com/blevesearch/bleve_index_api"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 	"github.com/blevesearch/vellum"
+)
+
+// BM25 parameters — must match the values in bleve/search/util.go.
+const (
+	wandBM25K1 = 1.2
+	wandBM25B  = 0.75
 )
 
 // Dictionary is the zap representation of the term dictionary
@@ -106,6 +113,73 @@ func (d *Dictionary) postingsListInit(rv *PostingsList, except *roaring.Bitmap) 
 	rv.sb = d.sb
 	rv.except = except
 	return rv
+}
+
+// MaxTFNorm returns the maximum BM25 tf-norm contribution for term in this
+// segment, scanning the posting list lazily on the first call and caching
+// the result per (term, avgDocLength).
+//
+// The returned value is:
+//
+//	max_d( sqrt(freq_d) × k1 / (sqrt(freq_d) + k1×(1−b + b×fl_d/avgDocLength)) )
+//
+// where fl_d = 1/(norm_d²) is the document field length.
+//
+// Multiply the result by scorer.IDF() × scorer.QueryWeight() to get the
+// per-term score upper bound used by WAND / MaxScore pruning.
+//
+// Returns 0 if the term is not in this segment.
+func (d *Dictionary) MaxTFNorm(term []byte, avgDocLength float64) float32 {
+	if d.sb == nil || avgDocLength <= 0 {
+		return 0
+	}
+	cacheEntry := d.sb.invIndexCache.getOrCreateMaxTFNormEntry(d.fieldID)
+	avgDocLenF := float32(avgDocLength)
+
+	if v, ok := cacheEntry.getMaxTFNorm(string(term), avgDocLenF); ok {
+		return v
+	}
+
+	// Cache miss: scan the posting list to find max(tfNorm).
+	pl, err := d.PostingsList(term, nil, nil)
+	if err != nil || pl == emptyPostingsList {
+		return 0
+	}
+
+	var maxTFNorm float32
+
+	// 1-hit optimisation: only one doc, freq=1, norm stored in FST value.
+	if cpl, ok := pl.(*PostingsList); ok && cpl.normBits1Hit != 0 {
+		norm := math.Float32frombits(uint32(cpl.normBits1Hit))
+		maxTFNorm = float32(wandTFNorm(1, float64(norm), avgDocLength))
+	} else {
+		iter := pl.Iterator(true, true, false, nil)
+		for {
+			p, e := iter.Next()
+			if p == nil || e != nil {
+				break
+			}
+			v := float32(wandTFNorm(float64(p.Frequency()), p.Norm(), avgDocLength))
+			if v > maxTFNorm {
+				maxTFNorm = v
+			}
+		}
+	}
+
+	cacheEntry.setMaxTFNorm(string(term), avgDocLenF, maxTFNorm)
+	return maxTFNorm
+}
+
+// wandTFNorm computes the BM25 tf-norm contribution for a single document.
+// freq is raw term frequency; norm is bleve's stored norm (= 1/sqrt(fieldLength)).
+func wandTFNorm(freq, norm, avgDocLength float64) float64 {
+	tf := math.Sqrt(freq)
+	fieldLength := 1.0 / (norm * norm)
+	denom := tf + wandBM25K1*(1-wandBM25B+wandBM25B*fieldLength/avgDocLength)
+	if denom == 0 {
+		return 0
+	}
+	return tf * wandBM25K1 / denom
 }
 
 func (d *Dictionary) Contains(key []byte) (bool, error) {

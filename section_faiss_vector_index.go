@@ -543,7 +543,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 	// create the faiss index config to hold the merged data, either via fast merge or reconstruction
 	nlist := v.numCentroids(nvecs)
 	config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, nlist, useGPU)
-
 	// we perform fast merge if we're not using the GPU and if the trained index
 	// is compatible to be used for fast merge
 	if !useGPU && canFastMerge(trainedIndex, indexOptimizedFor, nvecs) {

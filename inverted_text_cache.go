@@ -151,8 +151,8 @@ func (sc *invertedIndexCache) getOrCreateMaxTFNormEntry(fieldID uint16) *inverte
 }
 
 // invertedCacheEntry is the per-field cache entry for a segment.
-// It holds the vellum FST term dictionary and a lazy maxTFNorm cache
-// used for WAND / MaxScore query pruning.
+// It holds the vellum FST term dictionary and lazy caches used for
+// WAND / MaxScore query pruning and repeated FST traversal avoidance.
 type invertedCacheEntry struct {
 	fst *vellum.FST
 
@@ -169,6 +169,12 @@ type invertedCacheEntry struct {
 	//     the cached value so a changed corpus triggers a recompute)
 	maxTFNormMu    sync.RWMutex
 	maxTFNormCache map[string]maxTFNormEntry
+
+	// termOffsetCache maps term → posting-list offset within the segment
+	// file, avoiding repeated FST traversals for repeated queries on the
+	// same term.  Uses sync.Map (write-once, read-many pattern).
+	// Only populated for terms that are found in the segment.
+	termOffsetCache sync.Map // key: string, val: uint64
 }
 
 // maxTFNormEntry pairs a cached tf-norm max with the avgDocLength it was

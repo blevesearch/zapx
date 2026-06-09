@@ -71,6 +71,15 @@ func (d *Dictionary) postingsList(term []byte, except *roaring.Bitmap, rv *Posti
 		return d.postingsListInit(rv, except), nil
 	}
 
+	// Fast path: avoid FST traversal for terms seen in a previous query.
+	var ce *invertedCacheEntry
+	if d.sb != nil {
+		ce = d.sb.invIndexCache.getOrCreateMaxTFNormEntry(d.fieldID)
+		if v, ok := ce.termOffsetCache.Load(string(term)); ok {
+			return d.postingsListFromOffset(v.(uint64), except, rv)
+		}
+	}
+
 	postingsOffset, exists, err := d.fstReader.Get(term)
 
 	if err != nil {
@@ -81,6 +90,10 @@ func (d *Dictionary) postingsList(term []byte, except *roaring.Bitmap, rv *Posti
 			return emptyPostingsList, nil
 		}
 		return d.postingsListInit(rv, except), nil
+	}
+
+	if ce != nil {
+		ce.termOffsetCache.Store(string(term), postingsOffset)
 	}
 
 	return d.postingsListFromOffset(postingsOffset, except, rv)

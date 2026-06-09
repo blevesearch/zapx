@@ -866,6 +866,7 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 	metric := field.Similarity()
 	indexOptimizedFor := field.IndexOptimizedFor()
 	useGPU := vo.fieldsOptions[name].UseGPU()
+
 	// caller is supposed to make sure len(vec) is a multiple of dim.
 	// Not double checking it here to avoid the overhead.
 	// This accounts for multi-vector fields, where a field can have
@@ -883,8 +884,8 @@ func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, do
 				dimension:    dim,
 				metric:       metric,
 				optimizedFor: indexOptimizedFor,
-				vectors:      make([]float32, 0, dim*numVectors),
-				vecDocIDs:    make([]uint32, 0, numVectors),
+				vectors:      make([]float32, 0, dim*numVectors*vo.numDocs),
+				vecDocIDs:    make([]uint32, 0, numVectors*vo.numDocs),
 				useGPU:       useGPU,
 			}
 			vo.fieldVectorIndex[fieldID] = content
@@ -944,6 +945,9 @@ type vectorIndexOpaque struct {
 	fieldsOptions map[string]index.FieldIndexingOptions
 	// tmp0 is a reusable buffer
 	tmp0 []byte
+	// numDocs tracks the total number of documents processed during introduction, helpful while
+	// preallocating buffers for faster copy operations
+	numDocs int
 }
 
 func (vo *vectorIndexOpaque) incrementBytesWritten(val uint64) {
@@ -978,6 +982,8 @@ func (v *vectorIndexOpaque) Set(key string, val interface{}) {
 		v.fieldsOptions = val.(map[string]index.FieldIndexingOptions)
 	case "config":
 		v.config = val.(map[string]interface{})
+	case "results":
+		v.numDocs = len(val.([]index.Document))
 	}
 }
 

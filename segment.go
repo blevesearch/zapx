@@ -142,6 +142,7 @@ type SegmentBase struct {
 	trainedIndexCache *trainedIndexCache
 	synIndexCache     *synonymIndexCache
 	nstIndexCache     *nestedIndexCache
+	maxTFNormCache    sync.Map // key: int(fieldID) → *loadedMaxTFNormField
 }
 
 func (sb *SegmentBase) Size() int {

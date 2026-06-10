@@ -70,7 +70,7 @@ func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint
 
 func (i *invertedTextIndexSection) Persist(opaque map[int]resetable, w *FileWriter) error {
 	io := i.getInvertedIndexOpaque(opaque)
-	return io.writeDicts(w)
+	return io.writeDicts(opaque, w)
 }
 
 func (i *invertedTextIndexSection) AddrForField(opaque map[int]resetable, fieldID int) int {
@@ -453,7 +453,7 @@ func (i *invertedIndexOpaque) BytesRead() uint64 {
 
 func (i *invertedIndexOpaque) ResetBytesRead(uint64) {}
 
-func (io *invertedIndexOpaque) writeDicts(w *FileWriter) error {
+func (io *invertedIndexOpaque) writeDicts(opaque map[int]resetable, w *FileWriter) error {
 	if len(io.results) == 0 {
 		return nil
 	}
@@ -515,11 +515,23 @@ func (io *invertedIndexOpaque) writeDicts(w *FileWriter) error {
 			tfEncoder.SetChunkSize(chunkSize, uint64(len(io.results)-1))
 			locEncoder.SetChunkSize(chunkSize, uint64(len(io.results)-1))
 
+			// §14: track max freq and max norm for this term's posting list.
+			var maxFreq uint64
+			var maxNorm float32
+
 			postingsItr := postingsBS.Iterator()
 			for postingsItr.HasNext() {
 				docNum := uint64(postingsItr.Next())
 
 				freqNorm := freqNorms[freqNormOffset]
+
+				// §14: accumulate maxFreq and maxNorm.
+				if freqNorm.freq > maxFreq {
+					maxFreq = freqNorm.freq
+				}
+				if freqNorm.norm > maxNorm {
+					maxNorm = freqNorm.norm
+				}
 
 				// v18: norm lives in SectionNormColumn, not the freq stream.
 				err = tfEncoder.Add(docNum,
@@ -578,6 +590,10 @@ func (io *invertedIndexOpaque) writeDicts(w *FileWriter) error {
 				err = io.builder.Insert([]byte(term), postingsOffset)
 				if err != nil {
 					return err
+				}
+				// §14: record the max freq/norm for this term in the MaxTFNorm section.
+				if mto, ok := opaque[SectionMaxTFNorm]; ok {
+					mto.(*maxTFNormOpaque).addEntry(fieldID, postingsOffset, maxFreq, maxNorm)
 				}
 			}
 

@@ -22,22 +22,24 @@ import (
 	"github.com/blevesearch/vellum"
 )
 
-// WAND / MaxScore cache hierarchy
+// WAND / MaxScore bound resolution
 //
-// Three levels exist, longest-lived first:
+// The per-term bound is NOT cached at segment level.  Levels, longest-lived
+// first:
 //
-//  ┌─ Segment (SegmentBase.invIndexCache) ─────────── this file ───────┐
-//  │  Per (field, term): maxTFNorm = max BM25 tf-norm across all docs   │
-//  │  in this segment.  Lives as long as the segment file is open;      │
-//  │  freed on segment GC (merge or close).  Shared by ALL concurrent   │
-//  │  queries via RWMutex — many readers, one writer on first access.   │
+//  ┌─ Segment file (§14 MaxTFNorm sidecar) ─── section_maxtfnorm.go ────┐
+//  │  Per (field, term): (maxFreq, minFieldLen), written at flush and    │
+//  │  propagated through merge.  Resolved by binary-searching the        │
+//  │  mmap'd columns on every call — no decode, no allocation, no        │
+//  │  per-term state, so nothing to size, evict or invalidate.  The      │
+//  │  search key is the postingsOffset that PostingsList already         │
+//  │  resolved from the FST.                                             │
 //  └───────────────────────────────────────────────────────────────────-┘
 //       ↑ aggregated by
 //  ┌─ IndexSnapshotTermFieldReader.MaxTFNorm() ────────────────────────┐
 //  │  Iterates all N segments, returns max.  Called once per query per  │
-//  │  term via TermSearcher.MaxImpact().                                │
-//  │  FUTURE: cache max-across-segments at IndexSnapshot level to       │
-//  │  replace N segment lookups with one snapshot lookup per term.      │
+//  │  term via TermSearcher.MaxImpact(); the per-TFR segMaxTFNorms      │
+//  │  slice keeps it to one pass per query.                             │
 //  └───────────────────────────────────────────────────────────────────┘
 //       ↑ multiplied by IDF × queryNorm to give MaxImpact
 //  ┌─ TermSearcher.cachedMaxImpact ────────────────────────────────────┐
@@ -127,86 +129,28 @@ func (sc *invertedIndexCache) insertLOCKED(fieldID uint16, fst *vellum.FST) {
 	}
 }
 
-// getOrCreateMaxTFNormEntry returns the invertedCacheEntry for fieldID,
-// creating an empty entry if none exists yet (for segments that have no
-// FST loaded but still need the maxTFNorm cache).
-func (sc *invertedIndexCache) getOrCreateMaxTFNormEntry(fieldID uint16) *invertedCacheEntry {
-	sc.m.RLock()
-	entry, ok := sc.cache[fieldID]
-	sc.m.RUnlock()
-	if ok {
-		return entry
-	}
-	sc.m.Lock()
-	defer sc.m.Unlock()
-	if entry, ok = sc.cache[fieldID]; ok {
-		return entry
-	}
-	entry = &invertedCacheEntry{}
-	if sc.cache == nil {
-		sc.cache = make(map[uint16]*invertedCacheEntry)
-	}
-	sc.cache[fieldID] = entry
-	return entry
-}
-
-// invertedCacheEntry is the per-field cache entry for a segment.
-// It holds the vellum FST term dictionary and a lazy maxTFNorm cache
-// used for WAND / MaxScore query pruning.
+// invertedCacheEntry is the per-field cache entry for a segment: the vellum FST
+// term dictionary, and nothing else.
+//
+// Deliberately no per-term state lives here.  Two earlier revisions added some
+// and both were removed:
+//
+//   - a memo of MaxTFNorm per (term, avgDocLength), capped at 100 000 entries
+//     per field per segment.  Worth it when a miss meant an O(posting-list)
+//     scan; once §14 made that a bounded binary search it bought a constant
+//     factor in exchange for query-workload-sensitive memory and a silent
+//     cliff at the cap, past which terms were never memoised at all.
+//   - a term→postingsOffset cache to skip FST traversal (§19), which measured
+//     as neutral on the benchmark (hot FST nodes stay resident) while growing
+//     without bound: one entry per distinct term ever queried, per field, per
+//     segment, for the segment's lifetime, including terms that are absent.
+//
+// MaxTFNorm now takes the postingsOffset straight off the PostingsList it
+// already resolved, so neither cache has a caller.
 type invertedCacheEntry struct {
 	fst *vellum.FST
-
-	// maxTFNorm caches, per term, the maximum BM25 tf-norm contribution
-	// seen across all documents in this segment for that term.  Computed
-	// lazily on first use; evicted automatically when the segment is
-	// merged/GC'd.
-	//
-	// Eviction within a living segment:
-	//   - capped at maxTFNormCacheSize entries (once full, new terms are
-	//     skipped — hot terms queried first win the slots, which is the
-	//     right policy for WAND)
-	//   - invalidated per-entry when avgDocLength changes (stored alongside
-	//     the cached value so a changed corpus triggers a recompute)
-	maxTFNormMu    sync.RWMutex
-	maxTFNormCache map[string]maxTFNormEntry
 }
-
-// maxTFNormEntry pairs a cached tf-norm max with the avgDocLength it was
-// computed under.  If the corpus grows and avgDocLength shifts, the entry
-// is recomputed on next access.
-type maxTFNormEntry struct {
-	avgDocLen float32 // avgDocLength at compute time (rounded to float32)
-	value     float32 // max( sqrt(freq)×k1 / (sqrt(freq) + k1×(1−b+b×fl/avgdl)) )
-}
-
-// maxTFNormCacheSize caps the number of terms cached per field per segment.
-// 100 000 entries × ~36 bytes/entry ≈ 3.6 MB per field per segment.
-const maxTFNormCacheSize = 100_000
 
 func (ce *invertedCacheEntry) load() (*vellum.FST, uint64, error) {
 	return ce.fst, 0, nil
-}
-
-// getMaxTFNorm returns the cached maxTFNorm for term (with the given
-// avgDocLength), or (0, false) on a miss.
-func (ce *invertedCacheEntry) getMaxTFNorm(term string, avgDocLen float32) (float32, bool) {
-	ce.maxTFNormMu.RLock()
-	e, ok := ce.maxTFNormCache[term]
-	ce.maxTFNormMu.RUnlock()
-	if !ok || e.avgDocLen != avgDocLen {
-		return 0, false
-	}
-	return e.value, true
-}
-
-// setMaxTFNorm stores the maxTFNorm for term if the cache is not full.
-func (ce *invertedCacheEntry) setMaxTFNorm(term string, avgDocLen float32, v float32) {
-	ce.maxTFNormMu.Lock()
-	if len(ce.maxTFNormCache) < maxTFNormCacheSize {
-		if ce.maxTFNormCache == nil {
-			ce.maxTFNormCache = make(map[string]maxTFNormEntry, 256)
-		}
-		ce.maxTFNormCache[term] = maxTFNormEntry{avgDocLen: avgDocLen, value: v}
-	}
-	ce.maxTFNormMu.Unlock()
 }

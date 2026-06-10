@@ -70,7 +70,7 @@ func (i *invertedTextIndexSection) Process(opaque map[int]resetable, docNum uint
 
 func (i *invertedTextIndexSection) Persist(opaque map[int]resetable, w *FileWriter) error {
 	io := i.getInvertedIndexOpaque(opaque)
-	return io.writeDicts(w)
+	return io.writeDicts(opaque, w)
 }
 
 func (i *invertedTextIndexSection) AddrForField(opaque map[int]resetable, fieldID int) int {
@@ -453,7 +453,7 @@ func (i *invertedIndexOpaque) BytesRead() uint64 {
 
 func (i *invertedIndexOpaque) ResetBytesRead(uint64) {}
 
-func (io *invertedIndexOpaque) writeDicts(w *FileWriter) error {
+func (io *invertedIndexOpaque) writeDicts(opaque map[int]resetable, w *FileWriter) error {
 	if len(io.results) == 0 {
 		return nil
 	}
@@ -515,11 +515,27 @@ func (io *invertedIndexOpaque) writeDicts(w *FileWriter) error {
 			tfEncoder.SetChunkSize(chunkSize, uint64(len(io.results)-1))
 			locEncoder.SetChunkSize(chunkSize, uint64(len(io.results)-1))
 
+			// §14: track max freq and min fieldLen for this term's posting list.
+			// interimFreqNorm.norm stores fieldLen reinterpreted as float32 bits,
+			// not the actual norm 1/√fieldLen, so recover the integer with
+			// math.Float32bits().  The shortest field is the highest norm.
+			var maxFreq uint64
+			var minFieldLen uint32 = math.MaxUint32
+
 			postingsItr := postingsBS.Iterator()
 			for postingsItr.HasNext() {
 				docNum := uint64(postingsItr.Next())
 
 				freqNorm := freqNorms[freqNormOffset]
+
+				// §14: accumulate maxFreq and minFieldLen (= position of highest norm).
+				if freqNorm.freq > maxFreq {
+					maxFreq = freqNorm.freq
+				}
+				fl := math.Float32bits(freqNorm.norm) // recover fieldLen integer from bits
+				if fl > 0 && fl < minFieldLen {
+					minFieldLen = fl
+				}
 
 				// v18: norm lives in SectionNormColumn, not the freq stream.
 				err = tfEncoder.Add(docNum,
@@ -578,6 +594,14 @@ func (io *invertedIndexOpaque) writeDicts(w *FileWriter) error {
 				err = io.builder.Insert([]byte(term), postingsOffset)
 				if err != nil {
 					return err
+				}
+				// §14: record the max freq/norm for this term in the MaxTFNorm section.
+				if mto, ok := opaque[SectionMaxTFNorm]; ok {
+					var sidecarFieldLen uint32
+					if minFieldLen > 0 && minFieldLen < math.MaxUint32 {
+						sidecarFieldLen = minFieldLen
+					}
+					mto.(*maxTFNormOpaque).addEntry(fieldID, postingsOffset, maxFreq, sidecarFieldLen)
 				}
 			}
 

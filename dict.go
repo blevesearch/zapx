@@ -134,25 +134,36 @@ func (d *Dictionary) MaxTFNorm(term []byte, avgDocLength float64) float32 {
 	if d.sb == nil || avgDocLength <= 0 {
 		return 0
 	}
-	cacheEntry := d.sb.invIndexCache.getOrCreateMaxTFNormEntry(d.fieldID)
-	avgDocLenF := float32(avgDocLength)
-
-	if v, ok := cacheEntry.getMaxTFNorm(string(term), avgDocLenF); ok {
-		return v
-	}
-
-	// Cache miss: scan the posting list to find max(tfNorm).
 	pl, err := d.PostingsList(term, nil, nil)
 	if err != nil || pl == emptyPostingsList {
 		return 0
 	}
+	cpl, _ := pl.(*PostingsList)
 
+	// §14 early-out: a general-encoding term has a sidecar entry keyed on its
+	// FST value, which PostingsList has already resolved into cpl.postingsOffset
+	// — no extra FST traversal and no term→offset cache needed.
+	if cpl != nil && cpl.normBits1Hit == 0 && cpl.postingsOffset > 0 &&
+		cpl.postingsOffset&FSTValEncodingMask == FSTValEncodingGeneral {
+		if maxFreq, minFieldLen, found := d.sb.lookupMaxTFNorm(d.fieldID, cpl.postingsOffset); found {
+			return float32(wandTFNorm(float64(maxFreq), normFromFieldLen(minFieldLen), avgDocLength))
+		}
+	}
+
+	// Neither early-out fired: fall back to scanning the posting list.  On a
+	// v18-native index this is reachable only for 1-hit terms (handled in O(1)
+	// below) or for terms whose sidecar entry is missing because a source
+	// segment lacked one at merge time.  The result is not memoised, so a
+	// missing sidecar entry costs this scan on every query — see §14.
 	var maxTFNorm float32
 
 	// 1-hit optimisation: only one doc, freq=1, norm stored in FST value.
-	if cpl, ok := pl.(*PostingsList); ok && cpl.normBits1Hit != 0 {
-		norm := math.Float32frombits(uint32(cpl.normBits1Hit))
-		maxTFNorm = float32(wandTFNorm(1, float64(norm), avgDocLength))
+	if cpl != nil && cpl.normBits1Hit != 0 {
+		// v18: normBits1Hit stores fieldLen (NormBits1Hit = 1 → fieldLen=1).
+		// Norm = 1/sqrt(fieldLen); for fieldLen=1 this gives norm=1.0,
+		// which is the correct conservative upper bound.
+		norm := normFromFieldLen(uint32(cpl.normBits1Hit))
+		maxTFNorm = float32(wandTFNorm(1, norm, avgDocLength))
 	} else {
 		iter := pl.Iterator(true, true, false, nil)
 		for {
@@ -167,7 +178,6 @@ func (d *Dictionary) MaxTFNorm(term []byte, avgDocLength float64) float32 {
 		}
 	}
 
-	cacheEntry.setMaxTFNorm(string(term), avgDocLenF, maxTFNorm)
 	return maxTFNorm
 }
 

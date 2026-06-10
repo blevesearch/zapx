@@ -59,6 +59,8 @@ const (
 	SectionInvertedTextIndex = iota
 	SectionFaissVectorIndex
 	SectionSynonymIndex
+	SectionNormColumn  // flat per-field column; 1 exact uint32 field length per doc (v18+)
+	SectionMaxTFNorm   // precomputed (maxFreq, maxNorm) sidecar per (field, term) for O(1) WAND cold-start (v18+)
 
 	// Add new sections above this line.
 	// NumSections automatically reflects the total number of sections

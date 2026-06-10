@@ -231,6 +231,7 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 	// initialize freq chunk reader
 	if rv.includeFreqNorm {
 		rv.freqNormReader = newChunkedIntDecoder(p.sb.mem, p.freqOffset, rv.freqNormReader, p.sb.fileReader)
+		rv.freqNormReader.SetPFORMode(p.sb.chunkMode == PFORChunkMode)
 		rv.incrementBytesRead(rv.freqNormReader.getBytesRead())
 	}
 
@@ -723,9 +724,34 @@ func (i *PostingsIterator) nextBytes() (
 		return docNum, uint64(1), i.normBits1Hit, i.buf[:n], nil, nil
 	}
 
-	startFreqNorm := i.freqNormReader.remainingLen()
-
 	var hasLocs bool
+
+	// PFOR path: reconstruct a varint-encoded freqHasLocs for the merge writer.
+	if i.freqNormReader != nil && i.freqNormReader.pforMode {
+		freq, normBits, hasLocs, err = i.readFreqNormHasLocs(docNum)
+		if err != nil {
+			return 0, 0, 0, nil, nil, err
+		}
+		if i.buf == nil {
+			i.buf = make([]byte, binary.MaxVarintLen64)
+		}
+		n := binary.PutUvarint(i.buf, encodeFreqHasLocs(freq, hasLocs))
+		bytesFreqNorm = i.buf[:n]
+		if hasLocs {
+			startLoc := i.locReader.remainingLen()
+			numLocsBytes, err := i.locReader.readUvarint()
+			if err != nil {
+				return 0, 0, 0, nil, nil, fmt.Errorf("error reading location nextBytes numLocs (pfor): %v", err)
+			}
+			i.locReader.SkipBytes(int(numLocsBytes))
+			endLoc := i.locReader.remainingLen()
+			bytesLoc = i.locReader.readBytes(startLoc, endLoc)
+		}
+		return docNum, freq, normBits, bytesFreqNorm, bytesLoc, nil
+	}
+
+	// Varint path: extract raw bytes directly from the chunk stream.
+	startFreqNorm := i.freqNormReader.remainingLen()
 
 	freq, normBits, hasLocs, err = i.readFreqNormHasLocs(docNum)
 	if err != nil {

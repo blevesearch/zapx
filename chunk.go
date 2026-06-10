@@ -24,8 +24,12 @@ import (
 var LegacyChunkMode uint32 = 1024
 
 // DefaultChunkMode is the most recent improvement to chunking and should
-// be used by default.
-var DefaultChunkMode uint32 = 1026
+// be used by default.  v18: PFOR block encoding (mode 1027).
+var DefaultChunkMode uint32 = 1027
+
+// PFORChunkMode signals PFOR block encoding for the freq stream (v18+).
+// getChunkSize returns pforBlockSize (256) for this mode.
+var PFORChunkMode uint32 = 1027
 
 var ErrChunkSizeZero = errors.New("chunk size is zero")
 
@@ -79,6 +83,12 @@ func getChunkSize(chunkMode uint32, cardinality uint64, maxDocs uint64) (uint64,
 			return 0, ErrChunkSizeZero
 		}
 		return chunkSize, nil
+
+	case chunkMode == 1027:
+		// PFOR block encoding: fixed 256-doc (docNum-aligned) blocks.
+		// Each block covers docNums [k*256, (k+1)*256); the actual number of
+		// posting-list entries within the range is stored in the block header.
+		return pforBlockSize, nil
 	}
 	return 0, fmt.Errorf("unknown chunk mode %d", chunkMode)
 }

@@ -112,6 +112,10 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 	// while processing each individual field-term section
 	tfEncoder := newChunkedIntCoder(1024, newSegDocCount-1)
 	locEncoder := newChunkedIntCoder(1024, newSegDocCount-1)
+	// §4: PFOR mode for the freq stream; loc stream stays varint.
+	if chunkMode == PFORChunkMode {
+		tfEncoder.SetPFORMode(true)
+	}
 
 	var vellumBuf bytes.Buffer
 	newVellum, err := vellum.New(&vellumBuf, nil)
@@ -471,6 +475,10 @@ func (io *invertedIndexOpaque) writeDicts(opaque map[int]resetable, w *FileWrite
 	// while processing each individual field-term section
 	tfEncoder := newChunkedIntCoder(1024, uint64(len(io.results)-1))
 	locEncoder := newChunkedIntCoder(1024, uint64(len(io.results)-1))
+	// §4: PFOR mode for the freq stream only; loc stream stays varint.
+	if io.chunkMode == PFORChunkMode {
+		tfEncoder.SetPFORMode(true)
+	}
 
 	var docTermMap [][]byte
 

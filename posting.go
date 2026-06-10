@@ -821,16 +821,35 @@ func (i *PostingsIterator) nextDocNumAtOrAfterClean(
 		return 0, false, nil
 	}
 
-	for j := 0; j < sameChunkNexts; j++ {
-		err := i.currChunkNext(nChunk)
-		if err != nil {
-			return 0, false, fmt.Errorf("error optimized currChunkNext: %v", err)
+	if sameChunkNexts > 0 {
+		// Ensure the target chunk is loaded once.
+		if i.currChunk != nChunk || i.freqNormReader.isNil() {
+			if err := i.loadChunk(int(nChunk)); err != nil {
+				return 0, false, fmt.Errorf("error loading chunk: %v", err)
+			}
+		}
+		if !i.includeLocs {
+			// Fast path: skip N freq entries in O(1) for PFOR, O(N) for varint.
+			i.freqNormReader.SkipN(sameChunkNexts)
+		} else {
+			for j := 0; j < sameChunkNexts; j++ {
+				hasLocs, err := i.skipFreqNormReadHasLocs()
+				if err != nil {
+					return 0, false, err
+				}
+				if hasLocs {
+					numLocsBytes, err := i.locReader.readUvarint()
+					if err != nil {
+						return 0, false, fmt.Errorf("error reading numLocsBytes: %v", err)
+					}
+					i.locReader.SkipBytes(int(numLocsBytes))
+				}
+			}
 		}
 	}
 
 	if i.currChunk != nChunk || i.freqNormReader.isNil() {
-		err := i.loadChunk(int(nChunk))
-		if err != nil {
+		if err := i.loadChunk(int(nChunk)); err != nil {
 			return 0, false, fmt.Errorf("error loading chunk: %v", err)
 		}
 	}

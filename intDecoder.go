@@ -73,8 +73,12 @@ func newChunkedIntDecoder(buf []byte, offset uint64, rv *chunkedIntDecoder, fr *
 
 // SetPFORMode enables PFOR block decoding for this decoder.
 // Must be called right after newChunkedIntDecoder, before loadChunk.
+// Pre-allocates pforDecoded so decodePFORBlock can reuse the backing array.
 func (d *chunkedIntDecoder) SetPFORMode(enabled bool) {
 	d.pforMode = enabled
+	if enabled && cap(d.pforDecoded) < pforBlockSize {
+		d.pforDecoded = make([]uint64, 0, pforBlockSize)
+	}
 }
 
 // A util function which fetches the query time
@@ -115,8 +119,7 @@ func (d *chunkedIntDecoder) loadChunk(chunk int) error {
 	d.bytesRead += end - start
 
 	if d.pforMode {
-		decoded, _ := decodePFORBlock(d.curChunkBytes)
-		d.pforDecoded = decoded
+		d.pforDecoded, _ = decodePFORBlock(d.curChunkBytes, d.pforDecoded[:0])
 		d.pforPos = 0
 		// Reset the varint reader to empty so isNil() etc. work consistently
 		// even though PFOR doesn't use it.
@@ -186,6 +189,18 @@ func (d *chunkedIntDecoder) SkipUvarint() {
 		return
 	}
 	d.r.SkipUvarint()
+}
+
+// SkipN advances past n entries in the current chunk without reading values.
+// For PFOR mode this is O(1); for varint mode it falls back to n SkipUvarint calls.
+func (d *chunkedIntDecoder) SkipN(n int) {
+	if d.pforMode {
+		d.pforPos += n
+		return
+	}
+	for i := 0; i < n; i++ {
+		d.r.SkipUvarint()
+	}
 }
 
 func (d *chunkedIntDecoder) SkipBytes(count int) {

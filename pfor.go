@@ -152,14 +152,6 @@ func decodePFORBlock(data []byte, dst []uint64) (vals []uint64, bytesConsumed in
 	bw := int(data[1])
 	pos := 2
 
-	// allocBuf returns dst reused if large enough, else a fresh slice.
-	allocBuf := func(n int) []uint64 {
-		if cap(dst) >= n {
-			return dst[:n]
-		}
-		return make([]uint64, n)
-	}
-
 	if bw == 0 {
 		// Constant block: single byte holds the constant value.
 		if pos >= len(data) {
@@ -167,7 +159,12 @@ func decodePFORBlock(data []byte, dst []uint64) (vals []uint64, bytesConsumed in
 		}
 		constVal := uint64(data[pos])
 		pos++
-		out := allocBuf(count)
+		var out []uint64
+		if cap(dst) >= count {
+			out = dst[:count]
+		} else {
+			out = make([]uint64, count)
+		}
 		for i := range out {
 			out[i] = constVal
 		}
@@ -209,7 +206,12 @@ func decodePFORBlock(data []byte, dst []uint64) (vals []uint64, bytesConsumed in
 	packed := data[pos : pos+packBytes]
 	pos += packBytes
 
-	out := allocBuf(count)
+	var out []uint64
+	if cap(dst) >= count {
+		out = dst[:count]
+	} else {
+		out = make([]uint64, count)
+	}
 	mask := uint64((1 << bw) - 1)
 	bitPos := 0
 	for i := 0; i < count; i++ {

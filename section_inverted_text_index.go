@@ -186,6 +186,12 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 
 		var lastDocNum, lastFreq, lastNorm uint64
 
+		// Two-phase merge buffers for the copy path.
+		// collectMergeEntries accumulates all segments' entries for the current term;
+		// flushMergeEntries sorts globally and writes once (fixes BP non-monotone bug).
+		var bpEntries []mergeEntry
+		var bpRawBytes []byte
+
 		// §14 merge: per-term accumulators for the MaxTFNorm sidecar.
 		// sidecarsComplete tracks whether every source segment contributing to
 		// the current term had a sidecar entry; if any is missing we skip writing
@@ -250,6 +256,18 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 				// check for the closure in meantime
 				if isClosed(closeCh) {
 					return nil, seg.ErrClosed
+				}
+
+				// Flush accumulated copy-path entries for prevTerm before
+				// finishTerm reads tfEncoder/locEncoder/newRoaring.
+				if fieldsSame && copyFlag {
+					lastDocNum, lastFreq, lastNorm, err = flushMergeEntries(
+						bpEntries, bpRawBytes, newRoaring, tfEncoder, locEncoder)
+					if err != nil {
+						return nil, err
+					}
+					bpEntries = bpEntries[:0]
+					bpRawBytes = bpRawBytes[:0]
 				}
 
 				// if the term changed, write out the info collected
@@ -317,10 +335,9 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			// can only safely copy data if all segments have same fields and all have an empty
 			// writer id (i.e. no callbacks)
 			if fieldsSame && copyFlag {
-				// can optimize by copying freq/norm/loc bytes directly
-				lastDocNum, lastFreq, lastNorm, err = mergeTermFreqNormLocsByCopying(
-					term, postItr, newDocNums[itrI], newRoaring,
-					tfEncoder, locEncoder)
+				// Collect entries from this segment; flush happens on term change
+				// (or after the loop) so all segments are globally sorted before writing.
+				err = collectMergeEntries(postItr, newDocNums[itrI], &bpEntries, &bpRawBytes)
 			} else {
 				lastDocNum, lastFreq, lastNorm, bufLoc, err = mergeTermFreqNormLocs(
 					fieldsMap, term, postItr, newDocNums[itrI], newRoaring,
@@ -342,6 +359,17 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		err = enumerator.Close()
 		if err != nil {
 			return nil, err
+		}
+
+		// Flush the last term's copy-path entries before finishTerm.
+		if fieldsSame && copyFlag {
+			lastDocNum, lastFreq, lastNorm, err = flushMergeEntries(
+				bpEntries, bpRawBytes, newRoaring, tfEncoder, locEncoder)
+			if err != nil {
+				return nil, err
+			}
+			bpEntries = bpEntries[:0]
+			bpRawBytes = bpRawBytes[:0]
 		}
 
 		err = finishTerm(prevTerm)
@@ -393,6 +421,12 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		fdvReadersAvailable := false
 		var dvIterClone *docValueReader
 		var dvIter *docValueReader
+		// Two-phase doc-values merge: collect all (newDocNum, terms) pairs from
+		// all source segments into sorted order before writing to fdvEncoder.
+		// chunkedContentCoder.Add requires monotone docNums; BP permutation breaks
+		// that if we write segment-by-segment without globally sorting first.
+		var dvEntries []dvEntry
+		var dvRawBytes []byte
 		for segmentI, segment := range segmentsInFocus {
 			// check for the closure in meantime
 			if isClosed(closeCh) {
@@ -407,14 +441,20 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			if dvIter != nil {
 				fdvReadersAvailable = true
 				dvIterClone = dvIter.cloneInto(dvIterClone)
+				segIdx := segmentI // capture for closure
 				err = dvIterClone.iterateAllDocValues(segment, func(docNum uint64, terms []byte) error {
-					if newDocNums[segmentI][docNum] == docDropped {
+					ndoc := newDocNums[segIdx][docNum]
+					if ndoc == docDropped {
 						return nil
 					}
-					err := fdvEncoder.Add(newDocNums[segmentI][docNum], terms)
-					if err != nil {
-						return err
-					}
+					start := int32(len(dvRawBytes))
+					dvRawBytes = append(dvRawBytes, terms...)
+					end := int32(len(dvRawBytes))
+					dvEntries = append(dvEntries, dvEntry{
+						newDocNum: ndoc,
+						start:     start,
+						end:       end,
+					})
 					return nil
 				})
 				if err != nil {
@@ -424,6 +464,25 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		}
 
 		if fdvReadersAvailable {
+			// Sort globally so fdvEncoder.Add sees monotone docNums.
+			monotone := true
+			for i := 1; i < len(dvEntries); i++ {
+				if dvEntries[i].newDocNum < dvEntries[i-1].newDocNum {
+					monotone = false
+					break
+				}
+			}
+			if !monotone {
+				sort.Slice(dvEntries, func(i, j int) bool {
+					return dvEntries[i].newDocNum < dvEntries[j].newDocNum
+				})
+			}
+			for _, e := range dvEntries {
+				if err = fdvEncoder.Add(e.newDocNum, dvRawBytes[e.start:e.end]); err != nil {
+					return nil, err
+				}
+			}
+
 			err = fdvEncoder.Close()
 			if err != nil {
 				return nil, err

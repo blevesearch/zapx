@@ -154,17 +154,50 @@ func (d *Dictionary) MaxTFNorm(term []byte, avgDocLength float64) float32 {
 		return v
 	}
 
+	// §14 early-out: use precomputed sidecar if available.
+	// termOffsetCache is populated by postingsList() which is called below,
+	// but if MaxTFNorm is called after a prior PostingsList lookup it may already
+	// be warm.  We check before the scan and again after PostingsList returns.
+	if v, loaded := cacheEntry.termOffsetCache.Load(string(term)); loaded {
+		postingsOff := v.(uint64)
+		if postingsOff&FSTValEncodingMask == FSTValEncodingGeneral {
+			if maxFreq, maxNorm, found := d.sb.lookupMaxTFNorm(d.fieldID, postingsOff); found {
+				result := float32(wandTFNorm(float64(maxFreq), float64(maxNorm), avgDocLength))
+				cacheEntry.setMaxTFNorm(string(term), avgDocLenF, result)
+				return result
+			}
+		}
+	}
+
 	// Cache miss: scan the posting list to find max(tfNorm).
 	pl, err := d.PostingsList(term, nil, nil)
 	if err != nil || pl == emptyPostingsList {
 		return 0
 	}
 
+	// §14 second early-out: PostingsList() just populated termOffsetCache.
+	// If the term uses general encoding, check the precomputed sidecar now.
+	if cpl, ok := pl.(*PostingsList); ok && cpl.normBits1Hit == 0 {
+		if v, loaded := cacheEntry.termOffsetCache.Load(string(term)); loaded {
+			postingsOff := v.(uint64)
+			if postingsOff&FSTValEncodingMask == FSTValEncodingGeneral {
+				if maxFreq, maxNorm, found := d.sb.lookupMaxTFNorm(d.fieldID, postingsOff); found {
+					result := float32(wandTFNorm(float64(maxFreq), float64(maxNorm), avgDocLength))
+					cacheEntry.setMaxTFNorm(string(term), avgDocLenF, result)
+					return result
+				}
+			}
+		}
+	}
+
 	var maxTFNorm float32
 
 	// 1-hit optimisation: only one doc, freq=1, norm stored in FST value.
 	if cpl, ok := pl.(*PostingsList); ok && cpl.normBits1Hit != 0 {
-		norm := math.Float32frombits(uint32(cpl.normBits1Hit))
+		// v18: normBits1Hit stores fieldLen (NormBits1Hit = 1 → fieldLen=1).
+		// Norm = 1/sqrt(fieldLen); for fieldLen=1 this gives norm=1.0,
+		// which is the correct conservative upper bound.
+		norm := float32(1.0 / math.Sqrt(float64(cpl.normBits1Hit)))
 		maxTFNorm = float32(wandTFNorm(1, float64(norm), avgDocLength))
 	} else {
 		iter := pl.Iterator(true, true, false, nil)

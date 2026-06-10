@@ -60,7 +60,7 @@ const (
 	SectionFaissVectorIndex
 	SectionSynonymIndex
 	SectionNormColumn  // flat per-field byte array; 1 SmallFloat byte per doc (v18+)
-	SectionMaxTFNorm   // precomputed max tf-norm sidecar (reserved, not yet implemented)
+	SectionMaxTFNorm   // precomputed (maxFreq, maxNorm) sidecar per (field, term) for O(1) WAND cold-start (v18+)
 
 	// Add new sections above this line.
 	// NumSections automatically reflects the total number of sections

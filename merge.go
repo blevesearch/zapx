@@ -210,9 +210,21 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		args["config"] = config
 	}
 
+	// §12 BP doc-ID reordering: compute permutation from the input segments.
+	var bpPerm []uint64
+	if config != nil {
+		if bpReorder, ok := config["bpReorder"].(bool); ok && bpReorder {
+			var bpErr error
+			bpPerm, bpErr = computeBPPermutation(segments, drops, fieldsInv, fieldsOptions, numDocs, defaultBPOptions)
+			if bpErr != nil {
+				return nil, 0, 0, nil, nil, 0, bpErr
+			}
+		}
+	}
+
 	if numDocs > 0 {
 		storedIndexOffset, newDocNums, err = mergeStoredAndRemap(segments, drops,
-			fieldsMap, fieldsInv, fieldsOptions, fieldsSame, numDocs, w, closeCh)
+			fieldsMap, fieldsInv, fieldsOptions, fieldsSame, numDocs, w, closeCh, bpPerm)
 		if err != nil {
 			return nil, 0, 0, nil, nil, 0, err
 		}
@@ -260,41 +272,117 @@ func computeNewDocCount(segments []*SegmentBase, drops []*roaring.Bitmap) uint64
 	return newDocCount
 }
 
+// mergeEntry holds one posting list entry buffered for sort-before-write.
+type mergeEntry struct {
+	newDocNum uint64
+	freq      uint64
+	norm      uint64
+	fnStart   int32
+	fnEnd     int32
+	locStart  int32
+	locEnd    int32
+}
+
+// dvEntry holds one doc-values entry buffered for sort-before-write.
+// start/end are byte offsets into a flat rawBytes slice held by the caller.
+type dvEntry struct {
+	newDocNum uint64
+	start     int32
+	end       int32
+}
+
+// collectMergeEntries appends one source segment's posting-list entries (for the
+// current term) to the caller-provided buffers without writing to the encoders.
+// This is the accumulation step for the two-phase merge-by-copying path.
+// The caller must call flushMergeEntries once all source segments are done.
+func collectMergeEntries(postItr *PostingsIterator, newDocNums []uint64,
+	entries *[]mergeEntry, rawBytes *[]byte) error {
+
+	nextDocNum, nextFreq, nextNorm, nextFreqNormBytes, nextLocBytes, err := postItr.nextBytes()
+	for err == nil && len(nextFreqNormBytes) > 0 {
+		hitNewDocNum := newDocNums[nextDocNum]
+		if hitNewDocNum == docDropped {
+			return fmt.Errorf("see hit with dropped doc num")
+		}
+
+		fnStart := int32(len(*rawBytes))
+		*rawBytes = append(*rawBytes, nextFreqNormBytes...)
+		fnEnd := int32(len(*rawBytes))
+
+		locStart := fnEnd
+		*rawBytes = append(*rawBytes, nextLocBytes...)
+		locEnd := int32(len(*rawBytes))
+
+		*entries = append(*entries, mergeEntry{
+			newDocNum: hitNewDocNum,
+			freq:      nextFreq,
+			norm:      nextNorm,
+			fnStart:   fnStart,
+			fnEnd:     fnEnd,
+			locStart:  locStart,
+			locEnd:    locEnd,
+		})
+
+		nextDocNum, nextFreq, nextNorm, nextFreqNormBytes, nextLocBytes, err = postItr.nextBytes()
+	}
+	return err
+}
+
+// flushMergeEntries globally sorts the accumulated entries by new doc ID and
+// writes them to the encoders. This is the flush step for the two-phase path.
+func flushMergeEntries(entries []mergeEntry, rawBytes []byte,
+	newRoaring *roaring.Bitmap, tfEncoder *chunkedIntCoder, locEncoder *chunkedIntCoder) (
+	lastDocNum uint64, lastFreq uint64, lastNorm uint64, err error) {
+
+	if len(entries) == 0 {
+		return 0, 0, 0, nil
+	}
+
+	// Check if entries are already monotone (common for non-BP merges).
+	monotone := true
+	for i := 1; i < len(entries); i++ {
+		if entries[i].newDocNum < entries[i-1].newDocNum {
+			monotone = false
+			break
+		}
+	}
+	if !monotone {
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].newDocNum < entries[j].newDocNum
+		})
+	}
+
+	for _, e := range entries {
+		newRoaring.Add(uint32(e.newDocNum))
+		if err2 := tfEncoder.AddBytes(e.newDocNum, rawBytes[e.fnStart:e.fnEnd]); err2 != nil {
+			return 0, 0, 0, err2
+		}
+		if e.locStart < e.locEnd {
+			if err2 := locEncoder.AddBytes(e.newDocNum, rawBytes[e.locStart:e.locEnd]); err2 != nil {
+				return 0, 0, 0, err2
+			}
+		}
+		lastDocNum = e.newDocNum
+		lastFreq = e.freq
+		lastNorm = e.norm
+	}
+	return lastDocNum, lastFreq, lastNorm, nil
+}
+
 func mergeTermFreqNormLocsByCopying(term []byte, postItr *PostingsIterator,
 	newDocNums []uint64, newRoaring *roaring.Bitmap,
 	tfEncoder *chunkedIntCoder, locEncoder *chunkedIntCoder) (
 	lastDocNum uint64, lastFreq uint64, lastNorm uint64, err error) {
-	nextDocNum, nextFreq, nextNorm, nextFreqNormBytes, nextLocBytes, err :=
-		postItr.nextBytes()
-	for err == nil && len(nextFreqNormBytes) > 0 {
-		hitNewDocNum := newDocNums[nextDocNum]
-		if hitNewDocNum == docDropped {
-			return 0, 0, 0, fmt.Errorf("see hit with dropped doc num")
-		}
 
-		newRoaring.Add(uint32(hitNewDocNum))
+	// Collect all entries from this source segment.
+	// We must buffer to sort by new doc ID when BP makes new doc IDs non-monotone.
+	var entries []mergeEntry
+	var rawBytes []byte
 
-		err = tfEncoder.AddBytes(hitNewDocNum, nextFreqNormBytes)
-		if err != nil {
-			return 0, 0, 0, err
-		}
-
-		if len(nextLocBytes) > 0 {
-			err = locEncoder.AddBytes(hitNewDocNum, nextLocBytes)
-			if err != nil {
-				return 0, 0, 0, err
-			}
-		}
-
-		lastDocNum = hitNewDocNum
-		lastFreq = nextFreq
-		lastNorm = nextNorm
-
-		nextDocNum, nextFreq, nextNorm, nextFreqNormBytes, nextLocBytes, err =
-			postItr.nextBytes()
+	if err = collectMergeEntries(postItr, newDocNums, &entries, &rawBytes); err != nil {
+		return 0, 0, 0, err
 	}
-
-	return lastDocNum, lastFreq, lastNorm, err
+	return flushMergeEntries(entries, rawBytes, newRoaring, tfEncoder, locEncoder)
 }
 
 func mergeTermFreqNormLocs(fieldsMap map[string]uint16, term []byte, postItr *PostingsIterator,
@@ -428,7 +516,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 	fieldsMap map[string]uint16, fieldsInv []string,
 	fieldsOptions map[string]index.FieldIndexingOptions,
 	fieldsSame bool, newSegDocCount uint64,
-	w *FileWriter, closeCh chan struct{}) (uint64, [][]uint64, error) {
+	w *FileWriter, closeCh chan struct{}, bpPerm []uint64) (uint64, [][]uint64, error) {
 	var rv [][]uint64 // The remapped or newDocNums for each segment.
 
 	var newDocNum uint64
@@ -482,7 +570,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 		// segments and there are no deletions, via byte-copying
 		// of stored docs bytes directly to the writer
 		// cannot copy directly if fields might have been deleted
-		if fieldsSame && (dropsI == nil || dropsI.GetCardinality() == 0) && copyFlag {
+		if bpPerm == nil && fieldsSame && (dropsI == nil || dropsI.GetCardinality() == 0) && copyFlag {
 			err := segment.copyStoredDocs(newDocNum, docNumOffsets, w)
 			if err != nil {
 				return 0, nil, err
@@ -505,7 +593,11 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 				continue
 			}
 
-			segNewDocNums[docNum] = newDocNum
+			assignedDocNum := newDocNum
+			if bpPerm != nil {
+				assignedDocNum = bpPerm[newDocNum]
+			}
+			segNewDocNums[docNum] = assignedDocNum
 
 			curr = 0
 			metaBuf.Reset()
@@ -586,7 +678,7 @@ func mergeStoredAndRemap(segments []*SegmentBase, drops []*roaring.Bitmap,
 			compressed = snappy.Encode(compressed[:cap(compressed)], data)
 
 			// record where we're about to start writing
-			docNumOffsets[newDocNum] = uint64(w.Count())
+			docNumOffsets[assignedDocNum] = uint64(w.Count())
 
 			bufMeta := w.process(metaBytes)
 

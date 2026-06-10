@@ -456,7 +456,7 @@ func (i *PostingsIterator) readFreqNormHasLocs(docNum uint64) (uint64, uint64, b
 
 	// v18: norm is in the column, not the freq stream.
 	var normBits uint64
-	if i.normColumn != nil && docNum < uint64(len(i.normColumn)) {
+	if docNum < uint64(len(i.normColumn)) {
 		normBits = uint64(normDecodeTable[i.normColumn[docNum]])
 	}
 	return freq, normBits, hasLocs, nil
@@ -971,6 +971,17 @@ func (p *Posting) Locations() []segment.Location {
 // NormUint64 returns the norm value as uint64
 func (p *Posting) NormUint64() uint64 {
 	return uint64(math.Float32bits(p.norm))
+}
+
+// NormColumnByte returns the raw SmallFloat norm byte for docNum from the
+// per-field norm column (§20/v18+). Returns 0 when normColumn is unavailable
+// (pre-v18 segments). Called lazily by postingToTermFieldDoc so that the
+// normColumn access only happens for documents that are actually scored.
+func (i *PostingsIterator) NormColumnByte(docNum uint64) uint8 {
+	if docNum < uint64(len(i.normColumn)) {
+		return i.normColumn[docNum]
+	}
+	return 0
 }
 
 // Location represents the location of a single occurrence

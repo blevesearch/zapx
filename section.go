@@ -59,6 +59,8 @@ const (
 	SectionInvertedTextIndex = iota
 	SectionFaissVectorIndex
 	SectionSynonymIndex
+	SectionNormColumn  // flat per-field byte array; 1 SmallFloat byte per doc (v18+)
+	SectionMaxTFNorm   // precomputed max tf-norm sidecar (reserved, not yet implemented)
 
 	// Add new sections above this line.
 	// NumSections automatically reflects the total number of sections

@@ -21,7 +21,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/blevesearch/vellum"
-	zap "github.com/blevesearch/zapx/v17"
+	zap "github.com/blevesearch/zapx/v18"
 	"github.com/spf13/cobra"
 )
 

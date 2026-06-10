@@ -320,13 +320,8 @@ func mergeTermFreqNormLocs(fieldsMap map[string]uint16, term []byte, postItr *Po
 
 		locs := next.Locations()
 
-		if nextFreq > 0 {
-			err = tfEncoder.Add(hitNewDocNum,
-				encodeFreqHasLocs(nextFreq, len(locs) > 0), nextNorm)
-		} else {
-			err = tfEncoder.Add(hitNewDocNum,
-				encodeFreqHasLocs(nextFreq, len(locs) > 0))
-		}
+		// v18: norm lives in SectionNormColumn, not the freq stream.
+		err = tfEncoder.Add(hitNewDocNum, encodeFreqHasLocs(nextFreq, len(locs) > 0))
 		if err != nil {
 			return 0, 0, 0, nil, err
 		}

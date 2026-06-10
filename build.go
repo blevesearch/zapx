@@ -25,7 +25,7 @@ import (
 	index "github.com/blevesearch/bleve_index_api"
 )
 
-const Version uint32 = 17
+const Version uint32 = 18
 
 const Type string = "zap"
 

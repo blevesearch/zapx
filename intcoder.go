@@ -17,6 +17,7 @@ package zap
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 )
 
@@ -36,6 +37,12 @@ type chunkedIntCoder struct {
 	buf []byte
 
 	bytesWritten uint64
+
+	// pforMode enables PFOR block encoding for the freq stream (§4).
+	// When true, Add() collects raw uint64 values in pforVals and Close()
+	// PFOR-encodes them instead of writing varint bytes to chunkBuf.
+	pforMode bool
+	pforVals []uint64
 }
 
 // newChunkedIntCoder returns a new chunk int coder which packs data into
@@ -52,6 +59,16 @@ func newChunkedIntCoder(chunkSize uint64, maxDocNum uint64) *chunkedIntCoder {
 	return rv
 }
 
+// SetPFORMode enables or disables PFOR block encoding for this coder.
+// Must be called before any Add() calls (i.e. right after construction or Reset).
+// Only the freq encoder (tfEncoder) should have PFOR mode; the loc encoder stays varint.
+func (c *chunkedIntCoder) SetPFORMode(enabled bool) {
+	c.pforMode = enabled
+	if enabled && c.pforVals == nil {
+		c.pforVals = make([]uint64, 0, pforBlockSize)
+	}
+}
+
 // Reset lets you reuse this chunked int coder.  buffers are reset and reused
 // from previous use.  you cannot change the chunk size or max doc num.
 func (c *chunkedIntCoder) Reset() {
@@ -61,6 +78,9 @@ func (c *chunkedIntCoder) Reset() {
 	c.currChunk = 0
 	for i := range c.chunkLens {
 		c.chunkLens[i] = 0
+	}
+	if c.pforMode && c.pforVals != nil {
+		c.pforVals = c.pforVals[:0]
 	}
 }
 
@@ -92,7 +112,15 @@ func (c *chunkedIntCoder) Add(docNum uint64, vals ...uint64) error {
 		// starting a new chunk
 		c.Close()
 		c.chunkBuf.Reset()
+		if c.pforMode && c.pforVals != nil {
+			c.pforVals = c.pforVals[:0]
+		}
 		c.currChunk = chunk
+	}
+
+	if c.pforMode {
+		c.pforVals = append(c.pforVals, vals...)
+		return nil
 	}
 
 	if len(c.buf) < binary.MaxVarintLen64 {
@@ -116,7 +144,20 @@ func (c *chunkedIntCoder) AddBytes(docNum uint64, buf []byte) error {
 		// starting a new chunk
 		c.Close()
 		c.chunkBuf.Reset()
+		if c.pforMode && c.pforVals != nil {
+			c.pforVals = c.pforVals[:0]
+		}
 		c.currChunk = chunk
+	}
+
+	if c.pforMode {
+		// buf is a single varint-encoded freqHasLocs value; decode and store.
+		val, n := binary.Uvarint(buf)
+		if n <= 0 {
+			return fmt.Errorf("pfor AddBytes: invalid varint in buffer (len=%d)", len(buf))
+		}
+		c.pforVals = append(c.pforVals, val)
+		return nil
 	}
 
 	_, err := c.chunkBuf.Write(buf)
@@ -126,6 +167,16 @@ func (c *chunkedIntCoder) AddBytes(docNum uint64, buf []byte) error {
 // Close indicates you are done calling Add() this allows the final chunk
 // to be encoded.
 func (c *chunkedIntCoder) Close() {
+	if c.pforMode {
+		if len(c.pforVals) > 0 {
+			encoded := encodePFORBlock(c.pforVals)
+			c.incrementBytesWritten(uint64(len(encoded)))
+			c.chunkLens[c.currChunk] = uint64(len(encoded))
+			c.final = append(c.final, encoded...)
+		}
+		c.currChunk = uint64(cap(c.chunkLens)) // sentinel to detect double close
+		return
+	}
 	encodingBytes := c.chunkBuf.Bytes()
 	c.incrementBytesWritten(uint64(len(encodingBytes)))
 	c.chunkLens[c.currChunk] = uint64(len(encodingBytes))

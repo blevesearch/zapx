@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"os"
 
-	zap "github.com/blevesearch/zapx/v17"
+	zap "github.com/blevesearch/zapx/v18"
 	"github.com/spf13/cobra"
 )
 

@@ -108,6 +108,7 @@ type PostingsList struct {
 	normBits1Hit uint64
 
 	chunkSize uint64
+	fieldID   uint16 // 0-indexed; used to look up the norm column (v18+)
 
 	bytesRead uint64
 }
@@ -184,6 +185,26 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 		rv.nextSegmentLocs = nextSegmentLocs
 
 		rv.buf = buf
+	}
+
+	// v18+: attach norm column slice for this field so readFreqNormHasLocs
+	// can look up norms without touching the freq stream.
+	if p.sb != nil {
+		fid := int(p.fieldID)
+		if fid < len(p.sb.fieldsSectionsMap) {
+			sm := p.sb.fieldsSectionsMap[fid]
+			if SectionNormColumn < len(sm) {
+				addr := sm[SectionNormColumn]
+				if addr > 0 {
+					// skip the "no DV" header (normColumnHeaderSize bytes)
+					normStart := addr + normColumnHeaderSize
+					end := normStart + p.sb.numDocs
+					if end <= uint64(len(p.sb.mem)) {
+						rv.normColumn = p.sb.mem[normStart:end]
+					}
+				}
+			}
+		}
 	}
 
 	rv.postings = p
@@ -343,6 +364,10 @@ type PostingsIterator struct {
 	docNum1Hit   uint64
 	normBits1Hit uint64
 
+	// normColumn is a slice into sb.mem holding one SmallFloat byte per doc
+	// for the field associated with this iterator (v18+). nil when unavailable.
+	normColumn []byte
+
 	buf []byte
 
 	includeFreqNorm bool
@@ -411,7 +436,9 @@ func (i *PostingsIterator) loadChunk(chunk int) error {
 	return nil
 }
 
-func (i *PostingsIterator) readFreqNormHasLocs() (uint64, uint64, bool, error) {
+// readFreqNormHasLocs reads freq+norm for docNum from the freq stream (for freq)
+// and the norm column (for norm, v18+).
+func (i *PostingsIterator) readFreqNormHasLocs(docNum uint64) (uint64, uint64, bool, error) {
 	if i.normBits1Hit != 0 {
 		return 1, i.normBits1Hit, false, nil
 	}
@@ -426,11 +453,11 @@ func (i *PostingsIterator) readFreqNormHasLocs() (uint64, uint64, bool, error) {
 		return freq, 0, hasLocs, nil
 	}
 
-	normBits, err := i.freqNormReader.readUvarint()
-	if err != nil {
-		return 0, 0, false, fmt.Errorf("error reading norm: %v", err)
+	// v18: norm is in the column, not the freq stream.
+	var normBits uint64
+	if i.normColumn != nil && docNum < uint64(len(i.normColumn)) {
+		normBits = uint64(normDecodeTable[i.normColumn[docNum]])
 	}
-
 	return freq, normBits, hasLocs, nil
 }
 
@@ -444,14 +471,9 @@ func (i *PostingsIterator) skipFreqNormReadHasLocs() (bool, error) {
 		return false, fmt.Errorf("error reading freqHasLocs: %v", err)
 	}
 
-	freq, hasLocs := decodeFreqHasLocs(freqHasLocs)
-	if freq == 0 {
-		return hasLocs, nil
-	}
-
-	i.freqNormReader.SkipUvarint() // Skip normBits.
-
-	return hasLocs, nil // See decodeFreqHasLocs() / hasLocs.
+	_, hasLocs := decodeFreqHasLocs(freqHasLocs)
+	// v18: norm is in the column, nothing to skip in the freq stream.
+	return hasLocs, nil
 }
 
 func encodeFreqHasLocs(freq uint64, hasLocs bool) uint64 {
@@ -550,7 +572,7 @@ func (i *PostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.Posting, err
 	var normBits uint64
 	var hasLocs bool
 
-	rv.freq, normBits, hasLocs, err = i.readFreqNormHasLocs()
+	rv.freq, normBits, hasLocs, err = i.readFreqNormHasLocs(docNum)
 	if err != nil {
 		return nil, err
 	}
@@ -693,10 +715,11 @@ func (i *PostingsIterator) nextBytes() (
 
 	if i.normBits1Hit != 0 {
 		if i.buf == nil {
-			i.buf = make([]byte, binary.MaxVarintLen64*2)
+			i.buf = make([]byte, binary.MaxVarintLen64)
 		}
 		n := binary.PutUvarint(i.buf, freqHasLocs1Hit)
-		n += binary.PutUvarint(i.buf[n:], i.normBits1Hit)
+		// v18: norm is in the column, not the freq stream.  Encode only freqHasLocs
+		// so that the copy-merge path writes the correct single-uvarint entry.
 		return docNum, uint64(1), i.normBits1Hit, i.buf[:n], nil, nil
 	}
 
@@ -704,7 +727,7 @@ func (i *PostingsIterator) nextBytes() (
 
 	var hasLocs bool
 
-	freq, normBits, hasLocs, err = i.readFreqNormHasLocs()
+	freq, normBits, hasLocs, err = i.readFreqNormHasLocs(docNum)
 	if err != nil {
 		return 0, 0, 0, nil, nil, err
 	}

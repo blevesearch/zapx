@@ -983,6 +983,15 @@ func (p *Posting) NormUint64() uint64 {
 	return uint64(math.Float32bits(p.norm))
 }
 
+// NormColumn returns the exact analyzed field length recorded for docNum in the
+// per-field norm column (§20/v18+). Returns 0 when normColumn is unavailable
+// (pre-v18 segments, or a field without a norm column). Called lazily by
+// postingToTermFieldDoc so that the normColumn access only happens for
+// documents that are actually scored.
+func (i *PostingsIterator) NormColumn(docNum uint64) uint32 {
+	return uint32(i.normColumnAt(docNum))
+}
+
 // Location represents the location of a single occurrence
 type Location struct {
 	field string

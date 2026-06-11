@@ -36,6 +36,8 @@ type chunkedIntDecoder struct {
 	pforMode    bool
 	pforDecoded []uint64
 	pforPos     int
+	pforExcIdx  []int    // scratch: exception indices, avoids per-block heap alloc
+	pforExcVal  []uint64 // scratch: exception values, avoids per-block heap alloc
 }
 
 // newChunkedIntDecoder expects an optional or reset chunkedIntDecoder for better reuse.
@@ -73,11 +75,19 @@ func newChunkedIntDecoder(buf []byte, offset uint64, rv *chunkedIntDecoder, fr *
 
 // SetPFORMode enables PFOR block decoding for this decoder.
 // Must be called right after newChunkedIntDecoder, before loadChunk.
-// Pre-allocates pforDecoded so decodePFORBlock can reuse the backing array.
+// Pre-allocates scratch buffers so decodePFORBlock never heap-allocates.
 func (d *chunkedIntDecoder) SetPFORMode(enabled bool) {
 	d.pforMode = enabled
-	if enabled && cap(d.pforDecoded) < pforBlockSize {
-		d.pforDecoded = make([]uint64, 0, pforBlockSize)
+	if enabled {
+		if cap(d.pforDecoded) < pforBlockSize {
+			d.pforDecoded = make([]uint64, 0, pforBlockSize)
+		}
+		if cap(d.pforExcIdx) < pforBlockSize {
+			d.pforExcIdx = make([]int, 0, pforBlockSize)
+		}
+		if cap(d.pforExcVal) < pforBlockSize {
+			d.pforExcVal = make([]uint64, 0, pforBlockSize)
+		}
 	}
 }
 
@@ -119,7 +129,7 @@ func (d *chunkedIntDecoder) loadChunk(chunk int) error {
 	d.bytesRead += end - start
 
 	if d.pforMode {
-		d.pforDecoded, _ = decodePFORBlock(d.curChunkBytes, d.pforDecoded[:0])
+		d.pforDecoded, _ = decodePFORBlock(d.curChunkBytes, d.pforDecoded[:0], d.pforExcIdx[:0], d.pforExcVal[:0])
 		d.pforPos = 0
 		// Reset the varint reader to empty so isNil() etc. work consistently
 		// even though PFOR doesn't use it.

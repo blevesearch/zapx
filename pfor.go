@@ -137,10 +137,11 @@ func pforOptimalBitWidth(vals []uint64) int {
 }
 
 // decodePFORBlock decodes a PFOR block from data into dst.
-// dst is a caller-provided buffer (capacity pforBlockSize) reused across calls.
+// dst, excIdx, and excVal are caller-provided buffers reused across calls;
+// each should have capacity >= pforBlockSize to avoid any heap allocation.
 // Returns the updated slice (may alias dst) and bytes consumed.
 // Returns (nil, 0) on any truncation or format error.
-func decodePFORBlock(data []byte, dst []uint64) (vals []uint64, bytesConsumed int) {
+func decodePFORBlock(data []byte, dst []uint64, excIdx []int, excVal []uint64) (vals []uint64, bytesConsumed int) {
 	if len(data) < 2 {
 		return nil, 0
 	}
@@ -182,7 +183,12 @@ func decodePFORBlock(data []byte, dst []uint64) (vals []uint64, bytesConsumed in
 	if pos+nExcepts > len(data) {
 		return nil, 0
 	}
-	exceptIdxs := make([]int, nExcepts)
+	var exceptIdxs []int
+	if cap(excIdx) >= nExcepts {
+		exceptIdxs = excIdx[:nExcepts]
+	} else {
+		exceptIdxs = make([]int, nExcepts)
+	}
 	for i := 0; i < nExcepts; i++ {
 		exceptIdxs[i] = int(data[pos])
 		pos++
@@ -192,7 +198,12 @@ func decodePFORBlock(data []byte, dst []uint64) (vals []uint64, bytesConsumed in
 	if pos+nExcepts*4 > len(data) {
 		return nil, 0
 	}
-	exceptVals := make([]uint64, nExcepts)
+	var exceptVals []uint64
+	if cap(excVal) >= nExcepts {
+		exceptVals = excVal[:nExcepts]
+	} else {
+		exceptVals = make([]uint64, nExcepts)
+	}
 	for i := 0; i < nExcepts; i++ {
 		exceptVals[i] = uint64(binary.LittleEndian.Uint32(data[pos:]))
 		pos += 4

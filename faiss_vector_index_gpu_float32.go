@@ -385,9 +385,7 @@ func (f *faissGPUFloat32Index) syncGPUToCPU() error {
 
 func (f *faissGPUFloat32Index) canUseGPU() bool {
 	switch f.params.optimization {
-	case index.IndexOptimizedForLatency, index.IndexOptimizedForRecall:
-		return f.params.numVecs >= ivfSq8Threshold
-	case index.IndexOptimizedForMemoryEfficient:
+	case index.IndexOptimizedForLatency, index.IndexOptimizedForRecall, index.IndexOptimizedForMemoryEfficient:
 		return f.params.numVecs >= ivfThreshold
 	default:
 		return false

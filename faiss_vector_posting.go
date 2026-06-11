@@ -348,6 +348,9 @@ func (sb *SegmentBase) UpdateVectorFieldStats(stats segment.FieldStats) {
 			stats.Store("num_vector_indexes_in_gpu", fieldName, 1)
 		case vectorIndexInCPU:
 			stats.Store("num_vector_indexes_in_cpu", fieldName, 1)
+		default:
+			stats.Store("num_vector_indexes_in_cpu", fieldName, 0)
+			stats.Store("num_vector_indexes_in_gpu", fieldName, 0)
 		}
 	}
 }

@@ -224,16 +224,29 @@ func decodePFORBlock(data []byte, dst []uint64, excIdx []int, excVal []uint64) (
 		out = make([]uint64, count)
 	}
 	mask := uint64((1 << bw) - 1)
-	bitPos := 0
-	for i := 0; i < count; i++ {
-		var v uint64
-		for b := 0; b < bw; b++ {
-			if (packed[bitPos>>3]>>(bitPos&7))&1 == 1 {
-				v |= 1 << b
-			}
-			bitPos++
+
+	if bw == 8 {
+		// Fast path: each value occupies exactly one byte.
+		for i := 0; i < count; i++ {
+			out[i] = uint64(packed[i])
 		}
-		out[i] = v & mask
+	} else {
+		// Sliding-window: accumulate bytes into a uint64 buffer and drain bw
+		// bits at a time.  Inner refill runs ceil(bw/8) times per value on
+		// average — O(1) vs the O(bw) bit-serial loop it replaces.
+		var buf uint64
+		var bufBits int
+		byteIdx := 0
+		for i := 0; i < count; i++ {
+			for bufBits < bw {
+				buf |= uint64(packed[byteIdx]) << bufBits
+				byteIdx++
+				bufBits += 8
+			}
+			out[i] = buf & mask
+			buf >>= bw
+			bufBits -= bw
+		}
 	}
 
 	// Patch exception positions with their full values.

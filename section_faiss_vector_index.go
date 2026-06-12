@@ -235,10 +235,11 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		// we're going to use the trained index template regardless of whether there's
 		// a update/delete in the segments being merged and we let the fast merge
 		// path handle what exactly to do in such cases.
-		trainedIndex, err := trainedIndexFromConfig(vo.config, fieldName)
+		trainedIndex, closeTrainedIndex, err := trainedIndexFromConfig(vo.config, fieldName)
 		if err != nil {
 			return err
 		}
+		defer closeTrainedIndex()
 
 		useGPU := vo.fieldsOptions[fieldName].UseGPU()
 		err = vo.mergeAndWriteVectorIndexes(trainedIndex, vecSegs, indexes, w, closeCh, useGPU, drops)
@@ -249,13 +250,13 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 	return nil
 }
 
-func trainedIndexFromConfig(config map[string]interface{}, fieldName string) (faissIndexIVF, error) {
+func trainedIndexFromConfig(config map[string]interface{}, fieldName string) (faissIndexIVF, func() error, error) {
 	if config == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	var trainedIndexFor index.TrainedIndexCallbackFn
 	var trainingParams *index.TrainingParams
-	var rv faissIndex
+	var rv trainedIndex
 	if cb, ok := config[index.TrainedIndexCallback]; ok {
 		trainedIndexFor = cb.(index.TrainedIndexCallbackFn)
 	}
@@ -267,23 +268,19 @@ func trainedIndexFromConfig(config map[string]interface{}, fieldName string) (fa
 	// 	- we're not in the training phase of index creation where you want to be
 	//    able to reconstruct the vectors for training
 	if trainedIndexFor != nil && trainingParams == nil {
-		trainedIndex, err := trainedIndexFor(fieldName)
+		ti, err := trainedIndexFor(fieldName)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if trainedIndex != nil {
-			rv = trainedIndex.(faissIndex)
+		if ti != nil {
+			rv = ti.(trainedIndex)
 		}
 	}
 	if rv == nil {
-		return nil, nil
+		return nil, func() error { return nil }, nil
 	}
 
-	trainedIndex := rv.castIVF()
-	if trainedIndex == nil {
-		return nil, ErrorTrainedIndexNotIVF
-	}
-	return trainedIndex, nil
+	return rv.getIndex().castIVF(), func() error { return rv.close() }, nil
 }
 
 func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *FileWriter,
@@ -407,7 +404,7 @@ func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *fa
 			vecSet.binarize()
 		}
 		// add to target index the reconstructed vectors for the valid vector IDs from the source index.
-		err = mergedIdx.add(vecSet)
+		err = ivfMergedIdx.add(vecSet)
 		if err != nil {
 			return err
 		}

@@ -69,11 +69,10 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	// get the optimization type string from the reverse lookup map
 	optStr := index.VectorIndexOptimizationsReverseLookup[int(opt)]
 
-	useGPU := sb.fieldsOptions[field].UseGPU()
 	index, _, _, err := sb.vecIndexCache.loadOrCreate(fieldIDPlus1-1, loadOrCreateOptions{
 		mem:         sb.mem[pos:],
 		numDocs:     uint32(sb.numDocs),
-		useGPU:      useGPU,
+		useGPU:      false,
 		reader:      sb.fileReader,
 		optStr:      optStr,
 		skipMapping: true,

@@ -252,7 +252,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 
 func trainedIndexFromConfig(config map[string]interface{}, fieldName string) (faissIndexIVF, func() error, error) {
 	if config == nil {
-		return nil, nil, nil
+		return nil, func() error { return nil }, nil
 	}
 	var trainedIndexFor index.TrainedIndexCallbackFn
 	var trainingParams *index.TrainingParams
@@ -270,7 +270,7 @@ func trainedIndexFromConfig(config map[string]interface{}, fieldName string) (fa
 	if trainedIndexFor != nil && trainingParams == nil {
 		ti, err := trainedIndexFor(fieldName)
 		if err != nil {
-			return nil, nil, err
+			return nil, func() error { return nil }, err
 		}
 		if ti != nil {
 			rv = ti.(trainedIndex)

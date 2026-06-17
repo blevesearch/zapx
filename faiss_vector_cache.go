@@ -124,6 +124,9 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, opts *vectorCacheOption
 
 func readVectorSectionFromFile(opts *vectorCacheOptions) (index faissIndex,
 	mapping *idMapping, err error) {
+	if opts == nil {
+		return nil, nil, fmt.Errorf("vectorCacheOptions cannot be nil")
+	}
 	// if the cache doesn't have the entry, construct the vector to doc id map and
 	// the vector index out of the mem bytes and update the cache under lock.
 	mem := opts.mem
@@ -218,6 +221,9 @@ func readVectorSectionFromFile(opts *vectorCacheOptions) (index faissIndex,
 
 func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, opts *vectorCacheOptions) (index faissIndex,
 	mapping *idMapping, exclude *bitmap, err error) {
+	if opts == nil {
+		return nil, nil, nil, fmt.Errorf("vectorCacheOptions cannot be nil")
+	}
 	index, mapping, err = readVectorSectionFromFile(opts)
 	if err != nil {
 		return nil, nil, nil, err

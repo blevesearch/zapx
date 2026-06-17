@@ -48,6 +48,6 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	// get the optimization type string from the reverse lookup map
 	optStr := index.VectorIndexOptimizationsReverseLookup[int(opt)]
 
-	opts := newVectorCacheOptions(sb.mem, uint32(sb.numDocs), nil, false, sb.fileReader, optStr, true)
+	opts := newVectorCacheOptions(sb.mem[pos:], uint32(sb.numDocs), nil, false, sb.fileReader, optStr, true)
 	return sb.trainedIndexCache.loadOrCreate(fieldIDPlus1-1, opts)
 }

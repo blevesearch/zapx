@@ -148,14 +148,16 @@ func readVectorSectionFromFile(opts *vectorCacheOptions) (index faissIndex,
 		return nil, nil, fmt.Errorf("could not read docID list length")
 	}
 	pos += n
+	listPos := pos
 	pos += int(listLen)
 
 	if !opts.skipMapping {
 		// read the entierity of the docID list through the file reader
-		buf, err := opts.reader.process(mem[pos : pos+int(listLen)])
+		buf, err := opts.reader.process(mem[listPos : listPos+int(listLen)])
 		if err != nil {
 			return nil, nil, fmt.Errorf("could not process docID list: %v", err)
 		}
+
 		bufPos := 0
 		bufLen := len(buf)
 		mapping = newIDMapping(uint32(numVecs), opts.numDocs)

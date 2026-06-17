@@ -306,7 +306,7 @@ func (sb *SegmentBase) InterpretVectorIndex(field string, except *roaring.Bitmap
 	useGPU := sb.fieldsOptions[field].UseGPU()
 
 	var err error
-	opts := newVectorCacheOptions(sb.mem, uint32(sb.numDocs), except, useGPU, sb.fileReader, optStr, false)
+	opts := newVectorCacheOptions(sb.mem[pos:], uint32(sb.numDocs), except, useGPU, sb.fileReader, optStr, false)
 	rv.index, rv.mapping, rv.exclude, err = sb.vecIndexCache.loadOrCreate(fieldID, opts)
 	if err != nil {
 		return nil, err

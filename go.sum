@@ -4,8 +4,8 @@ github.com/bits-and-blooms/bitset v1.24.2 h1:M7/NzVbsytmtfHbumG+K2bremQPMJuqv1JD
 github.com/bits-and-blooms/bitset v1.24.2/go.mod h1:7hO7Gc7Pp1vODcmWvKMRA9BNmbv6a/7QIWpPxHddWR8=
 github.com/blevesearch/bleve_index_api v1.3.12 h1:MirVNltwGq8z0PhOgiQp+bKL5qq8OvCxEwOOC7NnHNE=
 github.com/blevesearch/bleve_index_api v1.3.12/go.mod h1:xvd48t5XMeeioWQ5/jZvgLrV98flT2rdvEJ3l/ki4Ko=
-github.com/blevesearch/go-faiss v1.1.4 h1:wGHK+yiOSIvBAQMr4LcTaHBFf9v1dBebs3WpFqT93Rg=
-github.com/blevesearch/go-faiss v1.1.4/go.mod h1:w3W9AiWsFRGVaMG+/cmJi7iHEAuGyC6blsgO1EzCK/M=
+github.com/blevesearch/go-faiss v1.1.5 h1:/IU5lkOahH9Ghfk9n3F6N0XD7PYVXZJWmNDc9TtXuco=
+github.com/blevesearch/go-faiss v1.1.5/go.mod h1:w3W9AiWsFRGVaMG+/cmJi7iHEAuGyC6blsgO1EzCK/M=
 github.com/blevesearch/mmap-go v1.2.0 h1:l33nNKPFcBjJUMwem6sAYJPUzhUCABoK9FxZDGiFNBI=
 github.com/blevesearch/mmap-go v1.2.0/go.mod h1:Vd6+20GBhEdwJnU1Xohgt88XCD/CTWcqbCNxkZpyBo0=
 github.com/blevesearch/scorch_segment_api/v2 v2.4.7 h1:GlMzW08hcsM3DnLUxhyF/1PcDal1qtvvIuytuph5djw=

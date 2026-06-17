@@ -24,27 +24,6 @@ import (
 	index "github.com/blevesearch/bleve_index_api"
 )
 
-type trainedIndex interface {
-	getIndex() faissIndex
-	close() error
-}
-
-type trainedIndexWrapper struct {
-	fieldID uint16
-
-	cache *vectorIndexCache
-	index faissIndex
-}
-
-func (ti *trainedIndexWrapper) getIndex() faissIndex {
-	return ti.index
-}
-
-func (ti *trainedIndexWrapper) close() error {
-	ti.cache.decRef(ti.fieldID)
-	return nil
-}
-
 func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	fieldIDPlus1 := sb.fieldsMap[field]
 	if fieldIDPlus1 <= 0 {
@@ -69,20 +48,6 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	// get the optimization type string from the reverse lookup map
 	optStr := index.VectorIndexOptimizationsReverseLookup[int(opt)]
 
-	index, _, _, err := sb.vecIndexCache.loadOrCreate(fieldIDPlus1-1, loadOrCreateOptions{
-		mem:         sb.mem[pos:],
-		numDocs:     uint32(sb.numDocs),
-		useGPU:      false,
-		reader:      sb.fileReader,
-		optStr:      optStr,
-		skipMapping: true,
-	})
-
-	trainedIndex := &trainedIndexWrapper{
-		fieldID: fieldIDPlus1 - 1,
-		index:   index,
-		cache:   sb.vecIndexCache,
-	}
-
-	return trainedIndex, err
+	opts := newVectorCacheOptions(sb.mem, uint32(sb.numDocs), nil, false, sb.fileReader, optStr, true)
+	return sb.trainedIndexCache.loadOrCreate(fieldIDPlus1-1, opts)
 }

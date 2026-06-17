@@ -62,22 +62,37 @@ func (vc *vectorIndexCache) Clear() {
 	vc.m.Unlock()
 }
 
-// loadOrCreateOptions controls what loadOrCreate builds and returns.
-type loadOrCreateOptions struct {
+// vectorCacheOptions controls what loadOrCreate builds and returns.
+type vectorCacheOptions struct {
 	mem     []byte
 	numDocs uint32
 	except  *roaring.Bitmap
 	useGPU  bool
 	reader  *FileReader
 	optStr  string
-	// while performing fast merge we skip the construction of the id mapping since its
-	// not relevant to that flow
-	skipMapping bool
+
+	skipMapping bool // if true, skip building the idMapping
+}
+
+func newVectorCacheOptions(mem []byte, numDocs uint32, except *roaring.Bitmap,
+	useGPU bool, reader *FileReader, optStr string, skipMapping bool) *vectorCacheOptions {
+	return &vectorCacheOptions{
+		mem:         mem,
+		numDocs:     numDocs,
+		except:      except,
+		useGPU:      useGPU,
+		reader:      reader,
+		optStr:      optStr,
+		skipMapping: skipMapping,
+	}
 }
 
 // loadOrCreate obtains the vector index from the cache or creates it if it's not present.
-func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, opts loadOrCreateOptions) (
+func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, opts *vectorCacheOptions) (
 	index faissIndex, mapping *idMapping, exclude *bitmap, err error) {
+	if opts == nil {
+		return nil, nil, nil, fmt.Errorf("vectorCacheOptions cannot be nil")
+	}
 	// first try to read from the cache with a read lock
 	vc.m.RLock()
 	if vc.isClosed {
@@ -107,47 +122,44 @@ func (vc *vectorIndexCache) loadOrCreate(fieldID uint16, opts loadOrCreateOption
 	return vc.createAndCacheLOCKED(fieldID, opts)
 }
 
-func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, opts loadOrCreateOptions) (index faissIndex,
-	mapping *idMapping, exclude *bitmap, err error) {
+func readVectorSectionFromFile(opts *vectorCacheOptions) (index faissIndex,
+	mapping *idMapping, err error) {
 	// if the cache doesn't have the entry, construct the vector to doc id map and
 	// the vector index out of the mem bytes and update the cache under lock.
 	mem := opts.mem
 	pos := 0
 	numVecs, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	if n <= 0 {
-		return nil, nil, nil, fmt.Errorf("could not read numVecs")
+		return nil, nil, fmt.Errorf("could not read numVecs")
 	}
 	pos += n
 
 	// if no vectors or no documents, return empty cache entry
 	if numVecs == 0 || opts.numDocs == 0 {
-		return nil, nil, nil, nil
+		return nil, nil, nil
 	}
 
 	// read the length of the docID list
 	listLen, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	if n <= 0 {
-		return nil, nil, nil, fmt.Errorf("could not read docID list length")
+		return nil, nil, fmt.Errorf("could not read docID list length")
 	}
 	pos += n
-
-	// read the entierity of the docID list through the file reader
-	buf, err := opts.reader.process(mem[pos : pos+int(listLen)])
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("could not process docID list: %v", err)
-	}
 	pos += int(listLen)
 
-	// skip loading the mapping if the caller is interested only in the index
 	if !opts.skipMapping {
+		// read the entierity of the docID list through the file reader
+		buf, err := opts.reader.process(mem[pos : pos+int(listLen)])
+		if err != nil {
+			return nil, nil, fmt.Errorf("could not process docID list: %v", err)
+		}
 		bufPos := 0
 		bufLen := len(buf)
-
 		mapping = newIDMapping(uint32(numVecs), opts.numDocs)
 		for vecID := uint32(0); vecID < uint32(numVecs); vecID++ {
 			docID, n := binary.Uvarint(buf[bufPos:min(bufPos+binary.MaxVarintLen64, bufLen)])
 			if n <= 0 {
-				return nil, nil, nil, fmt.Errorf("could not read docID for vecID %d", vecID)
+				return nil, nil, fmt.Errorf("could not read docID for vecID %d", vecID)
 			}
 			bufPos += n
 			mapping.add(vecID, uint32(docID))
@@ -157,21 +169,21 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, opts loadOrCrea
 	// read the type of the vector index
 	indexType, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	if n <= 0 {
-		return nil, nil, nil, fmt.Errorf("could not read faiss index type")
+		return nil, nil, fmt.Errorf("could not read faiss index type")
 	}
 	pos += n
 
 	// read the faiss index size
 	indexSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	if n <= 0 {
-		return nil, nil, nil, fmt.Errorf("could not read faiss index size")
+		return nil, nil, fmt.Errorf("could not read faiss index size")
 	}
 	pos += n
 
 	// read the index bytes through the file reader
 	fIndexBytes, err := opts.reader.process(mem[pos : pos+int(indexSize)])
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	pos += int(indexSize)
 
@@ -183,12 +195,12 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, opts loadOrCrea
 		// read the index bytes through the file reader
 		bIndexBytes, err := opts.reader.process(mem[pos : pos+int(binSize)])
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 		pos += int(binSize)
 		index, err = newFaissBinaryIndexFromBytes(bIndexBytes, fIndexBytes, params)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("faiss binary index creation error: %v", err)
+			return nil, nil, fmt.Errorf("faiss binary index creation error: %v", err)
 		}
 	} else {
 		if opts.useGPU {
@@ -197,10 +209,19 @@ func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, opts loadOrCrea
 			index, err = newFaissFloat32IndexFromBytes(fIndexBytes, params)
 		}
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("faiss float32 index creation error: %v", err)
+			return nil, nil, fmt.Errorf("faiss float32 index creation error: %v", err)
 		}
 	}
 
+	return index, mapping, nil
+}
+
+func (vc *vectorIndexCache) createAndCacheLOCKED(fieldID uint16, opts *vectorCacheOptions) (index faissIndex,
+	mapping *idMapping, exclude *bitmap, err error) {
+	index, mapping, err = readVectorSectionFromFile(opts)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	// update the cache with a complete entry for the fieldID, note that while performing
 	// fast merge we won't be tracking the id mapping since its not relevant
 	vc.insertLOCKED(fieldID, index, mapping)
@@ -413,4 +434,67 @@ func getExcludedVectors(idMap *idMapping, except *roaring.Bitmap) (exclude *bitm
 		}
 	}
 	return exclude
+}
+
+// -----------------------------------------------------------------------------
+
+// trainedIndexCache is specifically for caching the trained index in the segment
+// such that it can be shared and used during fast merge, and avoid putting pressure
+// on garbage collection
+type trainedIndexCacheEntry struct {
+	index faissIndex
+}
+
+type trainedIndexCache struct {
+	m     sync.RWMutex
+	cache map[uint16]*trainedIndexCacheEntry
+}
+
+func newTrainedIndexCache() *trainedIndexCache {
+	return &trainedIndexCache{
+		cache: make(map[uint16]*trainedIndexCacheEntry),
+	}
+}
+
+func (tc *trainedIndexCache) Clear() {
+	tc.m.Lock()
+	defer tc.m.Unlock()
+	for _, entry := range tc.cache {
+		entry.index.close()
+	}
+	tc.cache = nil
+}
+
+func (tc *trainedIndexCache) loadOrCreate(fieldID uint16, opts *vectorCacheOptions) (faissIndex, error) {
+	if opts == nil {
+		return nil, fmt.Errorf("vectorCacheOptions cannot be nil")
+	}
+	tc.m.RLock()
+	entry, ok := tc.cache[fieldID]
+	if ok {
+		tc.m.RUnlock()
+		return entry.index, nil
+	}
+	tc.m.RUnlock()
+
+	tc.m.Lock()
+	defer tc.m.Unlock()
+
+	index, err := tc.createAndCachedLOCKED(fieldID, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return index, nil
+}
+
+func (tc *trainedIndexCache) createAndCachedLOCKED(fieldID uint16, opts *vectorCacheOptions) (faissIndex, error) {
+	index, _, err := readVectorSectionFromFile(opts)
+	if err != nil {
+		return nil, err
+	}
+	tc.cache[fieldID] = &trainedIndexCacheEntry{
+		index: index,
+	}
+	return index, nil
 }

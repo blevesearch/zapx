@@ -235,11 +235,10 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		// we're going to use the trained index template regardless of whether there's
 		// a update/delete in the segments being merged and we let the fast merge
 		// path handle what exactly to do in such cases.
-		trainedIndex, closeTrainedIndex, err := trainedIndexFromConfig(vo.config, fieldName)
+		trainedIndex, err := trainedIndexFromConfig(vo.config, fieldName)
 		if err != nil {
 			return err
 		}
-		defer closeTrainedIndex()
 
 		useGPU := vo.fieldsOptions[fieldName].UseGPU()
 		err = vo.mergeAndWriteVectorIndexes(trainedIndex, vecSegs, indexes, w, closeCh, useGPU, drops)
@@ -250,13 +249,13 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 	return nil
 }
 
-func trainedIndexFromConfig(config map[string]interface{}, fieldName string) (faissIndexIVF, func() error, error) {
+func trainedIndexFromConfig(config map[string]interface{}, fieldName string) (faissIndexIVF, error) {
 	if config == nil {
-		return nil, func() error { return nil }, nil
+		return nil, nil
 	}
 	var trainedIndexFor index.TrainedIndexCallbackFn
 	var trainingParams *index.TrainingParams
-	var rv trainedIndex
+	var rv faissIndex
 	if cb, ok := config[index.TrainedIndexCallback]; ok {
 		trainedIndexFor = cb.(index.TrainedIndexCallbackFn)
 	}
@@ -268,19 +267,23 @@ func trainedIndexFromConfig(config map[string]interface{}, fieldName string) (fa
 	// 	- we're not in the training phase of index creation where you want to be
 	//    able to reconstruct the vectors for training
 	if trainedIndexFor != nil && trainingParams == nil {
-		ti, err := trainedIndexFor(fieldName)
+		trainedIndex, err := trainedIndexFor(fieldName)
 		if err != nil {
-			return nil, func() error { return nil }, err
+			return nil, err
 		}
-		if ti != nil {
-			rv = ti.(trainedIndex)
+		if trainedIndex != nil {
+			rv = trainedIndex.(faissIndex)
 		}
 	}
 	if rv == nil {
-		return nil, func() error { return nil }, nil
+		return nil, nil
 	}
 
-	return rv.getIndex().castIVF(), func() error { return rv.close() }, nil
+	trainedIndex := rv.castIVF()
+	if trainedIndex == nil {
+		return nil, ErrorTrainedIndexNotIVF
+	}
+	return trainedIndex, nil
 }
 
 func (v *vectorIndexOpaque) flushSectionMetadata(fieldID int, w *FileWriter,

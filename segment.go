@@ -63,14 +63,15 @@ func (*ZapPlugin) open(path string, config map[string]interface{}) (segment.Segm
 
 	rv := &Segment{
 		SegmentBase: SegmentBase{
-			fieldsMap:      make(map[string]uint16),
-			fieldsOptions:  make(map[string]index.FieldIndexingOptions),
-			invIndexCache:  newInvertedIndexCache(),
-			vecIndexCache:  newVectorIndexCache(),
-			synIndexCache:  newSynonymIndexCache(),
-			nstIndexCache:  newNestedIndexCache(),
-			fieldDvReaders: make([][]*docValueReader, len(segmentSections)),
-			config:         config,
+			fieldsMap:         make(map[string]uint16),
+			fieldsOptions:     make(map[string]index.FieldIndexingOptions),
+			invIndexCache:     newInvertedIndexCache(),
+			vecIndexCache:     newVectorIndexCache(),
+			synIndexCache:     newSynonymIndexCache(),
+			nstIndexCache:     newNestedIndexCache(),
+			trainedIndexCache: newTrainedIndexCache(),
+			fieldDvReaders:    make([][]*docValueReader, len(segmentSections)),
+			config:            config,
 		},
 		f:    f,
 		mm:   mm,
@@ -136,10 +137,11 @@ type SegmentBase struct {
 	config        map[string]interface{} // config for the segment
 
 	// section-specific caches
-	invIndexCache *invertedIndexCache
-	vecIndexCache *vectorIndexCache
-	synIndexCache *synonymIndexCache
-	nstIndexCache *nestedIndexCache
+	invIndexCache     *invertedIndexCache
+	vecIndexCache     *vectorIndexCache
+	trainedIndexCache *trainedIndexCache
+	synIndexCache     *synonymIndexCache
+	nstIndexCache     *nestedIndexCache
 }
 
 func (sb *SegmentBase) Size() int {
@@ -183,6 +185,7 @@ func (sb *SegmentBase) DecRef() (err error) { return nil }
 func (sb *SegmentBase) Close() (err error) {
 	sb.invIndexCache.Clear()
 	sb.vecIndexCache.Clear()
+	sb.trainedIndexCache.Clear()
 	sb.synIndexCache.Clear()
 	sb.nstIndexCache.Clear()
 	return nil
@@ -692,6 +695,7 @@ func (s *Segment) closeActual() (err error) {
 	s.vecIndexCache.Clear()
 	s.synIndexCache.Clear()
 	s.nstIndexCache.Clear()
+	s.trainedIndexCache.Clear()
 
 	if s.mm != nil {
 		err = s.mm.Unmap()

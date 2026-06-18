@@ -407,7 +407,7 @@ func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *fa
 			vecSet.binarize()
 		}
 		// add to target index the reconstructed vectors for the valid vector IDs from the source index.
-		err = mergedIdx.add(vecSet)
+		err = ivfMergedIdx.add(vecSet)
 		if err != nil {
 			return err
 		}

@@ -48,37 +48,6 @@ func (sb *SegmentBase) GetCoarseQuantizer(field string) (interface{}, error) {
 	// get the optimization type string from the reverse lookup map
 	optStr := index.VectorIndexOptimizationsReverseLookup[int(opt)]
 
-	numVecs, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += uint64(n)
-
-	// length of the vector to docID map
-	mapLen, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += uint64(n)
-	pos += mapLen
-
-	// type of index
-	indexType, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += uint64(n)
-	indexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-	pos += uint64(n)
-
-	params := newFaissIndexParams(optStr, int(numVecs), faissIOFlagsReadOnly)
-
-	// todo: might wanna use the vector cache here, early tests didn't show a big diff
-	fIndexBytes, err := sb.fileReader.process(sb.mem[pos : pos+indexSize])
-	if err != nil {
-		return nil, err
-	}
-	pos += indexSize
-
-	if faissIndexType(indexType) == faissBIVFIndex {
-		binaryIndexSize, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
-		pos += uint64(n)
-		bIndexBytes, err := sb.fileReader.process(sb.mem[pos : pos+binaryIndexSize])
-		if err != nil {
-			return nil, err
-		}
-		return newFaissBinaryIndexFromBytes(bIndexBytes, fIndexBytes, params)
-	}
-	return newFaissFloat32IndexFromBytes(fIndexBytes, params)
+	opts := newVectorCacheOptions(sb.mem[pos:], uint32(sb.numDocs), nil, false, sb.fileReader, optStr, true)
+	return sb.trainedIndexCache.loadOrCreate(fieldIDPlus1-1, opts)
 }

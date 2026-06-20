@@ -667,35 +667,67 @@ func (i *PostingsIterator) nextDocNumAtOrAfter(atOrAfter uint64) (uint64, bool, 
 	}
 
 	n := i.Actual.Next()
-	allN := i.all.Next()
 	nChunk := n / uint32(i.postings.chunkSize)
 
-	// when allN becomes >= to here, then allN is in the same chunk as nChunk.
-	allNReachesNChunk := nChunk * uint32(i.postings.chunkSize)
-
-	// n is the next actual hit (excluding some postings), and
-	// allN is the next hit in the full postings, and
-	// if they don't match, move 'all' forwards until they do
-	for allN != n {
-		// we've reached same chunk, so move the freq/norm/loc decoders forward
-		if i.includeFreqNorm && allN >= allNReachesNChunk {
-			err := i.currChunkNext(nChunk)
-			if err != nil {
-				return 0, false, err
-			}
-		}
-
+	if !i.includeFreqNorm || (i.freqNormReader.pforMode && !i.includeLocs) {
+		// Fast path for PFOR freq/norm with no location data needed (or no
+		// freq/norm at all): advance i.all directly to n via binary search instead
+		// of sequential Next() calls. The conjunction AND optimization makes n rare
+		// in i.all (the full posting list), so the naive loop wastes
+		// O(full_DF / intersection_size) calls.
+		// The !i.includeLocs guard is required because when locations are included,
+		// locReader must also be advanced sequentially past skipped docs (each doc's
+		// location byte block has variable length). SetPFORPos handles freqNormReader
+		// but cannot advance locReader; the slow path's currChunkNext() handles both.
+		// !includeFreqNorm is checked first so i.freqNormReader (nil when no
+		// freq/norm is requested) is never dereferenced in that case.
+		i.all.AdvanceIfNeeded(uint32(n))
 		if !i.all.HasNext() {
 			return 0, false, nil
 		}
+		_ = i.all.Next() // consume n from i.all
 
-		allN = i.all.Next()
-	}
+		if i.includeFreqNorm {
+			if i.currChunk != nChunk || i.freqNormReader.isNil() {
+				err := i.loadChunk(int(nChunk))
+				if err != nil {
+					return 0, false, fmt.Errorf("error loading chunk: %v", err)
+				}
+			}
+			// Set PFOR position to the ordinal of n within chunk nChunk.
+			// CardinalityInRange counts elements of the full bitmap in [lo, hi);
+			// subtract 1 because n itself is included and we want 0-indexed pos.
+			chunkStart := uint64(nChunk) * uint64(i.postings.chunkSize)
+			ordinalInChunk := int(i.postings.postings.CardinalityInRange(chunkStart, uint64(n)+1)) - 1
+			i.freqNormReader.SetPFORPos(ordinalInChunk)
+		}
+	} else {
+		// Slow path (varint freq/norm): the varint stream has no random-access seek,
+		// so we walk i.all forward one step at a time until allN == n, calling
+		// currChunkNext() at each chunk boundary to keep the freq reader aligned.
+		// n is the target doc (from i.Actual); allN is the cursor on the full list.
+		allN := i.all.Next()
+		// when allN becomes >= to here, allN has entered the same chunk as nChunk.
+		allNReachesNChunk := nChunk * uint32(i.postings.chunkSize)
+		for allN != n {
+			// crossed into the target chunk — advance the freq reader to match.
+			if allN >= allNReachesNChunk {
+				err := i.currChunkNext(nChunk)
+				if err != nil {
+					return 0, false, err
+				}
+			}
+			if !i.all.HasNext() {
+				return 0, false, nil
+			}
+			allN = i.all.Next()
+		}
 
-	if i.includeFreqNorm && (i.currChunk != nChunk || i.freqNormReader.isNil()) {
-		err := i.loadChunk(int(nChunk))
-		if err != nil {
-			return 0, false, fmt.Errorf("error loading chunk: %v", err)
+		if i.currChunk != nChunk || i.freqNormReader.isNil() {
+			err := i.loadChunk(int(nChunk))
+			if err != nil {
+				return 0, false, fmt.Errorf("error loading chunk: %v", err)
+			}
 		}
 	}
 

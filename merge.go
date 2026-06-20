@@ -229,9 +229,19 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 			return nil, 0, 0, nil, nil, 0, err
 		}
 
-		// at this point, ask each section implementation to merge itself
-		for i, x := range segmentSections {
-			mergeOpaque[int(i)] = x.InitOpaque(args)
+		// Merge each section in section-ID order so that sections with lower IDs
+		// (e.g. SectionInvertedTextIndex=0) can populate opaque slots for higher-ID
+		// sections (e.g. SectionMaxTFNorm=4) before those sections run.
+		// Only initialize a section's opaque if it has not already been set by a
+		// prior section (e.g. InvertedText sets the MaxTFNorm opaque during Merge).
+		for i := 0; i < NumSections; i++ {
+			x, registered := segmentSections[uint16(i)]
+			if !registered {
+				continue
+			}
+			if _, alreadySet := mergeOpaque[i]; !alreadySet {
+				mergeOpaque[i] = x.InitOpaque(args)
+			}
 			err = x.Merge(mergeOpaque, segments, drops, fieldsInv, newDocNums, w, closeCh)
 			if err != nil {
 				return nil, 0, 0, nil, nil, 0, err

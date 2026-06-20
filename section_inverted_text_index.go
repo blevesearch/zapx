@@ -81,7 +81,7 @@ func (i *invertedTextIndexSection) AddrForField(opaque map[int]resetable, fieldI
 func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
 	fieldsInv []string, fieldsMap map[string]uint16, fieldsOptions map[string]index.FieldIndexingOptions,
 	fieldsSame bool, newDocNumsIn [][]uint64, newSegDocCount uint64, chunkMode uint32, w *FileWriter,
-	closeCh chan struct{}) (map[int]int, error) {
+	closeCh chan struct{}, opaque map[int]resetable) (map[int]int, error) {
 	var bufMaxVarintLen64 []byte = make([]byte, binary.MaxVarintLen64)
 	var bufLoc []uint64
 
@@ -90,6 +90,16 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 
 	fieldAddrs := make(map[int]int)
 	dictOffsets := make([]uint64, len(fieldsInv))
+
+	// §14 merge: ensure opaque has a maxTFNorm accumulator so we can populate
+	// it during the term merge loop; maxTFNormSection.Merge() writes it later.
+	if _, ok := opaque[SectionMaxTFNorm]; !ok {
+		opaque[SectionMaxTFNorm] = &maxTFNormOpaque{
+			fieldEntries: make(map[int][]maxTFNormSidecarEntry),
+			fieldAddrs:   make(map[int]int),
+		}
+	}
+	mto := opaque[SectionMaxTFNorm].(*maxTFNormOpaque)
 	fieldDvLocsStart := make([]uint64, len(fieldsInv))
 	fieldDvLocsEnd := make([]uint64, len(fieldsInv))
 
@@ -182,6 +192,15 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		var bpEntries []mergeEntry
 		var bpRawBytes []byte
 
+		// §14 merge: per-term accumulators for the MaxTFNorm sidecar.
+		// sidecarsComplete tracks whether every source segment contributing to
+		// the current term had a sidecar entry; if any is missing we skip writing
+		// the sidecar for that term (safe fallback to lazy scan).
+		var mergedMaxFreq uint64
+		var mergedMaxNorm float32
+		sidecarsComplete := true
+		var mergedPostingsOffset uint64
+
 		// determines whether to use "1-hit" encoding optimization
 		// when a term appears in only 1 doc, with no loc info,
 		// has freq of 1, and the docNum fits into 31-bits
@@ -204,6 +223,10 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			if err != nil {
 				return err
 			}
+
+			// §14 merge: capture the merged postingsOffset so the caller can
+			// write a MaxTFNorm sidecar entry keyed on it.
+			mergedPostingsOffset = postingsOffset
 
 			if postingsOffset > 0 {
 				err = newVellum.Insert(term, postingsOffset)
@@ -253,6 +276,16 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 				if err != nil {
 					return nil, err
 				}
+
+				// §14 merge: write sidecar entry for the term we just finished,
+				// then reset accumulators for the new term.
+				if sidecarsComplete && mergedPostingsOffset > 0 {
+					mto.addEntry(fieldID, mergedPostingsOffset, mergedMaxFreq, mergedMaxNorm)
+				}
+				sidecarsComplete = true
+				mergedMaxFreq = 0
+				mergedMaxNorm = 0
+				mergedPostingsOffset = 0
 			}
 			if !bytes.Equal(prevTerm, term) || prevTerm == nil {
 				// compute cardinality of field-term in new seg
@@ -282,6 +315,21 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			}
 
 			postItr = postings.iterator(true, true, true, postItr)
+
+			// §14 merge: accumulate MaxTFNorm from this source segment's sidecar.
+			// postingsOffset here is the source segment's FST value — the lookup key.
+			// fieldsMap stores fieldID+1 (1-indexed); subtract 1 for the actual fieldID.
+			srcFieldID := uint16(segmentsInFocus[itrI].fieldsMap[fieldName]) - 1
+			if mf, mn, ok := segmentsInFocus[itrI].lookupMaxTFNorm(srcFieldID, postingsOffset); ok {
+				if mf > mergedMaxFreq {
+					mergedMaxFreq = mf
+				}
+				if mn > mergedMaxNorm {
+					mergedMaxNorm = mn
+				}
+			} else {
+				sidecarsComplete = false
+			}
 
 			// can only safely copy data if all segments have same fields and all have an empty
 			// writer id (i.e. no callbacks)
@@ -326,6 +374,11 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		err = finishTerm(prevTerm)
 		if err != nil {
 			return nil, err
+		}
+
+		// §14 merge: write sidecar entry for the last term of this field.
+		if sidecarsComplete && mergedPostingsOffset > 0 {
+			mto.addEntry(fieldID, mergedPostingsOffset, mergedMaxFreq, mergedMaxNorm)
 		}
 
 		dictOffset := uint64(w.Count())
@@ -484,7 +537,7 @@ func (i *invertedTextIndexSection) Merge(opaque map[int]resetable, segments []*S
 	w *FileWriter, closeCh chan struct{}) error {
 	io := i.getInvertedIndexOpaque(opaque)
 	fieldAddrs, err := mergeAndPersistInvertedSection(segments, drops, fieldsInv,
-		io.FieldsMap, io.FieldsOptions, io.fieldsSame, newDocNumsIn, io.numDocs, io.chunkMode, w, closeCh)
+		io.FieldsMap, io.FieldsOptions, io.fieldsSame, newDocNumsIn, io.numDocs, io.chunkMode, w, closeCh, opaque)
 	if err != nil {
 		return err
 	}
@@ -582,9 +635,12 @@ func (io *invertedIndexOpaque) writeDicts(opaque map[int]resetable, w *FileWrite
 			tfEncoder.SetChunkSize(chunkSize, uint64(len(io.results)-1))
 			locEncoder.SetChunkSize(chunkSize, uint64(len(io.results)-1))
 
-			// §14: track max freq and max norm for this term's posting list.
+			// §14: track max freq and min fieldLen for this term's posting list.
+			// interimFreqNorm.norm stores fieldLen via math.Float32frombits(fieldLen),
+			// not the actual norm value.  We track the minimum fieldLen (= max norm)
+			// and convert to the actual norm only when writing the sidecar entry.
 			var maxFreq uint64
-			var maxNorm float32
+			var minFieldLen uint32 = math.MaxUint32
 
 			postingsItr := postingsBS.Iterator()
 			for postingsItr.HasNext() {
@@ -592,12 +648,13 @@ func (io *invertedIndexOpaque) writeDicts(opaque map[int]resetable, w *FileWrite
 
 				freqNorm := freqNorms[freqNormOffset]
 
-				// §14: accumulate maxFreq and maxNorm.
+				// §14: accumulate maxFreq and minFieldLen (= position of highest norm).
 				if freqNorm.freq > maxFreq {
 					maxFreq = freqNorm.freq
 				}
-				if freqNorm.norm > maxNorm {
-					maxNorm = freqNorm.norm
+				fl := math.Float32bits(freqNorm.norm) // recover fieldLen integer from bits
+				if fl > 0 && fl < minFieldLen {
+					minFieldLen = fl
 				}
 
 				// v18: norm lives in SectionNormColumn, not the freq stream.
@@ -659,7 +716,12 @@ func (io *invertedIndexOpaque) writeDicts(opaque map[int]resetable, w *FileWrite
 					return err
 				}
 				// §14: record the max freq/norm for this term in the MaxTFNorm section.
+				// Convert minFieldLen back to actual norm = 1/sqrt(fieldLen).
 				if mto, ok := opaque[SectionMaxTFNorm]; ok {
+					var maxNorm float32
+					if minFieldLen > 0 && minFieldLen < math.MaxUint32 {
+						maxNorm = float32(1.0 / math.Sqrt(float64(minFieldLen)))
+					}
 					mto.(*maxTFNormOpaque).addEntry(fieldID, postingsOffset, maxFreq, maxNorm)
 				}
 			}

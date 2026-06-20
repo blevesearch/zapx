@@ -122,12 +122,16 @@ func (ms *maxTFNormSection) AddrForField(opaque map[int]resetable, fieldID int) 
 	return mto.fieldAddrs[fieldID]
 }
 
-// Merge is a no-op for now: merged segments fall back to the lazy scan path.
-// (addr=0 in fieldsSectionsMap → lookupMaxTFNorm returns ok=false → lazy scan.)
+// Merge writes the MaxTFNorm sidecar for the merged segment.
+// Per-term (maxFreq, minFieldLen) entries are accumulated into opaque by
+// mergeAndPersistInvertedSection; Merge here serialises them and records
+// their file offsets so AddrForField returns correct addresses to the
+// segment footer's fieldsSectionsMap.
 func (ms *maxTFNormSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
 	drops []*roaring.Bitmap, fieldsInv []string, newDocNumsIn [][]uint64,
 	w *FileWriter, closeCh chan struct{}) error {
-	return nil
+	mto := ms.getMaxTFNormOpaque(opaque)
+	return mto.writeEntries(w)
 }
 
 // InitOpaque creates the per-flush opaque for the maxTFNorm section.

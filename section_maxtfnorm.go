@@ -111,12 +111,16 @@ func (ms *maxTFNormSection) AddrForField(opaque map[int]resetable, fieldID int) 
 	return mto.fieldAddrs[fieldID]
 }
 
-// Merge is a no-op for now: merged segments fall back to the lazy scan path.
-// (addr=0 in fieldsSectionsMap → lookupMaxTFNorm returns ok=false → lazy scan.)
+// Merge writes the MaxTFNorm sidecar for the merged segment.
+// Per-term (maxFreq, maxNormByte) entries are accumulated into opaque by
+// mergeAndPersistInvertedSection; Merge here serialises them and records
+// their file offsets so AddrForField returns correct addresses to the
+// segment footer's fieldsSectionsMap.
 func (ms *maxTFNormSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
 	drops []*roaring.Bitmap, fieldsInv []string, newDocNumsIn [][]uint64,
 	w *FileWriter, closeCh chan struct{}) error {
-	return nil
+	mto := ms.getMaxTFNormOpaque(opaque)
+	return mto.writeEntries(w)
 }
 
 // InitOpaque creates the per-flush opaque for the maxTFNorm section.
@@ -141,6 +145,7 @@ func (ms *maxTFNormSection) getMaxTFNormOpaque(opaque map[int]resetable) *maxTFN
 // writeEntries serialises all field entries to w in fieldID order.
 // Each field block has:
 //   - a normColumnHeaderSize (20-byte) "no DV" prefix for loadDvReaders compatibility
+//   - uvarint(entryCount) so the decoder knows exactly how many entries follow
 //   - entries sorted by postingsOffset for binary search at read time
 //     each entry: uvarint(postingsOffset), uvarint(maxFreq), uint8(maxNormByte)
 func (mto *maxTFNormOpaque) writeEntries(w *FileWriter) error {
@@ -173,9 +178,15 @@ func (mto *maxTFNormOpaque) writeEntries(w *FileWriter) error {
 			return err
 		}
 
+		// write entry count so the decoder stops exactly here
+		nn := binary.PutUvarint(buf[:], uint64(len(entries)))
+		if _, err := w.Write(buf[:nn]); err != nil {
+			return err
+		}
+
 		for _, e := range entries {
 			// write postingsOffset
-			nn := binary.PutUvarint(buf[:], e.postingsOffset)
+			nn = binary.PutUvarint(buf[:], e.postingsOffset)
 			if _, err := w.Write(buf[:nn]); err != nil {
 				return err
 			}
@@ -249,25 +260,31 @@ func (sb *SegmentBase) decodeMaxTFNormField(addr uint64) (*loadedMaxTFNormField,
 		return nil, nil
 	}
 
-	var lf loadedMaxTFNormField
 	mem := sb.mem
 
-	for pos < uint64(len(mem)) {
+	// read entry count written by writeEntries
+	count, n := binary.Uvarint(mem[pos:])
+	if n <= 0 || count == 0 {
+		return nil, nil
+	}
+	pos += uint64(n)
+
+	lf := &loadedMaxTFNormField{
+		postingsOffsets: make([]uint64, 0, count),
+		maxFreqs:        make([]uint64, 0, count),
+		maxNormBytes:    make([]uint8, 0, count),
+	}
+
+	for i := uint64(0); i < count; i++ {
+		if pos >= uint64(len(mem)) {
+			break
+		}
 		// read postingsOffset
 		pOff, n := binary.Uvarint(mem[pos:])
 		if n <= 0 {
 			break
 		}
 		pos += uint64(n)
-
-		// Safety: if pOff == 0 we've likely hit padding or another section's data.
-		// The FST general-encoding postingsOffset is always > 0 for real terms.
-		// However 0 is never a valid postingsOffset for the MaxTFNorm section
-		// (we only record entries with postingsOffset > 0 in addEntry).
-		// A zero here means we've overrun our data; stop.
-		if pOff == 0 {
-			break
-		}
 
 		// read maxFreq
 		mf, n := binary.Uvarint(mem[pos:])
@@ -293,7 +310,7 @@ func (sb *SegmentBase) decodeMaxTFNormField(addr uint64) (*loadedMaxTFNormField,
 	if len(lf.postingsOffsets) == 0 {
 		return nil, nil
 	}
-	return &lf, nil
+	return lf, nil
 }
 
 // binarySearchMaxTFNorm looks up postingsOffset in the sorted slice.

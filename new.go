@@ -251,7 +251,15 @@ func (s *interim) convert() (uint64, uint64, error) {
 
 	// we can persist the various sections at this point.
 	// the rule of thumb here is that each section must persist field wise.
-	for _, x := range segmentSections {
+	// Sections must be persisted in section-ID order so that higher-ID sections
+	// that depend on data written by lower-ID sections (e.g. MaxTFNorm depends on
+	// InvertedTextIndex's writeDicts populating the sidecar entries) run after
+	// their dependencies.
+	for i := 0; i < NumSections; i++ {
+		x, registered := segmentSections[uint16(i)]
+		if !registered {
+			continue
+		}
 		err = x.Persist(s.opaque, s.w)
 		if err != nil {
 			return 0, 0, err

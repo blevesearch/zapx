@@ -342,9 +342,22 @@ func TestTermOffsetCacheWarmedByPostingsList(t *testing.T) {
 		t.Errorf("offset changed between calls: first=%d second=%d", offset1, raw2.(uint64))
 	}
 
-	// Absent terms must not pollute the cache.
+	// Absent terms must be stored with the sentinel so subsequent calls
+	// skip the FST traversal (critical for rare-entity queries with many
+	// segment×field misses).
 	_, _ = d.PostingsList([]byte("notinindex"), nil, nil)
-	if _, ok = ce.termOffsetCache.Load("notinindex"); ok {
-		t.Error("termOffsetCache should not store absent terms")
+	raw3, ok3 := ce.termOffsetCache.Load("notinindex")
+	if !ok3 {
+		t.Error("termOffsetCache should store absent terms with the not-found sentinel")
+	} else if raw3.(uint64) != termNotFoundSentinel {
+		t.Errorf("absent term cached with wrong value: got %d, want %d (sentinel)", raw3.(uint64), uint64(termNotFoundSentinel))
+	}
+	// A second PostingsList call for the absent term must use the cache (no FST hit).
+	pl3, err3 := d.PostingsList([]byte("notinindex"), nil, nil)
+	if err3 != nil {
+		t.Fatalf("second PostingsList('notinindex'): %v", err3)
+	}
+	if pl3 != emptyPostingsList && pl3 != nil {
+		t.Error("absent term should still return empty/nil PostingsList on second call")
 	}
 }

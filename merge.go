@@ -211,9 +211,12 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	}
 
 	// §12 BP doc-ID reordering: compute permutation from the input segments.
+	// Skip if any source segment has a FAISS vector index: BP permutes docIDs in
+	// roaring bitmaps and stored fields but does NOT update the FAISS internal
+	// DocID mapping array, so enabling BP on vector segments would corrupt ANN results.
 	var bpPerm []uint64
 	if config != nil {
-		if bpReorder, ok := config["bpReorder"].(bool); ok && bpReorder {
+		if bpReorder, ok := config["bpReorder"].(bool); ok && bpReorder && !segmentsHaveFAISS(segments) {
 			var bpErr error
 			bpPerm, bpErr = computeBPPermutation(segments, drops, fieldsInv, fieldsOptions, numDocs, defaultBPOptions)
 			if bpErr != nil {
@@ -908,6 +911,22 @@ func mergeUpdatedFields(segments []*SegmentBase) map[string]*index.UpdateFieldIn
 
 	}
 	return fieldInfo
+}
+
+// segmentsHaveFAISS reports whether any source segment carries a FAISS vector
+// index section. BP doc-ID permutation does not update the FAISS internal DocID
+// mapping array, so BP must be skipped for such segments to avoid corrupting
+// vector search results.
+func segmentsHaveFAISS(segments []*SegmentBase) bool {
+	for _, sb := range segments {
+		for _, sectionAddrs := range sb.fieldsSectionsMap {
+			if len(sectionAddrs) > SectionFaissVectorIndex &&
+				sectionAddrs[SectionFaissVectorIndex] > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isClosed(closeCh chan struct{}) bool {

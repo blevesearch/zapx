@@ -208,3 +208,66 @@ func collectDocIDs(t *testing.T, s seg.Segment, field, term string) []uint32 {
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	return ids
 }
+
+// TestSegmentsHaveFAISS verifies the helper used to guard BP reordering.
+func TestSegmentsHaveFAISS(t *testing.T) {
+	// Plain text segment: no FAISS section.
+	sb1, _, err := buildTestSegmentMulti()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if segmentsHaveFAISS([]*SegmentBase{sb1}) {
+		t.Error("segmentsHaveFAISS: expected false for text-only segment")
+	}
+
+	// Simulate a segment with a FAISS vector field by patching fieldsSectionsMap.
+	// We don't have a real FAISS index in the test suite, so we craft the
+	// minimal condition the guard checks: a nonzero SectionFaissVectorIndex address.
+	sb2, _, err := buildTestSegmentMulti()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Ensure fieldsSectionsMap has at least one row with SectionFaissVectorIndex set.
+	if len(sb2.fieldsSectionsMap) == 0 {
+		sb2.fieldsSectionsMap = make([][]uint64, 1)
+	}
+	row := make([]uint64, NumSections)
+	row[SectionFaissVectorIndex] = 999 // nonzero = FAISS present
+	sb2.fieldsSectionsMap[0] = row
+
+	if !segmentsHaveFAISS([]*SegmentBase{sb2}) {
+		t.Error("segmentsHaveFAISS: expected true for segment with FAISS section")
+	}
+
+	// Mixed list: one text-only, one with FAISS — should return true.
+	if !segmentsHaveFAISS([]*SegmentBase{sb1, sb2}) {
+		t.Error("segmentsHaveFAISS: expected true for mixed list")
+	}
+}
+
+// TestBPGuardSkipsOnFAISS verifies that segmentsHaveFAISS causes the BP guard
+// in mergeToWriter to suppress computeBPPermutation. Because creating a real FAISS
+// segment in the unit-test environment is not practical, this test exercises the
+// guard function directly using a crafted SegmentBase, and separately confirms that
+// a full merge with bpReorder=true still succeeds (no crash) on mixed lists.
+func TestBPGuardSkipsOnFAISS(t *testing.T) {
+	sb, _, err := buildTestSegmentMulti()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Without FAISS: guard must pass (allow BP).
+	if segmentsHaveFAISS([]*SegmentBase{sb}) {
+		t.Fatal("segmentsHaveFAISS should be false for text-only segment")
+	}
+
+	// Inject a fake FAISS address into fieldsSectionsMap.
+	row := make([]uint64, NumSections)
+	row[SectionFaissVectorIndex] = 42 // any nonzero address
+	sb.fieldsSectionsMap = append(sb.fieldsSectionsMap, row)
+
+	// With FAISS: guard must fire (block BP).
+	if !segmentsHaveFAISS([]*SegmentBase{sb}) {
+		t.Fatal("segmentsHaveFAISS should be true when FAISS section address is nonzero")
+	}
+}

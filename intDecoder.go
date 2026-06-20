@@ -213,6 +213,13 @@ func (d *chunkedIntDecoder) SkipN(n int) {
 	}
 }
 
+// SetPFORPos seeks directly to position pos within the current decoded PFOR block.
+// Replaces sequential SkipUvarint calls when the target ordinal is known (e.g. from
+// a bitmap Rank query). Only valid in pforMode after loadChunk has been called.
+func (d *chunkedIntDecoder) SetPFORPos(pos int) {
+	d.pforPos = pos
+}
+
 func (d *chunkedIntDecoder) SkipBytes(count int) {
 	d.r.SkipBytes(count)
 }

@@ -33,6 +33,11 @@ var (
 	reflectStaticSizeGPUState        uint64
 )
 
+// maxGPUSearchK is the largest value of k that the Faiss GPU index supports.
+// For a top-k search where k exceeds this limit, the GPU implementation is
+// not usable and the search must fall back to the CPU index.
+const maxGPUSearchK = 2048
+
 func init() {
 	var f faissGPUFloat32Index
 	reflectStaticSizeGPUFloat32Index = uint64(reflect.TypeOf(f).Size())
@@ -212,12 +217,15 @@ func (f *faissGPUFloat32Index) reconstructBatch(vecIDs []int64, prealloc []float
 }
 
 func (f *faissGPUFloat32Index) search(qVector *vectorSet, k int64, selector faiss.Selector, params json.RawMessage) ([]float32, []int64, error) {
-	if selector == nil && len(params) == 0 {
+	// Faiss GPU does not support a top-k search with k greater than
+	// maxGPUSearchK; such searches must fall back to the CPU index.
+	if selector == nil && len(params) == 0 && k <= maxGPUSearchK {
 		if gpuState := f.gpu.Load(); gpuState != nil {
 			return gpuState.batcher.search(qVector, k)
 		}
 	}
-	// GPU not ready, filtered search, or non-empty params — fall back to CPU
+	// GPU not ready, filtered search, k too large, or non-empty params —
+	// fall back to CPU
 	return f.cpuIdx.SearchWithOptions(qVector.floatData, k, selector, params)
 }
 

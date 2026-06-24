@@ -118,26 +118,24 @@ func (nc *nestedIndexCache) countNested() uint64 {
 
 // countRoot returns the number of root documents in the given bitmap
 func (nc *nestedIndexCache) countRoot(bm *roaring.Bitmap) uint64 {
-	var totalDocs uint64
-	if bm == nil {
-		// if bitmap is empty, return 0
-		return totalDocs
+	// empty bitmap means no root documents
+	if bm == nil || bm.IsEmpty() {
+		return 0
 	}
-	totalDocs = bm.GetCardinality()
-	cache := nc.cache
-	if cache == nil || cache.el == nil {
-		// if cache is nil, no nested docs, so all docs are root docs
-		// so just return the cardinality of the bitmap
+	totalDocs := bm.GetCardinality()
+	// if no nested documents, all documents in the bitmap are root documents
+	if nc.countNested() == 0 {
 		return totalDocs
 	}
 	// count nested documents in the bitmap, a nested doc is one that has a parent in the edge list
 	var nestedDocCount uint64
-	bm.Iterate(func(docNum uint32) bool {
-		if _, ok := cache.el.Parent(uint64(docNum)); ok {
+	bmItr := bm.Iterator()
+	for bmItr.HasNext() {
+		docNum := bmItr.Next()
+		if _, ok := nc.cache.el.Parent(uint64(docNum)); ok {
 			nestedDocCount++
 		}
-		return true
-	})
+	}
 	// root docs = total docs - nested docs
 	if totalDocs < nestedDocCount {
 		// should not happen, but just in case

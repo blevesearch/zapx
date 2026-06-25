@@ -893,6 +893,8 @@ func (sb *SegmentBase) CountRoot(deleted *roaring.Bitmap) uint64 {
 // plus any descendant document numbers for each dropped document. The drops
 // parameter represents a set of document numbers to be dropped, and the returned
 // bitmap includes both the original drops and all their descendants (if any).
+// NOTE: This method MODIFIES the drops bitmap in place.
+// NOTE: This method EXPECTS that the drops bitmap contains ONLY root document numbers.
 func (sb *SegmentBase) AddNestedDocuments(drops *roaring.Bitmap) *roaring.Bitmap {
 	// If no drops or no subDocs, nothing to do
 	if drops == nil || drops.GetCardinality() == 0 || sb.countNested() == 0 {
@@ -900,22 +902,24 @@ func (sb *SegmentBase) AddNestedDocuments(drops *roaring.Bitmap) *roaring.Bitmap
 	}
 	// Get the edge list for this segment
 	el := sb.EdgeList()
-	// Algorithm => iterate through each child->parent mapping in the edge list,
-	// and for each pair, check if the parent is in the drops bitmap.
-	// If it is, and the child is also not already in the drops bitmap,
-	// add the child to the drops. Repeat this process until no
-	// new additions are made in an iteration.
-	changed := true
-	for changed {
-		changed = false
-		el.Iterate(func(child uint64, parent uint64) bool {
-			if drops.Contains(uint32(parent)) && !drops.Contains(uint32(child)) {
-				drops.Add(uint32(child))
-				changed = true
+	descendants := roaring.New()
+	total := sb.Count()
+	dropsItr := drops.Iterator()
+	for dropsItr.HasNext() {
+		droppedDoc := uint64(dropsItr.Next())
+		// every document from droppedDoc+1 to the next
+		// root document is a descendant of droppedDoc
+		start := droppedDoc + 1
+		cur := start
+		for cur < total {
+			if _, ok := el.Parent(cur); !ok {
+				break
 			}
-			return true
-		})
+			cur++
+		}
+		descendants.AddRange(start, cur)
 	}
+	drops.Or(descendants)
 	return drops
 }
 

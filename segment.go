@@ -941,3 +941,7 @@ func (sb *SegmentBase) countRoot() uint64 {
 func (sb *SegmentBase) countRootDeleted(deleted *roaring.Bitmap) uint64 {
 	return sb.nstIndexCache.countRootDeleted(deleted)
 }
+
+func (sb *SegmentBase) CallbackId() string {
+	return sb.fileReader.id
+}

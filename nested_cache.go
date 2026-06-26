@@ -73,7 +73,7 @@ func (nc *nestedIndexCache) initialize(numDocs uint64, edgeListOffset uint64, me
 	}
 	// create and cache our descendant store
 	numRoots := numDocs - numEdges
-	descendantStore := newDescendantStore(numDocs, numRoots)
+	descendantStore := newDescendantStore(numRoots)
 	// populate the descendant store using the following invariants:
 	// Invariant: child docNums is always > parent docNums
 	// Invariant: descendants of root docNum R is always a
@@ -365,9 +365,6 @@ func (dsm *descendantStoreMap) descendants(root uint64) (*roaring.Bitmap, bool) 
 	return bm, ok
 }
 
-func newDescendantStore(numDocs uint64, numRoots uint64) descendantStore {
-	if numDocs == 0 || numRoots == 0 {
-		return nil
-	}
+func newDescendantStore(numRoots uint64) descendantStore {
 	return newDescendantStoreMap(numRoots)
 }

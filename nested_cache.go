@@ -52,11 +52,12 @@ func (nc *nestedIndexCache) initialize(numDocs uint64, edgeListOffset uint64, me
 		return fmt.Errorf("error reading number of edges in nested edge list")
 	}
 	pos += uint64(read)
-	// if no documents or edges/nested documents, return
-	if numDocs == 0 || numEdges == 0 {
+	// if no documents or edges/nested documents or invalid state, return
+	if numDocs == 0 || numEdges == 0 || numDocs <= numEdges {
 		return nil
 	}
-	edgeList := NewEdgeList(numDocs, numEdges)
+	// create and cache our edge list
+	edgeList := newEdgeList(numDocs, numEdges)
 	for i := uint64(0); i < numEdges; i++ {
 		child, read := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 		if read <= 0 {
@@ -68,17 +69,41 @@ func (nc *nestedIndexCache) initialize(numDocs uint64, edgeListOffset uint64, me
 			return fmt.Errorf("error reading parent doc id in nested edge list")
 		}
 		pos += uint64(read)
-		edgeList.AddEdge(child, parent)
+		edgeList.addEdge(child, parent)
 	}
+	// create and cache our descendant store
+	descendantStore := newDescendantStore(numDocs, numDocs-numEdges)
+	// populate the descendant store using the following invariants:
+	// Invariant: child docNums is always > parent docNums
+	// Invariant: descendants of root docNum R is always a contiguous range of docNums [R+1, R+N] where N is the number of descendants of R
+	currentRoot := uint64(0)
+	currentBitmap := roaring.New()
+	for i := uint64(0); i < numDocs; i++ {
+		_, ok := edgeList.parent(i)
+		if !ok {
+			if currentBitmap.GetCardinality() > 0 {
+				descendantStore.add(currentRoot, currentBitmap)
+				currentBitmap = roaring.New()
+			}
+			currentRoot = i
+		} else {
+			currentBitmap.Add(uint32(i))
+		}
+	}
+	if currentBitmap.GetCardinality() > 0 {
+		descendantStore.add(currentRoot, currentBitmap)
+	}
+
 	nc.cache = &nestedCacheEntry{
 		el: edgeList,
+		ds: descendantStore,
 	}
 	return nil
 }
 
 type nestedCacheEntry struct {
-	// edgeList[child] = parent
-	el EdgeList
+	el edgeList
+	ds descendantStore
 }
 
 func (nc *nestedIndexCache) ancestry(docNum uint64, prealloc []index.AncestorID) []index.AncestorID {
@@ -90,7 +115,7 @@ func (nc *nestedIndexCache) ancestry(docNum uint64, prealloc []index.AncestorID)
 	}
 	current := docNum
 	for {
-		parent, ok := cache.el.Parent(current)
+		parent, ok := cache.el.parent(current)
 		if !ok {
 			break
 		}
@@ -100,7 +125,15 @@ func (nc *nestedIndexCache) ancestry(docNum uint64, prealloc []index.AncestorID)
 	return prealloc
 }
 
-func (nc *nestedIndexCache) edgeList() EdgeList {
+func (nc *nestedIndexCache) descendants(root uint64) (*roaring.Bitmap, bool) {
+	cache := nc.cache
+	if cache == nil || cache.ds == nil {
+		return nil, false
+	}
+	return cache.ds.descendants(root)
+}
+
+func (nc *nestedIndexCache) edgeList() edgeList {
 	cache := nc.cache
 	if cache == nil || cache.el == nil {
 		return nil
@@ -108,36 +141,42 @@ func (nc *nestedIndexCache) edgeList() EdgeList {
 	return cache.el
 }
 
+func (nc *nestedIndexCache) descendantStore() descendantStore {
+	cache := nc.cache
+	if cache == nil || cache.ds == nil {
+		return nil
+	}
+	return cache.ds
+}
+
 func (nc *nestedIndexCache) countNested() uint64 {
 	cache := nc.cache
 	if cache == nil || cache.el == nil {
 		return 0
 	}
-	return cache.el.Count()
+	return cache.el.count()
 }
 
-// countRoot returns the number of root documents in the given bitmap
-func (nc *nestedIndexCache) countRoot(bm *roaring.Bitmap) uint64 {
-	var totalDocs uint64
-	if bm == nil {
-		// if bitmap is empty, return 0
-		return totalDocs
+// countRootDeleted returns the number of root documents in the given bitmap that are deleted
+func (nc *nestedIndexCache) countRootDeleted(bm *roaring.Bitmap) uint64 {
+	// empty bitmap means no root documents
+	if bm == nil || bm.IsEmpty() {
+		return 0
 	}
-	totalDocs = bm.GetCardinality()
-	cache := nc.cache
-	if cache == nil || cache.el == nil {
-		// if cache is nil, no nested docs, so all docs are root docs
-		// so just return the cardinality of the bitmap
+	totalDocs := bm.GetCardinality()
+	// if no nested documents, all documents in the bitmap are root documents
+	if nc.countNested() == 0 {
 		return totalDocs
 	}
 	// count nested documents in the bitmap, a nested doc is one that has a parent in the edge list
 	var nestedDocCount uint64
-	bm.Iterate(func(docNum uint32) bool {
-		if _, ok := cache.el.Parent(uint64(docNum)); ok {
+	bmItr := bm.Iterator()
+	for bmItr.HasNext() {
+		docNum := bmItr.Next()
+		if _, ok := nc.cache.el.parent(uint64(docNum)); ok {
 			nestedDocCount++
 		}
-		return true
-	})
+	}
 	// root docs = total docs - nested docs
 	if totalDocs < nestedDocCount {
 		// should not happen, but just in case
@@ -148,21 +187,21 @@ func (nc *nestedIndexCache) countRoot(bm *roaring.Bitmap) uint64 {
 
 // -------------------------------------------------------
 
-// EdgeList provides an interface to access parent of a child document
-type EdgeList interface {
-	// Parent returns the parent of the given child document ID,
+// edgeList provides an interface to access parent of a child document
+type edgeList interface {
+	// parent returns the parent of the given child document ID,
 	// and a boolean indicating if the parent exists.
-	Parent(child uint64) (uint64, bool)
+	parent(child uint64) (uint64, bool)
 
-	// AddEdge adds an edge from child to parent in the edge list.
-	AddEdge(child uint64, parent uint64)
+	// addEdge adds an edge from child to parent in the edge list.
+	addEdge(child uint64, parent uint64)
 
-	// Count returns the number of edges in the edge list.
-	Count() uint64
+	// count returns the number of edges in the edge list.
+	count() uint64
 
-	// Iterate iterates over all edges in the edge list, calling the provided function
+	// iterate iterates over all edges in the edge list, calling the provided function
 	// with each child-parent pair. If the function returns false, iteration stops.
-	Iterate(func(child uint64, parent uint64) bool)
+	iterate(func(child uint64, parent uint64) bool)
 }
 
 type edgeListMap struct {
@@ -175,20 +214,20 @@ func newEdgeListMap(numEdges uint64) *edgeListMap {
 	}
 }
 
-func (elm *edgeListMap) Parent(child uint64) (uint64, bool) {
+func (elm *edgeListMap) parent(child uint64) (uint64, bool) {
 	parent, ok := elm.edges[child]
 	return parent, ok
 }
 
-func (elm *edgeListMap) AddEdge(child uint64, parent uint64) {
+func (elm *edgeListMap) addEdge(child uint64, parent uint64) {
 	elm.edges[child] = parent
 }
 
-func (elm *edgeListMap) Count() uint64 {
+func (elm *edgeListMap) count() uint64 {
 	return uint64(len(elm.edges))
 }
 
-func (elm *edgeListMap) Iterate(f func(child uint64, parent uint64) bool) {
+func (elm *edgeListMap) iterate(f func(child uint64, parent uint64) bool) {
 	for child, parent := range elm.edges {
 		if !f(child, parent) {
 			return
@@ -197,7 +236,7 @@ func (elm *edgeListMap) Iterate(f func(child uint64, parent uint64) bool) {
 }
 
 type edgeListSlice struct {
-	count    uint64
+	numEdges uint64
 	sentinel uint64
 	edges    []uint64
 }
@@ -209,13 +248,13 @@ func newEdgeListSlice(numDocs uint64, numEdges uint64) *edgeListSlice {
 		edges[i] = sentinel
 	}
 	return &edgeListSlice{
-		count:    numEdges,
+		numEdges: numEdges,
 		sentinel: sentinel,
 		edges:    edges,
 	}
 }
 
-func (els *edgeListSlice) Parent(child uint64) (uint64, bool) {
+func (els *edgeListSlice) parent(child uint64) (uint64, bool) {
 	if child >= uint64(len(els.edges)) {
 		return 0, false
 	}
@@ -226,21 +265,21 @@ func (els *edgeListSlice) Parent(child uint64) (uint64, bool) {
 	return parent, true
 }
 
-func (el *edgeListSlice) AddEdge(child uint64, parent uint64) {
-	if child >= uint64(len(el.edges)) {
+func (els *edgeListSlice) addEdge(child uint64, parent uint64) {
+	if child >= uint64(len(els.edges)) {
 		// out of bounds, ignore as this should not happen
 		return
 	}
-	el.edges[child] = parent
+	els.edges[child] = parent
 }
 
-func (el *edgeListSlice) Count() uint64 {
-	return el.count
+func (els *edgeListSlice) count() uint64 {
+	return els.numEdges
 }
 
-func (el *edgeListSlice) Iterate(f func(child uint64, parent uint64) bool) {
-	for child, parent := range el.edges {
-		if parent != el.sentinel {
+func (els *edgeListSlice) iterate(f func(child uint64, parent uint64) bool) {
+	for child, parent := range els.edges {
+		if parent != els.sentinel {
 			if !f(uint64(child), parent) {
 				return
 			}
@@ -248,7 +287,7 @@ func (el *edgeListSlice) Iterate(f func(child uint64, parent uint64) bool) {
 	}
 }
 
-// nestedCacheRatio defines the threshold ratio of nested documents to total documents.
+// edgeListMapThreshold defines the threshold ratio of nested documents to total documents.
 // It is derived using the following reasoning:
 //
 // Let N = number of nested documents (i.e., edges in the edge list)
@@ -273,9 +312,9 @@ func (el *edgeListSlice) Iterate(f func(child uint64, parent uint64) bool) {
 // we use a map for the edge list; otherwise, we use a slice.
 var edgeListMapThreshold = 8.0 / 30.0
 
-// NewEdgeList creates a new EdgeList instance based on the provided
+// newEdgeList creates a new edgeList instance based on the provided
 // constants, the total number of documents and the number of nested documents/edges.
-func NewEdgeList(numDocs uint64, numEdges uint64) EdgeList {
+func newEdgeList(numDocs uint64, numEdges uint64) edgeList {
 	if numDocs == 0 || numEdges == 0 {
 		// no edges, return nil
 		return nil
@@ -287,4 +326,100 @@ func NewEdgeList(numDocs uint64, numEdges uint64) EdgeList {
 	}
 	// use slice representation
 	return newEdgeListSlice(numDocs, numEdges)
+}
+
+// -------------------------------------------------------
+
+// descendantStore provides an interface to access precomputed descendant bitmaps for root documents
+type descendantStore interface {
+	// add a descendant bitmap for a root document
+	add(root uint64, descendants *roaring.Bitmap)
+	// returns the descendant bitmap for a root document, with an indication of its existence
+	descendants(root uint64) (*roaring.Bitmap, bool)
+}
+
+type descendantStoreMap struct {
+	m map[uint64]*roaring.Bitmap
+}
+
+func newDescendantStoreMap(numRoots uint64) *descendantStoreMap {
+	return &descendantStoreMap{
+		m: make(map[uint64]*roaring.Bitmap, numRoots),
+	}
+}
+
+func (dsm *descendantStoreMap) add(root uint64, descendants *roaring.Bitmap) {
+	dsm.m[root] = descendants
+}
+
+func (dsm *descendantStoreMap) descendants(root uint64) (*roaring.Bitmap, bool) {
+	bm, ok := dsm.m[root]
+	return bm, ok
+}
+
+type descendantStoreSlice struct {
+	numDocs     uint64
+	descBitmaps []*roaring.Bitmap
+}
+
+func newDescendantStoreSlice(numDocs uint64, numRoots uint64) *descendantStoreSlice {
+	return &descendantStoreSlice{
+		numDocs:     numDocs,
+		descBitmaps: make([]*roaring.Bitmap, numDocs),
+	}
+}
+
+func (dss *descendantStoreSlice) add(root uint64, descendants *roaring.Bitmap) {
+	if root >= dss.numDocs {
+		// out of bounds, ignore as this should not happen
+		return
+	}
+	dss.descBitmaps[root] = descendants
+}
+
+func (dss *descendantStoreSlice) descendants(root uint64) (*roaring.Bitmap, bool) {
+	if root >= dss.numDocs {
+		return nil, false
+	}
+	bm := dss.descBitmaps[root]
+	if bm == nil {
+		return nil, false
+	}
+	return bm, true
+}
+
+// descendantStoreMapThreshold defines the threshold ratio of root documents to total documents.
+// It is derived using the following reasoning:
+//
+// Let R = number of root documents
+// Let T = total number of documents
+//
+// Memory usage if the descendant store is stored as a map[uint64]*roaring.Bitmap:
+//
+//	~30 bytes per entry (key + value + map overhead)
+//	Total ≈ 30 * R bytes
+//
+// Memory usage if the descendant store is stored as a []*roaring.Bitmap:
+//
+//	8 bytes per entry
+//	Total ≈ 8 * T bytes
+//
+// We want the threshold at which a map becomes more memory-efficient than a slice:
+//
+//	30R < 8T
+//	R/T < 8/30
+//
+// Therefore, if the ratio of root documents to total documents is less than 8/30,
+// we use a map for the descendant store; otherwise, we use a slice.
+var descendantStoreMapThreshold = 8.0 / 30.0
+
+func newDescendantStore(numDocs uint64, numRoots uint64) descendantStore {
+	if numDocs == 0 || numRoots == 0 {
+		return nil
+	}
+	ratio := float64(numRoots) / float64(numDocs)
+	if ratio < descendantStoreMapThreshold {
+		return newDescendantStoreMap(numRoots)
+	}
+	return newDescendantStoreSlice(numDocs, numRoots)
 }

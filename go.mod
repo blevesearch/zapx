@@ -3,7 +3,7 @@ module github.com/blevesearch/zapx/v18
 go 1.25.0
 
 require (
-	github.com/RoaringBitmap/roaring/v2 v2.14.5
+	github.com/RoaringBitmap/roaring/v2 v2.18.2
 	github.com/blevesearch/bleve_index_api v1.3.12
 	github.com/blevesearch/go-faiss v1.1.5
 	github.com/blevesearch/mmap-go v1.2.0

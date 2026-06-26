@@ -176,12 +176,17 @@ func (nc *nestedIndexCache) countRootDeleted(bm *roaring.Bitmap) uint64 {
 	if nc.countNested() == 0 {
 		return totalDocs
 	}
+	// get the edgeList for this segment
+	el := nc.edgeList()
+	if el == nil {
+		return totalDocs
+	}
 	// count nested documents in the bitmap, a nested doc is one that has a parent in the edge list
 	var nestedDocCount uint64
 	bmItr := bm.Iterator()
 	for bmItr.HasNext() {
 		docNum := bmItr.Next()
-		if _, ok := nc.cache.el.parent(uint64(docNum)); ok {
+		if _, ok := el.parent(uint64(docNum)); ok {
 			nestedDocCount++
 		}
 	}

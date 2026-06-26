@@ -889,9 +889,9 @@ func (sb *SegmentBase) CountRoot(deleted *roaring.Bitmap) uint64 {
 	return sb.countRoot() - sb.countRootDeleted(deleted)
 }
 
-// AddNestedDocuments returns a bitmap containing the original document numbers in drops,
-// plus any descendant document numbers for each dropped document. The drops
-// parameter represents a set of document numbers to be dropped, and the returned
+// AddNestedDocuments returns a bitmap containing the original root document numbers in drops,
+// plus any descendant document numbers for each dropped root document. The drops
+// parameter represents a set of root document numbers to be dropped, and the returned
 // bitmap includes both the original drops and all their descendants (if any).
 // NOTE: This method MODIFIES the drops bitmap in place.
 // NOTE: This method EXPECTS that the drops bitmap contains ONLY root document numbers.
@@ -901,6 +901,9 @@ func (sb *SegmentBase) AddNestedDocuments(drops *roaring.Bitmap) *roaring.Bitmap
 		return drops
 	}
 	ds := sb.descendantStore()
+	if ds == nil {
+		return drops
+	}
 	descendantBM := roaring.New()
 	dropsItr := drops.Iterator()
 	for dropsItr.HasNext() {

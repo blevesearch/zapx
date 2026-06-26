@@ -199,6 +199,7 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		invIndexCache:       newInvertedIndexCache(),
 		vecIndexCache:       newVectorIndexCache(),
 		synIndexCache:       newSynonymIndexCache(),
+		geoIndexCache:       newGeoIndexCache(),
 		nstIndexCache:       newNestedIndexCache(),
 		// following fields gets populated by loadFields
 		fieldsMap:     make(map[string]uint16),

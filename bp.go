@@ -15,6 +15,7 @@
 package zap
 
 import (
+	"log"
 	"math"
 
 	"github.com/RoaringBitmap/roaring/v2"
@@ -47,6 +48,14 @@ type BPOptions struct {
 	// segments that will be merged again soon; running BP on them wastes CPU
 	// without producing durable locality benefit. Default: 100000.
 	MinSegmentSize uint64
+
+	// BPField, when non-empty, forces BP to build its forward index from exactly
+	// this field instead of auto-selecting the indexed field with the most
+	// eligible terms (§68). Set from config["bpReorder"]="fieldName". If the named
+	// field is absent from the merged segments (or not indexed), BP is disabled
+	// (identity permutation) and a warning is logged — a silent typo that turns
+	// off locality is a debugging trap. Empty string = auto-select (default).
+	BPField string
 }
 
 var defaultBPOptions = BPOptions{
@@ -103,6 +112,29 @@ func computeBPPermutation(
 			perm[i] = uint64(i)
 		}
 		return perm, nil
+	}
+
+	// §68: explicit field override (config["bpReorder"]="fieldName"). Fail-safe:
+	// if the named field is absent from the merged segments or not indexed,
+	// disable BP (identity permutation) and warn — a silent typo that turns off
+	// locality is a debugging trap.
+	if opts.BPField != "" {
+		valid := false
+		for _, fn := range fieldsInv {
+			if fn == opts.BPField && fieldsOptions[fn].IsIndexed() {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			log.Printf("zap: bpReorder field %q is not an indexed field in the "+
+				"merged segments; skipping BP doc-ID reordering", opts.BPField)
+			perm := make([]uint64, numDocs)
+			for i := range perm {
+				perm[i] = uint64(i)
+			}
+			return perm, nil
+		}
 	}
 
 	// -- Step 2: Pass 1 -- count DF per (fieldName, term) --------------------
@@ -169,12 +201,13 @@ func computeBPPermutation(
 	}
 	numTerms := len(termIDs)
 
-	// Identify the indexed field with the most eligible terms. Pass 2 only
-	// uses this field so fwdData stays cache-friendly (single-field size
-	// instead of Nfields× inflated). Locality signal from one rich text
-	// field is sufficient for BP doc-ID reordering.
-	bpField := ""
-	{
+	// Pick the field whose terms drive the forward index. Pass 2 uses a single
+	// field so fwdData stays cache-friendly (single-field size instead of
+	// Nfields× inflated). §68: honor an explicit BPField override (already
+	// validated above); otherwise auto-select the indexed field with the most
+	// eligible terms (one rich text field is sufficient for locality).
+	bpField := opts.BPField
+	if bpField == "" {
 		best := 0
 		for _, fn := range fieldsInv {
 			if c := fieldEligibleCount[fn]; c > best {

@@ -271,3 +271,110 @@ func TestBPGuardSkipsOnFAISS(t *testing.T) {
 		t.Fatal("segmentsHaveFAISS should be true when FAISS section address is nonzero")
 	}
 }
+
+// TestBPFieldSelection covers §68: an explicit BPField is honored when it names
+// an indexed field, and a missing/typo'd field name fails safe to an identity
+// permutation (BP disabled) rather than silently picking another field.
+func TestBPFieldSelection(t *testing.T) {
+	tmpPath1 := getTempPath("scorch_bpfield1.zap")
+	tmpPath2 := getTempPath("scorch_bpfield2.zap")
+	for _, p := range []string{tmpPath1, tmpPath2} {
+		_ = os.RemoveAll(p)
+		defer os.RemoveAll(p)
+	}
+
+	seg1, _, err := buildTestSegmentMulti()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = PersistSegmentBase(seg1, tmpPath1); err != nil {
+		t.Fatal(err)
+	}
+	seg2, _, err := buildTestSegmentMulti2()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = PersistSegmentBase(seg2, tmpPath2); err != nil {
+		t.Fatal(err)
+	}
+
+	s1, err := zapPlugin.Open(tmpPath1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s1.Close()
+	s2, err := zapPlugin.Open(tmpPath2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+
+	segments := []*SegmentBase{&s1.(*Segment).SegmentBase, &s2.(*Segment).SegmentBase}
+	drops := []*roaring.Bitmap{nil, nil}
+	_, fieldsInv, fieldsOptions := mergeFields(segments)
+	numDocs := computeNewDocCount(segments, drops)
+
+	base := BPOptions{
+		MinDocFreq:       1,
+		MaxDocFreqRatio:  1.0,
+		MinSegmentSize:   0,
+		MinPartitionSize: 1,
+		MaxIter:          5,
+	}
+
+	isIdentity := func(perm []uint64) bool {
+		if uint64(len(perm)) != numDocs {
+			return false
+		}
+		for i, v := range perm {
+			if v != uint64(i) {
+				return false
+			}
+		}
+		return true
+	}
+	assertBijection := func(perm []uint64) {
+		t.Helper()
+		if uint64(len(perm)) != numDocs {
+			t.Fatalf("perm length %d != numDocs %d", len(perm), numDocs)
+		}
+		seen := make([]bool, numDocs)
+		for i, bpID := range perm {
+			if bpID >= numDocs || seen[bpID] {
+				t.Fatalf("perm[%d]=%d not a valid bijection", i, bpID)
+			}
+			seen[bpID] = true
+		}
+	}
+
+	// (1) Explicit valid field ("desc") → BP runs, valid bijection permutation.
+	optsValid := base
+	optsValid.BPField = "desc"
+	permValid, err := computeBPPermutation(segments, drops, fieldsInv, fieldsOptions, numDocs, optsValid)
+	if err != nil {
+		t.Fatalf("computeBPPermutation(BPField=desc) error: %v", err)
+	}
+	assertBijection(permValid)
+
+	// (2) Missing/typo'd field → fail safe to identity (BP disabled).
+	optsMissing := base
+	optsMissing.BPField = "no_such_field_xyz"
+	permMissing, err := computeBPPermutation(segments, drops, fieldsInv, fieldsOptions, numDocs, optsMissing)
+	if err != nil {
+		t.Fatalf("computeBPPermutation(BPField=missing) error: %v", err)
+	}
+	if !isIdentity(permMissing) {
+		t.Errorf("missing BPField should yield identity permutation (BP off), got %v", permMissing)
+	}
+
+	// sanity: the valid-field case should actually have its named field present.
+	found := false
+	for _, fn := range fieldsInv {
+		if fn == "desc" && fieldsOptions[fn].IsIndexed() {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("test precondition: 'desc' should be an indexed field")
+	}
+}

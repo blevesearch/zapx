@@ -68,6 +68,7 @@ func (*ZapPlugin) open(path string, config map[string]interface{}) (segment.Segm
 			invIndexCache:     newInvertedIndexCache(),
 			vecIndexCache:     newVectorIndexCache(),
 			synIndexCache:     newSynonymIndexCache(),
+			geoIndexCache:     newGeoIndexCache(),
 			nstIndexCache:     newNestedIndexCache(),
 			trainedIndexCache: newTrainedIndexCache(),
 			fieldDvReaders:    make([][]*docValueReader, len(segmentSections)),
@@ -141,6 +142,7 @@ type SegmentBase struct {
 	vecIndexCache     *vectorIndexCache
 	trainedIndexCache *trainedIndexCache
 	synIndexCache     *synonymIndexCache
+	geoIndexCache     *geoIndexCache
 	nstIndexCache     *nestedIndexCache
 }
 
@@ -933,4 +935,21 @@ func (sb *SegmentBase) countNested() uint64 {
 
 func (sb *SegmentBase) CallbackId() string {
 	return sb.fileReader.id
+}
+
+func (sb *SegmentBase) GeoCellData(field string, except *roaring.Bitmap) (segment.GeoCellData, error) {
+	fieldIDPlus1 := sb.fieldsMap[field]
+	if fieldIDPlus1 == 0 {
+		return nil, nil
+	}
+	pos := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionGeoShapeV2Index]
+	if pos > 0 {
+		// skip the doc value offsets to get to the geo cell data portion
+		for i := 0; i < 2; i++ {
+			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += uint64(n)
+		}
+		return sb.geoIndexCache.loadOrCreate(fieldIDPlus1-1, sb.mem[pos:], except, sb.fileReader)
+	}
+	return nil, nil
 }

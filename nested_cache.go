@@ -72,26 +72,34 @@ func (nc *nestedIndexCache) initialize(numDocs uint64, edgeListOffset uint64, me
 		edgeList.addEdge(child, parent)
 	}
 	// create and cache our descendant store
-	descendantStore := newDescendantStore(numDocs, numDocs-numEdges)
+	numRoots := numDocs - numEdges
+	descendantStore := newDescendantStore(numDocs, numRoots)
 	// populate the descendant store using the following invariants:
 	// Invariant: child docNums is always > parent docNums
-	// Invariant: descendants of root docNum R is always a contiguous range of docNums [R+1, R+N] where N is the number of descendants of R
-	currentRoot := uint64(0)
-	currentBitmap := roaring.New()
-	for i := uint64(0); i < numDocs; i++ {
-		_, ok := edgeList.parent(i)
-		if !ok {
-			if currentBitmap.GetCardinality() > 0 {
-				descendantStore.add(currentRoot, currentBitmap)
-				currentBitmap = roaring.New()
-			}
-			currentRoot = i
-		} else {
-			currentBitmap.Add(uint32(i))
+	// Invariant: descendants of root docNum R is always a
+	// contiguous range of docNums [R + 1 : R + 1 + N)
+	// where N is the number of descendants of R
+	roots := make([]uint64, 0, numRoots)
+	for docNum := uint64(0); docNum < numDocs; docNum++ {
+		if _, ok := edgeList.parent(docNum); !ok {
+			roots = append(roots, docNum)
 		}
 	}
-	if currentBitmap.GetCardinality() > 0 {
-		descendantStore.add(currentRoot, currentBitmap)
+	// descendants of each root are the contiguous range of
+	// docNums between it and the next root
+	for idx, root := range roots {
+		start := root + 1
+		end := numDocs
+		nextIdx := idx + 1
+		if nextIdx < len(roots) {
+			end = roots[nextIdx]
+		}
+		numDescendants := end - start
+		if numDescendants > 0 {
+			bitmap := roaring.New()
+			bitmap.AddRange(start, end)
+			descendantStore.add(root, bitmap)
+		}
 	}
 
 	nc.cache = &nestedCacheEntry{
@@ -357,69 +365,9 @@ func (dsm *descendantStoreMap) descendants(root uint64) (*roaring.Bitmap, bool) 
 	return bm, ok
 }
 
-type descendantStoreSlice struct {
-	numDocs     uint64
-	descBitmaps []*roaring.Bitmap
-}
-
-func newDescendantStoreSlice(numDocs uint64, numRoots uint64) *descendantStoreSlice {
-	return &descendantStoreSlice{
-		numDocs:     numDocs,
-		descBitmaps: make([]*roaring.Bitmap, numDocs),
-	}
-}
-
-func (dss *descendantStoreSlice) add(root uint64, descendants *roaring.Bitmap) {
-	if root >= dss.numDocs {
-		// out of bounds, ignore as this should not happen
-		return
-	}
-	dss.descBitmaps[root] = descendants
-}
-
-func (dss *descendantStoreSlice) descendants(root uint64) (*roaring.Bitmap, bool) {
-	if root >= dss.numDocs {
-		return nil, false
-	}
-	bm := dss.descBitmaps[root]
-	if bm == nil {
-		return nil, false
-	}
-	return bm, true
-}
-
-// descendantStoreMapThreshold defines the threshold ratio of root documents to total documents.
-// It is derived using the following reasoning:
-//
-// Let R = number of root documents
-// Let T = total number of documents
-//
-// Memory usage if the descendant store is stored as a map[uint64]*roaring.Bitmap:
-//
-//	~30 bytes per entry (key + value + map overhead)
-//	Total ≈ 30 * R bytes
-//
-// Memory usage if the descendant store is stored as a []*roaring.Bitmap:
-//
-//	8 bytes per entry
-//	Total ≈ 8 * T bytes
-//
-// We want the threshold at which a map becomes more memory-efficient than a slice:
-//
-//	30R < 8T
-//	R/T < 8/30
-//
-// Therefore, if the ratio of root documents to total documents is less than 8/30,
-// we use a map for the descendant store; otherwise, we use a slice.
-var descendantStoreMapThreshold = 8.0 / 30.0
-
 func newDescendantStore(numDocs uint64, numRoots uint64) descendantStore {
 	if numDocs == 0 || numRoots == 0 {
 		return nil
 	}
-	ratio := float64(numRoots) / float64(numDocs)
-	if ratio < descendantStoreMapThreshold {
-		return newDescendantStoreMap(numRoots)
-	}
-	return newDescendantStoreSlice(numDocs, numRoots)
+	return newDescendantStoreMap(numRoots)
 }

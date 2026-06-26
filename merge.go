@@ -216,9 +216,25 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	// DocID mapping array, so enabling BP on vector segments would corrupt ANN results.
 	var bpPerm []uint64
 	if config != nil {
-		if bpReorder, ok := config["bpReorder"].(bool); ok && bpReorder && !segmentsHaveFAISS(segments) {
+		// §68: config["bpReorder"] is polymorphic — bool | string | (absent/null).
+		//   true             -> auto-pick the richest field (default behavior)
+		//   false            -> off
+		//   "fieldName"       -> use exactly that field for the forward index
+		//   absent/nil/other  -> off (i.e. the global default, which is off today)
+		bpEnabled := false
+		bpOpts := defaultBPOptions
+		switch v := config["bpReorder"].(type) {
+		case bool:
+			bpEnabled = v
+		case string:
+			if v != "" {
+				bpEnabled = true
+				bpOpts.BPField = v
+			}
+		}
+		if bpEnabled && !segmentsHaveFAISS(segments) {
 			var bpErr error
-			bpPerm, bpErr = computeBPPermutation(segments, drops, fieldsInv, fieldsOptions, numDocs, defaultBPOptions)
+			bpPerm, bpErr = computeBPPermutation(segments, drops, fieldsInv, fieldsOptions, numDocs, bpOpts)
 			if bpErr != nil {
 				return nil, 0, 0, nil, nil, 0, bpErr
 			}

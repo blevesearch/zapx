@@ -886,7 +886,7 @@ func (sb *SegmentBase) CountRoot(deleted *roaring.Bitmap) uint64 {
 	// dR = D - dS
 	// Therefore, the count of root docs excluding deleted ones is:
 	// R - dR = (T - S) - (D - dS)
-	return (sb.Count() - sb.countNested()) - (sb.nstIndexCache.countRoot(deleted))
+	return sb.countRoot() - sb.countRootDeleted(deleted)
 }
 
 // AddNestedDocuments returns a bitmap containing the original document numbers in drops,
@@ -896,38 +896,35 @@ func (sb *SegmentBase) CountRoot(deleted *roaring.Bitmap) uint64 {
 // NOTE: This method MODIFIES the drops bitmap in place.
 // NOTE: This method EXPECTS that the drops bitmap contains ONLY root document numbers.
 func (sb *SegmentBase) AddNestedDocuments(drops *roaring.Bitmap) *roaring.Bitmap {
-	// If no drops or no subDocs, nothing to do
+	// If no drops or no nested documents, nothing to do
 	if drops == nil || drops.GetCardinality() == 0 || sb.countNested() == 0 {
 		return drops
 	}
-	// Get the edge list for this segment
-	el := sb.EdgeList()
-	descendants := roaring.New()
-	total := sb.Count()
+	ds := sb.descendantStore()
+	descendantBM := roaring.New()
 	dropsItr := drops.Iterator()
 	for dropsItr.HasNext() {
-		droppedDoc := uint64(dropsItr.Next())
-		// every document from droppedDoc+1 to the next
-		// root document is a descendant of droppedDoc
-		start := droppedDoc + 1
-		cur := start
-		for cur < total {
-			if _, ok := el.Parent(cur); !ok {
-				break
-			}
-			cur++
+		rootDoc := uint64(dropsItr.Next())
+		if bm, ok := ds.descendants(rootDoc); ok {
+			descendantBM.Or(bm)
 		}
-		descendants.AddRange(start, cur)
 	}
-	drops.Or(descendants)
+	drops.Or(descendantBM)
 	return drops
 }
 
-// EdgeList returns an EdgeList interface representing the parent-child relationships between documents in the segment.
-// The EdgeList interface allows iteration over child-parent document pairs, enabling navigation of document hierarchies.
+// edgeList returns an edgeList interface representing the parent-child relationships between documents in the segment.
+// The edgeList interface allows iteration over child-parent document pairs, enabling navigation of document hierarchies.
 // The underlying implementation may use a map or a slice, but callers should rely on the interface methods.
-func (sb *SegmentBase) EdgeList() EdgeList {
+func (sb *SegmentBase) edgeList() edgeList {
 	return sb.nstIndexCache.edgeList()
+}
+
+// descendantStore returns a descendantStore interface that provides access to the descendants of documents in the segment.
+// The descendantStore interface allows retrieval of descendant document numbers for a given root document number.
+// The underlying implementation may use a map or a slice, but callers should rely on the interface methods.
+func (sb *SegmentBase) descendantStore() descendantStore {
+	return sb.nstIndexCache.descendantStore()
 }
 
 // Utility method to count the number of nested documents in the segment, not exported.
@@ -935,6 +932,12 @@ func (sb *SegmentBase) countNested() uint64 {
 	return sb.nstIndexCache.countNested()
 }
 
-func (sb *SegmentBase) CallbackId() string {
-	return sb.fileReader.id
+// Utility method to count the number of root documents in the given bitmap, not exported.
+func (sb *SegmentBase) countRoot() uint64 {
+	return sb.Count() - sb.countNested()
+}
+
+// Utility method to count the number of root documents that are marked as deleted in the given bitmap, not exported.
+func (sb *SegmentBase) countRootDeleted(deleted *roaring.Bitmap) uint64 {
+	return sb.nstIndexCache.countRootDeleted(deleted)
 }

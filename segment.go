@@ -937,7 +937,7 @@ func (sb *SegmentBase) CallbackId() string {
 	return sb.fileReader.id
 }
 
-func (sb *SegmentBase) GeoCellData(field string, except *roaring.Bitmap) (segment.GeoCellData, error) {
+func (sb *SegmentBase) GeoShapeV2Data(field string, except *roaring.Bitmap) (segment.GeoShapeV2Data, error) {
 	fieldIDPlus1 := sb.fieldsMap[field]
 	if fieldIDPlus1 == 0 {
 		return nil, nil

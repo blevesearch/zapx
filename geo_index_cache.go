@@ -261,6 +261,7 @@ func (gc *geoIndexCache) cleanup() bool {
 	return rv
 }
 
+// geoCacheEntry represents a cached entry for a specific field in the geo index.
 type geoCacheEntry struct {
 	innerCells  []uint64
 	innerDocIDs []uint64
@@ -268,11 +269,15 @@ type geoCacheEntry struct {
 	crossCells  []uint64
 	crossDocIDs []uint64
 
+	// contains offsets for each bounding box in the bboxMem slice
 	bboxOffsets []uint64
-	bboxMem     []byte
+	// contains raw unprocessed bounding box data for on demand processing
+	bboxMem []byte
 
+	// contains offsets for each shape in the shapeMem slice
 	shapeOffsets []uint64
-	shapeMem     []byte
+	// contains raw unprocessed shape data for on demand processing
+	shapeMem []byte
 
 	numDocs   uint64
 	docNums   []uint64

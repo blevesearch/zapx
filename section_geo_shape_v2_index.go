@@ -74,7 +74,7 @@ func (g *geoShapeV2IndexSection) Merge(opaque map[int]resetable, segments []*Seg
 	indexInfos := make([]*geoIndexInfo, 0, len(segments))
 
 	for fieldID, fieldName := range fieldsInv {
-
+		// Skip fields that are not indexed
 		if !gs.fieldsOptions[fieldName].IsIndexed() {
 			continue
 		}
@@ -85,45 +85,53 @@ func (g *geoShapeV2IndexSection) Merge(opaque map[int]resetable, segments []*Seg
 			if isClosed(closeCh) {
 				return seg.ErrClosed
 			}
-
+			// Skip if the field is not present in the segment
 			if _, ok := sb.fieldsMap[fieldName]; !ok {
 				continue
 			}
 
+			// Obtain the field start position
 			pos := int(sb.fieldsSectionsMap[sb.fieldsMap[fieldName]-1][SectionGeoShapeV2Index])
 			if pos == 0 {
 				continue
 			}
 
+			// skip doc values, as we don't support them for geo shapes
 			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 			_, n = binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 			pos += n
 
-			indexInfo := &geoIndexInfo{
-				docIDMap: newDocNumsIn[segI],
-			}
-			var err error
-
-			indexInfo.content, err = loadGeoIndexContent(sb.fileReader, sb.mem[pos:])
+			// Load the geo index content for the field from the segment
+			content, err := loadGeoIndexContent(sb.fileReader, sb.mem[pos:])
 			if err != nil {
 				return err
 			}
 
-			indexInfos = append(indexInfos, indexInfo)
+			// Append the content and the corresponding doc ID mapping for this segment
+			indexInfos = append(indexInfos, &geoIndexInfo{
+				content:  content,
+				docIDMap: newDocNumsIn[segI],
+			})
 		}
 
+		// Merge the index contents from all segments for this field
 		indexContent, err := gs.mergeIndexContents(indexInfos)
 		if err != nil {
 			return err
 		}
 
+		// If the merged index content is nil, it means there are
+		// no valid documents for this field across all segments,
+		// so we skip writing it.
 		if indexContent == nil {
 			continue
 		}
 
+		// record the starting position of this field's index content
 		fieldStart := w.Count()
 		tempBuf := gs.grabBuf(binary.MaxVarintLen64)
+		// Write two varints for indicating no doc values
 		n := binary.PutUvarint(tempBuf, fieldNotUninverted)
 		_, err = w.Write(tempBuf[:n])
 		if err != nil {
@@ -135,11 +143,13 @@ func (g *geoShapeV2IndexSection) Merge(opaque map[int]resetable, segments []*Seg
 			return err
 		}
 
+		// Write the merged index content for this field to the file
 		err = gs.writeIndexContent(indexContent, w)
 		if err != nil {
 			return err
 		}
 
+		gs.incrementBytesWritten(uint64(w.Count() - fieldStart))
 		gs.fieldAddrs[uint16(fieldID)] = fieldStart
 	}
 
@@ -157,7 +167,8 @@ func (g *geoShapeV2IndexSection) InitOpaque(args map[string]interface{}) resetab
 	return rv
 }
 
-func (g *geoShapeV2IndexSection) getGeoShapeV2IndexOpaque(opaque map[int]resetable) *geoShapeV2IndexSectionOpaque {
+func (g *geoShapeV2IndexSection) getGeoShapeV2IndexOpaque(
+	opaque map[int]resetable) *geoShapeV2IndexSectionOpaque {
 	if _, ok := opaque[SectionGeoShapeV2Index]; !ok {
 		opaque[SectionGeoShapeV2Index] = g.InitOpaque(nil)
 	}
@@ -167,23 +178,30 @@ func (g *geoShapeV2IndexSection) getGeoShapeV2IndexOpaque(opaque map[int]resetab
 type geoShapeV2IndexSectionOpaque struct {
 	results []index.Document
 
-	indexContent  map[uint16]*geoIndexContent
-	fieldAddrs    map[uint16]int
+	// indexContent holds the geo index content for each field ID
+	indexContent map[uint16]*geoIndexContent
+	// fieldAddrs holds the starting address of each field's index content in the file
+	fieldAddrs map[uint16]int
+	// fieldsOptions holds the indexing options for each field name
 	fieldsOptions map[string]index.FieldIndexingOptions
 
 	bytesWritten uint64
-	tmp          []byte
-	tmp2         []byte
-	init         bool
+
+	// temporary buffer for reuse
+	tmp  []byte // single elements
+	tmp2 []byte // large arrays
+
+	init bool
 }
 
 func (g *geoShapeV2IndexSectionOpaque) Reset() error {
 	g.results = nil
-	clear(g.indexContent)
 	g.tmp = g.tmp[:0]
 	g.tmp2 = g.tmp2[:0]
 	g.init = false
-	g.fieldsOptions = nil
+	clear(g.indexContent)
+	clear(g.fieldAddrs)
+	clear(g.fieldsOptions)
 	return nil
 }
 
@@ -216,6 +234,7 @@ func (g *geoShapeV2IndexSectionOpaque) Set(key string, value interface{}) {
 
 func (g *geoShapeV2IndexSectionOpaque) alloc() {
 	g.indexContent = make(map[uint16]*geoIndexContent)
+	// The other fields will already be initialized during opaque creation
 }
 
 func (g *geoShapeV2IndexSectionOpaque) process(f index.GeoShapeV2Field, fieldID uint16,
@@ -234,6 +253,7 @@ func (g *geoShapeV2IndexSectionOpaque) process(f index.GeoShapeV2Field, fieldID 
 	indexContent.process(f, docNum)
 }
 
+// geoIndexContent holds the geo index content for a specific field ID
 type geoIndexContent struct {
 	innerCells  []uint64
 	innerDocIDs []uint64
@@ -257,6 +277,7 @@ func (g *geoIndexContent) alloc() {
 	g.crossDocIDs = make([]uint64, 0)
 
 	g.docNums = make([]uint64, 0)
+	g.docScores = make([]uint64, 0)
 
 	g.boundingBoxes = make([][]byte, 0)
 	g.shapes = make([][]byte, 0)
@@ -274,16 +295,19 @@ func (g *geoIndexContent) process(f index.GeoShapeV2Field, docNum uint32) {
 	docID := uint64(len(g.docNums))
 	g.docNums = append(g.docNums, uint64(docNum))
 
+	// Append inner cells along with their corresponding doc IDs
 	g.innerCells = append(g.innerCells, innerCells...)
 	for _ = range innerCells {
 		g.innerDocIDs = append(g.innerDocIDs, docID)
 	}
 
+	// Append cross cells along with their corresponding doc IDs
 	g.crossCells = append(g.crossCells, crossCells...)
 	for _ = range crossCells {
 		g.crossDocIDs = append(g.crossDocIDs, docID)
 	}
 
+	// Append bounding box bytes, shape bytes and the document score
 	g.boundingBoxes = append(g.boundingBoxes, f.EncodedBoundingBox())
 	g.shapes = append(g.shapes, f.EncodedShape())
 	g.docScores = append(g.docScores, f.Score())
@@ -293,6 +317,7 @@ func (g *geoShapeV2IndexSectionOpaque) persist(w *FileWriter) error {
 
 	tempBuf := g.grabBuf(binary.MaxVarintLen64)
 	for fieldID, content := range g.indexContent {
+		// Record the starting position of this field's index content
 		fieldStart := w.Count()
 
 		// Write two varints for indicating no doc values
@@ -307,11 +332,13 @@ func (g *geoShapeV2IndexSectionOpaque) persist(w *FileWriter) error {
 			return err
 		}
 
+		// Write the index content for this field to the file
 		err = g.writeIndexContent(content, w)
 		if err != nil {
 			return err
 		}
 
+		g.incrementBytesWritten(uint64(w.Count() - fieldStart))
 		g.fieldAddrs[fieldID] = fieldStart
 	}
 
@@ -411,6 +438,7 @@ func (g *geoShapeV2IndexSectionOpaque) writeIndexContent(content *geoIndexConten
 	return nil
 }
 
+// Used during segment merging, so load everything including bounding boxes and shapes
 func loadGeoIndexContent(r *FileReader, mem []byte) (*geoIndexContent, error) {
 	var pos uint64
 
@@ -526,6 +554,7 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 	var numDocs uint64
 	newDocNumMapping := make(map[uint64]uint64)
 
+	// Calculate the new docNums and create a mapping from old docNum to new docNum
 	for _, indexInfo := range indexInfos {
 		for _, docNum := range indexInfo.content.docNums {
 			newDocNum := indexInfo.docIDMap[docNum]
@@ -545,7 +574,9 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 	}
 
 	for _, indexInfo := range indexInfos {
+		// Merge inner cells and their corresponding doc IDs
 		for i, cell := range indexInfo.content.innerCells {
+			// Calculate the new docNum for the current cell's doc ID
 			internalDocNum := indexInfo.content.innerDocIDs[i]
 			docNum := indexInfo.content.docNums[internalDocNum]
 			newDocNum := indexInfo.docIDMap[docNum]
@@ -556,7 +587,9 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 			mergedContent.innerCells = append(mergedContent.innerCells, cell)
 			mergedContent.innerDocIDs = append(mergedContent.innerDocIDs, newDocNumInternal)
 		}
+		// Merge cross cells and their corresponding doc IDs
 		for i, cell := range indexInfo.content.crossCells {
+			// Calculate the new docNum for the current cell's doc ID
 			internalDocNum := indexInfo.content.crossDocIDs[i]
 			docNum := indexInfo.content.docNums[internalDocNum]
 			newDocNum := indexInfo.docIDMap[docNum]
@@ -567,6 +600,7 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 			mergedContent.crossCells = append(mergedContent.crossCells, cell)
 			mergedContent.crossDocIDs = append(mergedContent.crossDocIDs, newDocNumInternal)
 		}
+		// Merge bounding boxes
 		for i, bbox := range indexInfo.content.boundingBoxes {
 			internalDocNum := uint64(i)
 			docNum := indexInfo.content.docNums[internalDocNum]
@@ -576,6 +610,7 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 			}
 			mergedContent.boundingBoxes = append(mergedContent.boundingBoxes, bbox)
 		}
+		// Merge shapes
 		for i, shape := range indexInfo.content.shapes {
 			internalDocNum := uint64(i)
 			docNum := indexInfo.content.docNums[internalDocNum]
@@ -585,6 +620,7 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 			}
 			mergedContent.shapes = append(mergedContent.shapes, shape)
 		}
+		// Merge document scores
 		for i, score := range indexInfo.content.docScores {
 			internalDocNum := uint64(i)
 			docNum := indexInfo.content.docNums[internalDocNum]
@@ -596,6 +632,7 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 		}
 	}
 
+	// Sort the merged inner and cross cells along with their corresponding doc IDs
 	mergedContent.innerCells, mergedContent.innerDocIDs = sortArrayPair(mergedContent.innerCells, mergedContent.innerDocIDs)
 	mergedContent.crossCells, mergedContent.crossDocIDs = sortArrayPair(mergedContent.crossCells, mergedContent.crossDocIDs)
 
@@ -610,7 +647,7 @@ func (g *geoShapeV2IndexSectionOpaque) BytesWritten() uint64 {
 	return atomic.LoadUint64(&g.bytesWritten)
 }
 
-// arrayPair holds references to both slices to swap them in tandem
+// arrayPair holds references to both slices to swap and sort them in tandem
 type arrayPair struct {
 	primary   []uint64
 	secondary []uint64

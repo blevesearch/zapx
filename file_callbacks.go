@@ -15,6 +15,7 @@
 package zap
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	index "github.com/blevesearch/bleve_index_api"
@@ -46,6 +47,7 @@ const DefaultFileCallbackId = ""
 type FileWriter struct {
 	id        string
 	c         *CountHashWriter
+	tmp       []byte
 	processor func(data []byte) []byte
 }
 
@@ -97,6 +99,58 @@ func (w *FileWriter) Sum32() uint32 {
 	return w.c.Sum32()
 }
 
+func (w *FileWriter) grabBuf(size int) []byte {
+	if cap(w.tmp) < size {
+		w.tmp = make([]byte, size)
+	}
+	return w.tmp[:size]
+}
+
+func (w *FileWriter) WriteArray(arr []byte) (int, error) {
+	arr = w.process(arr)
+	numBuf := w.grabBuf(binary.MaxVarintLen64)
+
+	n := binary.PutUvarint(numBuf, uint64(len(arr)))
+	_, err := w.Write(numBuf[:n])
+	if err != nil {
+		return 0, err
+	}
+
+	return w.Write(arr)
+}
+
+func (w *FileWriter) WriteArrayWithOffsets(arr [][]byte) (int, error) {
+	offsets := make([]byte, len(arr)*8)
+	buf := make([]byte, 0)
+	numBuf := w.grabBuf(binary.MaxVarintLen64)
+
+	for i, a := range arr {
+		a = w.process(a)
+		buf = append(buf, a...)
+		binary.BigEndian.PutUint64(offsets[i*8:(i+1)*8], uint64(len(buf)))
+	}
+
+	offsets = w.process(offsets)
+	n := binary.PutUvarint(numBuf, uint64(len(offsets)))
+	_, err := w.Write(numBuf[:n])
+	if err != nil {
+		return 0, err
+	}
+
+	_, err = w.Write(offsets)
+	if err != nil {
+		return 0, err
+	}
+
+	n = binary.PutUvarint(numBuf, uint64(len(buf)))
+	_, err = w.Write(numBuf[:n])
+	if err != nil {
+		return 0, err
+	}
+
+	return w.Write(buf)
+}
+
 // FileReader wraps a reader callback to be applied to data read from a file.
 type FileReader struct {
 	id        string
@@ -129,4 +183,62 @@ func (r *FileReader) process(data []byte) ([]byte, error) {
 		return r.processor(data)
 	}
 	return data, nil
+}
+
+func (r *FileReader) ReadArray(data []byte) ([]byte, uint64, error) {
+	var pos uint64
+
+	bufLen, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+	if bufLen < 0 {
+		return nil, 0, fmt.Errorf("read array length is less than 0")
+	} else if bufLen == 0 {
+		return nil, pos, nil
+	}
+
+	buf, err := r.process(data[pos : pos+bufLen])
+	if err != nil {
+		return nil, 0, err
+	}
+	pos += bufLen
+
+	return buf, pos, nil
+}
+
+func (r *FileReader) ReadArrayWithOffsets(data []byte) ([][]byte, uint64, error) {
+	var pos uint64
+
+	buf, shift, err := r.ReadArray(data[pos:])
+	if err != nil {
+		return nil, 0, err
+	}
+	pos += shift
+
+	offsets := make([]uint64, len(buf)/8)
+	for i := 0; i < len(offsets); i++ {
+		offsets[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
+	}
+
+	dataLen, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+	if dataLen == 0 {
+		return nil, 0, fmt.Errorf("read array length is 0")
+	}
+	rawData := data[pos : pos+dataLen]
+	pos += dataLen
+
+	arr := make([][]byte, len(offsets))
+	for i := range offsets {
+		var start uint64
+		if i > 0 {
+			start = offsets[i-1]
+		}
+		end := offsets[i]
+		arr[i], err = r.process(rawData[start:end])
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+
+	return arr, pos, nil
 }

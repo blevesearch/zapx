@@ -208,39 +208,33 @@ func (r *FileReader) ReadArray(data []byte) ([]byte, uint64, error) {
 func (r *FileReader) ReadArrayWithOffsets(data []byte) ([][]byte, uint64, error) {
 	var pos uint64
 
-	offsetsLen, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
-	pos += uint64(n)
-	if offsetsLen == 0 {
-		return nil, 0, fmt.Errorf("read array offsets length is 0")
-	}
-
-	buf, err := r.process(data[pos : pos+offsetsLen])
+	buf, shift, err := r.ReadArray(data[pos:])
 	if err != nil {
 		return nil, 0, err
 	}
-	pos += offsetsLen
+	pos += shift
 
 	offsets := make([]uint64, len(buf)/8)
 	for i := 0; i < len(offsets); i++ {
 		offsets[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
 	}
 
-	bufLen, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+	dataLen, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
-	if bufLen == 0 {
+	if dataLen == 0 {
 		return nil, 0, fmt.Errorf("read array length is 0")
 	}
+	rawData := data[pos : pos+dataLen]
+	pos += dataLen
 
 	arr := make([][]byte, len(offsets))
-	for i := 0; i < len(offsets); i++ {
+	for i := range offsets {
 		var start uint64
-		if i == 0 {
-			start = 0
-		} else {
+		if i > 0 {
 			start = offsets[i-1]
 		}
 		end := offsets[i]
-		arr[i], err = r.process(buf[start:end])
+		arr[i], err = r.process(rawData[start:end])
 		if err != nil {
 			return nil, 0, err
 		}

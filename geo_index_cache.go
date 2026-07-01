@@ -205,12 +205,28 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 	shapeMem := mem[pos : pos+shapeLen]
 	pos += shapeLen
 
+	excludedGeoDocs := createNewExcludeBitmap(except, docNums)
+
 	rv := newGeoCacheEntry(innerCells, innerDocIDs, crossCells, crossDocIDs, bBoxesOffsets,
-		bboxMem, shapeOffsets, shapeMem, numDocs, docNums, docScores, except, r)
+		bboxMem, shapeOffsets, shapeMem, numDocs, docNums, docScores, excludedGeoDocs, r)
 
 	gc.insertLOCKED(field, rv)
 
 	return rv, nil
+}
+
+func createNewExcludeBitmap(except *roaring.Bitmap, docNums []uint64) *roaring.Bitmap {
+	if except == nil || except.IsEmpty() {
+		return nil
+	}
+
+	newExcept := roaring.New()
+	for i, docNum := range docNums {
+		if except.Contains(uint32(docNum)) {
+			newExcept.Add(uint32(i))
+		}
+	}
+	return newExcept
 }
 
 func (gc *geoIndexCache) insertLOCKED(field uint16, entry *geoCacheEntry) {

@@ -358,8 +358,9 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 // todo: need to detect and handle data drift in a more intelligent way
 func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *faissIndexConfig,
 	drops bool, vecIndexes []*vecIndexInfo, w *FileWriter, closeCh chan struct{}) error {
-	// create a faissIndex for merged index using nlist and nprobe from trained index's
-	// config and we're hitting the fast merge path only if we've not enabled GPU
+	// create a faissIndex for the merged index using nlist and nprobe from the
+	// trained index's config. cfg is always a CPU config here, since setQuantizers
+	// and the native merge below are CPU-only operations.
 	nprobe, nlist := trainedIndex.ivfParams()
 	cfg.nlist = nlist
 	mergedIdx, err := faissIndexFactory(cfg)
@@ -545,10 +546,10 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 
 	// create the faiss index config to hold the merged data, either via fast merge or reconstruction
 	nlist := v.numCentroids(nvecs)
-	config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, nlist, useGPU)
-	// we perform fast merge if we're not using the GPU and if the trained index
-	// is compatible to be used for fast merge
-	if !useGPU && canFastMerge(trainedIndex, indexOptimizedFor, nvecs) {
+	// We perform fast merge whenever a compatible trained index is available,
+	// regardless of whether the GPU is enabled for this field.
+	if canFastMerge(trainedIndex, indexOptimizedFor, nvecs) {
+		config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, nlist, false)
 		err := v.fastMergeIndexes(trainedIndex, config, drops, vecIndexes, w, closeCh)
 		if err != nil {
 			return err
@@ -559,6 +560,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 	}
 
 	// Reconstruct Merge Path:
+	config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, nlist, useGPU)
 	// merging of indexes with reconstruction method.
 	// the vecIds in each index contain only the valid vectors,
 	// so we reconstruct only those.

@@ -549,9 +549,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 	// We perform fast merge whenever a compatible trained index is available,
 	// regardless of whether the GPU is enabled for this field.
 	if canFastMerge(trainedIndex, indexOptimizedFor, nvecs) {
-		// fast merge relies on setQuantizers/mergeFrom, which are CPU-only
-		// operations, so the merged index must always be built on the CPU even
-		// when the GPU is enabled for this field.
 		config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, nlist, false)
 		err := v.fastMergeIndexes(trainedIndex, config, drops, vecIndexes, w, closeCh)
 		if err != nil {

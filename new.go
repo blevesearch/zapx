@@ -311,7 +311,6 @@ func (s *interim) processDocument(docNum uint32,
 	var fieldCount int
 	visitField := func(field index.Field) {
 		fieldCount++
-		atomic.AddUint64(&s.stats.TotNewFieldsProcessed, 1)
 		fieldID := uint16(s.getOrDefineField(field.Name()))
 
 		// section specific processing of the field

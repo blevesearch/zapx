@@ -29,7 +29,6 @@ type Stats struct {
 	TotNewDocsProcessed     uint64
 	TotNewDocsIndexed       uint64
 	TotNewDocsDropped       uint64
-	TotNewFieldsProcessed   uint64
 	TotNewVectorsProcessed  uint64
 
 	TotPersistBeg    uint64
@@ -46,9 +45,6 @@ type Stats struct {
 	TotVecSectionMergesBegin            uint64
 	TotVecSectionMergesEnd              uint64
 	TotVecSectionMergeTime              uint64
-	TotVecSectionMergesFastPath         uint64
-	TotVecSectionMergesSlowPath         uint64
-	TotVecSectionMergesErr              uint64
 	TotVecSectionVecsReconstructed      uint64
 	TotVecSectionIVFIndexesCreated      uint64
 	TotVecSectionFlatIndexesCreated     uint64
@@ -57,12 +53,15 @@ type Stats struct {
 	TotVecSectionFastMergeErrs          uint64
 	TotVecSectionNaiveMerges            uint64
 	TotVecSectionMetadataBytesWritten   uint64
-	TotVecSectionFloatIndexBytesRead    uint64
 	TotVecSectionFloatIndexBytesWritten uint64
-	TotVecSectionDeletedOnMerge         uint64
+	TotVecSectionVecsDeleted            uint64
 	TotVecSectionFieldsIndexed          uint64
 	TotVecSectionTrainOps               uint64
 	TotVecSectionIndexWriteTime         uint64
+	TotVecSectionVecsProcessedTime      uint64
+
+	TotVecSectionTrainingPhaseVecsProcessedTime uint64
+	TotVecSectionTrainingPhaseTrainingTime      uint64
 
 	TotOpenBeg    uint64
 	TotOpenEnd    uint64

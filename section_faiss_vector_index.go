@@ -215,7 +215,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 				continue
 			}
 
-			atomic.AddUint64(&vo.stats.TotVecSectionDeletedOnMerge, uint64(newIndexInfo.nvecs-len(newIndexInfo.vecIds)))
+			atomic.AddUint64(&vo.stats.TotVecSectionVecsDeleted, uint64(newIndexInfo.nvecs-len(newIndexInfo.vecIds)))
 
 			// read the type of vector index
 			indexType, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
@@ -537,7 +537,6 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 			vecIndexes[segI].index, err = newFaissBinaryIndexFromBytes(bIndexBytes, fIndexBytes, params)
 		} else {
 			vecIndexes[segI].index, err = newFaissFloat32IndexFromBytes(fIndexBytes, params)
-
 		}
 		if err != nil {
 			freeReconstructedIndexes(vecIndexes)
@@ -662,8 +661,14 @@ func (v *vectorIndexOpaque) writeFaissIndex(vecs *vectorSet, config *faissIndexC
 		if err != nil {
 			return err
 		}
-		atomic.AddUint64(&v.stats.TotVecSectionTrainingTime, uint64(time.Now().Sub(start)))
+
+		if v.trainingPhase {
+			atomic.AddUint64(&v.stats.TotVecSectionTrainingPhaseTrainingTime, uint64(time.Since(start)))
+		} else {
+			atomic.AddUint64(&v.stats.TotVecSectionTrainingTime, uint64(time.Since(start)))
+		}
 		atomic.AddUint64(&v.stats.TotVecSectionTrainOps, 1)
+
 		// the direct map maintained in the IVF index is essential for the
 		// reconstruction of vectors based on the sequential vector IDs in the
 		// future merges use direct map type 1 -> array based direct map, since
@@ -886,11 +891,19 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 		vo.incrementBytesWritten(uint64(w.Count() - fieldStart))
 		vo.fieldAddrs[fieldID] = fieldStart
 	}
-	atomic.AddUint64(&vo.stats.TotVecSectionIndexWriteTime, uint64(time.Now().Sub(start)))
+	atomic.AddUint64(&vo.stats.TotVecSectionIndexWriteTime, uint64(time.Since(start)))
 	return nil
 }
 
 func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, docNum uint32) {
+	start := time.Now()
+	defer func() {
+		atomic.AddUint64(&vo.stats.TotVecSectionVecsProcessedTime, uint64(time.Since(start)))
+		if vo.trainingPhase {
+			atomic.AddUint64(&vo.stats.TotVecSectionTrainingPhaseVecsProcessedTime, uint64(time.Since(start)))
+		}
+	}()
+
 	if fieldID == math.MaxUint16 {
 		// doc processing checkpoint - no action needed
 		return
@@ -988,7 +1001,8 @@ type vectorIndexOpaque struct {
 	tmp0 []byte
 	// numDocs tracks the total number of documents processed during introduction, helpful while
 	// preallocating buffers for faster copy operations
-	numDocs int
+	numDocs       int
+	trainingPhase bool
 }
 
 func (vo *vectorIndexOpaque) incrementBytesWritten(val uint64) {
@@ -1023,6 +1037,12 @@ func (v *vectorIndexOpaque) Set(key string, val interface{}) {
 		v.fieldsOptions = val.(map[string]index.FieldIndexingOptions)
 	case "config":
 		v.config = val.(map[string]interface{})
+		if v.config != nil {
+			if tp, ok := v.config[index.TrainingKey].(*index.TrainingParams); ok && tp != nil {
+				v.trainingPhase = true
+			}
+		}
+
 	case "results":
 		v.numDocs = len(val.([]index.Document))
 	case "stats":

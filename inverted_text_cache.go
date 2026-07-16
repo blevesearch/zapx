@@ -127,7 +127,8 @@ type invertedCacheEntry struct {
 	// termOffsetCache maps term → posting-list offset within the segment
 	// file, avoiding repeated FST traversals for repeated queries on the
 	// same term.  Uses sync.Map (write-once, read-many pattern).
-	// Only populated for terms that are found in the segment.
+	// Populated for both found terms (the resolved offset) and absent terms
+	// (termNotFoundSentinel), so repeated misses also skip the FST.
 	termOffsetCache sync.Map // key: string, val: uint64
 }
 

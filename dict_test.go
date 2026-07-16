@@ -273,9 +273,9 @@ func TestDictionaryBug1156(t *testing.T) {
 	}
 }
 
-// TestTermOffsetCacheWarmedByPostingsList verifies the §19 FST hot-term
-// offset cache: PostingsList() stores the FST postings offset in termOffsetCache
-// so that subsequent PostingsList calls for the same term bypass the FST
+// TestTermOffsetCacheWarmedByPostingsList verifies the FST hot-term offset
+// cache: PostingsList() stores the FST postings offset in termOffsetCache so
+// that subsequent PostingsList calls for the same term bypass the FST
 // traversal entirely.
 func TestTermOffsetCacheWarmedByPostingsList(t *testing.T) {
 	tmpPath := getTempPath("scorch_termoffset.zap")
@@ -294,7 +294,11 @@ func TestTermOffsetCacheWarmedByPostingsList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer seg.Close()
+	defer func() {
+		if cerr := seg.Close(); cerr != nil {
+			t.Fatal(cerr)
+		}
+	}()
 
 	rawDict, err := seg.Dictionary("desc")
 	if err != nil {
@@ -345,7 +349,9 @@ func TestTermOffsetCacheWarmedByPostingsList(t *testing.T) {
 	// Absent terms must be stored with the sentinel so subsequent calls
 	// skip the FST traversal (critical for rare-entity queries with many
 	// segment×field misses).
-	_, _ = d.PostingsList([]byte("notinindex"), nil, nil)
+	if _, err = d.PostingsList([]byte("notinindex"), nil, nil); err != nil {
+		t.Fatalf("PostingsList('notinindex'): %v", err)
+	}
 	raw3, ok3 := ce.termOffsetCache.Load("notinindex")
 	if !ok3 {
 		t.Error("termOffsetCache should store absent terms with the not-found sentinel")

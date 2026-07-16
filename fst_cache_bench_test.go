@@ -28,7 +28,7 @@ func buildBenchDictSegment(numTerms int) (*SegmentBase, []string, error) {
 }
 
 // BenchmarkPostingsListLookup measures repeated postingsList() calls for a
-// working set of terms. §19 caches the FST-resolved offset per term, so after
+// working set of terms. The FST-resolved offset is cached per term, so after
 // the first lookup each call skips the FST traversal.
 func BenchmarkPostingsListLookup(b *testing.B) {
 	seg, terms, err := buildBenchDictSegment(5000)

@@ -119,9 +119,25 @@ func (d *Dictionary) Contains(key []byte) (bool, error) {
 // having the the vellum automaton and start/end key range
 func (d *Dictionary) AutomatonIterator(a segment.Automaton,
 	startKeyInclusive, endKeyExclusive []byte) segment.DictionaryIterator {
+	return d.automatonIterator(a, startKeyInclusive, endKeyExclusive, false)
+}
+
+// AutomatonIteratorOmitCount is like AutomatonIterator, but the returned
+// iterator does not populate DictEntry.Count. Skipping the count avoids a
+// full postings-list read (roaring bitmap deserialization) per visited term,
+// and is intended for candidate-term collection (e.g. fuzzy/regexp/wildcard
+// searchers) where the per-term count is discarded.
+func (d *Dictionary) AutomatonIteratorOmitCount(a segment.Automaton,
+	startKeyInclusive, endKeyExclusive []byte) segment.DictionaryIterator {
+	return d.automatonIterator(a, startKeyInclusive, endKeyExclusive, true)
+}
+
+func (d *Dictionary) automatonIterator(a segment.Automaton,
+	startKeyInclusive, endKeyExclusive []byte, omitCount bool) segment.DictionaryIterator {
 	if d.fst != nil {
 		rv := &DictionaryIterator{
-			d: d,
+			d:         d,
+			omitCount: omitCount,
 		}
 
 		itr, err := d.fst.Search(a, startKeyInclusive, endKeyExclusive)

@@ -17,6 +17,7 @@ package zap
 import (
 	"encoding/binary"
 	"fmt"
+	"unsafe"
 
 	index "github.com/blevesearch/bleve_index_api"
 )
@@ -42,12 +43,27 @@ import (
 // the default id to use for file callbacks that indicates a no op
 const DefaultFileCallbackId = ""
 
+// isLittleEndian reports whether the running architecture stores multi-byte
+// integers least-significant-byte first. WriteUint64Array always encodes
+// little-endian on disk; on a little-endian host that means the on-disk bytes
+// are already a valid in-memory []uint64, so ReadUint64Array can hand back a
+// view directly over them instead of decoding a copy. On any other host we
+// always fall back to decoding, since the raw bytes would decode wrong.
+var isLittleEndian = func() bool {
+	var x uint16 = 1
+	return *(*byte)(unsafe.Pointer(&x)) == 1
+}()
+
+// alignPad is zero-filled padding written before an aligned array's payload.
+var alignPad [8]byte
+
 // FileWriter wraps a CountHashWriter and applies a user provided
 // writer callback to the data being written.
 type FileWriter struct {
 	id        string
 	c         *CountHashWriter
-	tmp       []byte
+	tmp1      []byte // Buffer for small writes
+	tmp2      []byte // Buffer for larger writes
 	processor func(data []byte) []byte
 }
 
@@ -99,56 +115,94 @@ func (w *FileWriter) Sum32() uint32 {
 	return w.c.Sum32()
 }
 
-func (w *FileWriter) grabBuf(size int) []byte {
-	if cap(w.tmp) < size {
-		w.tmp = make([]byte, size)
+func (w *FileWriter) grabBuf1(size int) []byte {
+	if cap(w.tmp1) < size {
+		w.tmp1 = make([]byte, size)
 	}
-	return w.tmp[:size]
+	return w.tmp1[:size]
 }
 
-func (w *FileWriter) WriteArray(arr []byte) (int, error) {
-	arr = w.process(arr)
-	numBuf := w.grabBuf(binary.MaxVarintLen64)
+func (w *FileWriter) grabBuf2(size int) []byte {
+	if cap(w.tmp2) < size {
+		w.tmp2 = make([]byte, size)
+	}
+	return w.tmp2[:size]
+}
 
-	n := binary.PutUvarint(numBuf, uint64(len(arr)))
-	_, err := w.Write(numBuf[:n])
+// WriteUint64Array writes arr as a length-prefixed array of little-endian
+// uint64 values, padded so the payload begins on an 8-byte boundary in the
+// file. Padding is required as per go's unsafe.Pointer conversion rules.
+func (w *FileWriter) WriteUint64Array(arr []uint64) (int, error) {
+	// encode the array as a contiguous slice of bytes, little-endian.
+	buf := w.grabBuf2(len(arr) * 8)
+	for i, v := range arr {
+		binary.LittleEndian.PutUint64(buf[i*8:(i+1)*8], v)
+	}
+	buf = w.process(buf)
+
+	// write the length of the array as a varint
+	numBuf := w.grabBuf1(binary.MaxVarintLen64)
+	n := binary.PutUvarint(numBuf, uint64(len(buf)))
+	total, err := w.Write(numBuf[:n])
 	if err != nil {
-		return 0, err
+		return total, err
 	}
 
-	return w.Write(arr)
+	// pad so buf starts on an 8-byte boundary in the file
+	// write the padding length as well
+	pad := byte((8 - (uint64(w.Count())+1)%8) % 8)
+	written, err := w.Write([]byte{pad})
+	total += written
+	if err != nil {
+		return total, err
+	}
+	if pad > 0 {
+		// write the actual padding bytes, which are always zero
+		written, err = w.Write(alignPad[:pad])
+		total += written
+		if err != nil {
+			return total, err
+		}
+	}
+
+	// write the actual array bytes
+	written, err = w.Write(buf)
+	total += written
+	return total, err
 }
 
+// WriteArrayWithOffsets writes a slice of byte slices as a length-prefixed
+// array of offsets, followed by the concatenated payloads. Each offset is
+// the end position of the corresponding payload in the concatenated buffer.
 func (w *FileWriter) WriteArrayWithOffsets(arr [][]byte) (int, error) {
-	offsets := make([]byte, len(arr)*8)
+	offsets := make([]uint64, len(arr))
 	buf := make([]byte, 0)
-	numBuf := w.grabBuf(binary.MaxVarintLen64)
 
 	for i, a := range arr {
 		a = w.process(a)
 		buf = append(buf, a...)
-		binary.BigEndian.PutUint64(offsets[i*8:(i+1)*8], uint64(len(buf)))
+		offsets[i] = uint64(len(buf))
 	}
 
-	offsets = w.process(offsets)
-	n := binary.PutUvarint(numBuf, uint64(len(offsets)))
-	_, err := w.Write(numBuf[:n])
+	// write the offsets as a length-prefixed array of uint64 values
+	total, err := w.WriteUint64Array(offsets)
 	if err != nil {
-		return 0, err
+		return total, err
 	}
 
-	_, err = w.Write(offsets)
+	// write the concatenated payloads as a length-prefixed byte slice
+	numBuf := w.grabBuf1(binary.MaxVarintLen64)
+	n := binary.PutUvarint(numBuf, uint64(len(buf)))
+	written, err := w.Write(numBuf[:n])
+	total += written
 	if err != nil {
-		return 0, err
+		return total, err
 	}
 
-	n = binary.PutUvarint(numBuf, uint64(len(buf)))
-	_, err = w.Write(numBuf[:n])
-	if err != nil {
-		return 0, err
-	}
-
-	return w.Write(buf)
+	// write the actual concatenated payloads
+	written, err = w.Write(buf)
+	total += written
+	return total, err
 }
 
 // FileReader wraps a reader callback to be applied to data read from a file.
@@ -185,40 +239,62 @@ func (r *FileReader) process(data []byte) ([]byte, error) {
 	return data, nil
 }
 
-func (r *FileReader) ReadArray(data []byte) ([]byte, uint64, error) {
+// ReadUint64Array reads an array written by WriteUint64Array and returns its
+// values, along with the raw byte buffer they were decoded from (mem) when
+// that buffer is a zero-copy view worth retaining - nil otherwise.
+func (r *FileReader) ReadUint64Array(data []byte) (vals []uint64, mem []byte, shift uint64, err error) {
 	var pos uint64
 
+	// read the length of the array as a varint
 	bufLen, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
-	if bufLen < 0 {
-		return nil, 0, fmt.Errorf("read array length is less than 0")
-	} else if bufLen == 0 {
-		return nil, pos, nil
+
+	// read the padding length and skip over the padding bytes
+	pad := data[pos]
+	pos += 1 + uint64(pad)
+
+	if bufLen == 0 {
+		return nil, nil, pos, nil
 	}
 
-	buf, err := r.process(data[pos : pos+bufLen])
+	// read the actual array bytes and apply the reader callback
+	src := data[pos : pos+bufLen]
+	buf, err := r.process(src)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	pos += bufLen
 
-	return buf, pos, nil
+	// if the host is little-endian and the processed buffer is the same length as
+	// the original buffer and has the same backing array, we can return a zero-copy
+	// view of the buffer as a []uint64 slice.
+	if isLittleEndian && len(buf) == len(src) && unsafe.SliceData(buf) == unsafe.SliceData(src) &&
+		uintptr(unsafe.Pointer(&buf[0]))%8 == 0 {
+		return unsafe.Slice((*uint64)(unsafe.Pointer(&buf[0])), len(buf)/8), buf, pos, nil
+	}
+
+	// decode the buffer into a new []uint64 slice
+	vals = make([]uint64, len(buf)/8)
+	for i := range vals {
+		vals[i] = binary.LittleEndian.Uint64(buf[i*8 : (i+1)*8])
+	}
+
+	return vals, nil, pos, nil
 }
 
+// ReadArrayWithOffsets reads an array written by WriteArrayWithOffsets and returns its
+// values, along with the raw byte buffer they were decoded from (mem) when
+// that buffer is a zero-copy view worth retaining - nil otherwise.
 func (r *FileReader) ReadArrayWithOffsets(data []byte) ([][]byte, uint64, error) {
 	var pos uint64
-
-	buf, shift, err := r.ReadArray(data[pos:])
+	// read the offsets as a length-prefixed array of uint64 values
+	offsets, _, shift, err := r.ReadUint64Array(data[pos:])
 	if err != nil {
 		return nil, 0, err
 	}
 	pos += shift
 
-	offsets := make([]uint64, len(buf)/8)
-	for i := 0; i < len(offsets); i++ {
-		offsets[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
-	}
-
+	// read the concatenated payloads as a length-prefixed byte slice
 	dataLen, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
 	if dataLen == 0 {
@@ -227,6 +303,7 @@ func (r *FileReader) ReadArrayWithOffsets(data []byte) ([][]byte, uint64, error)
 	rawData := data[pos : pos+dataLen]
 	pos += dataLen
 
+	// process the concatenated payloads with the reader callback
 	arr := make([][]byte, len(offsets))
 	for i := range offsets {
 		var start uint64

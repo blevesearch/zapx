@@ -98,88 +98,53 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 	}
 
 	// Load Doc ID to Doc Num mapping
-	buf, shift, err := r.ReadArray(mem[pos:])
+	docNums, docNumsMem, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
 	pos += shift
-
-	docNums := make([]uint64, numDocs)
-	for i := 0; i < int(numDocs); i++ {
-		docNums[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
-	}
 
 	// Load the Document Scores
-	buf, shift, err = r.ReadArray(mem[pos:])
+	docScores, docScoresMem, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
 	pos += shift
-
-	docScores := make([]uint64, numDocs)
-	for i := 0; i < int(numDocs); i++ {
-		docScores[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
-	}
 
 	// Load Inner Cells
-	buf, shift, err = r.ReadArray(mem[pos:])
+	innerCells, innerCellsMem, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
 	pos += shift
-
-	innerCells := make([]uint64, len(buf)/8)
-	for i := 0; i < len(buf)/8; i++ {
-		innerCells[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
-	}
 
 	// Load Inner Cell Doc IDs
-	buf, shift, err = r.ReadArray(mem[pos:])
+	innerDocIDs, innerDocIDsMem, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
 	pos += shift
-
-	innerDocIDs := make([]uint64, len(buf)/8)
-	for i := 0; i < len(buf)/8; i++ {
-		innerDocIDs[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
-	}
 
 	// Load Cross Cells
-	buf, shift, err = r.ReadArray(mem[pos:])
+	crossCells, crossCellsMem, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
 	pos += shift
-
-	crossCells := make([]uint64, len(buf)/8)
-	for i := 0; i < len(buf)/8; i++ {
-		crossCells[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
-	}
 
 	// Load Cross Cell Doc IDs
-	buf, shift, err = r.ReadArray(mem[pos:])
+	crossDocIDs, crossDocIDsMem, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
 	pos += shift
-
-	crossDocIDs := make([]uint64, len(buf)/8)
-	for i := 0; i < len(buf)/8; i++ {
-		crossDocIDs[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
-	}
 
 	// Load BBox Metadata without expanding the BBox data
-	buf, shift, err = r.ReadArray(mem[pos:])
+	bBoxesOffsets, bBoxesOffsetsMem, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
 	pos += shift
-
-	bBoxesOffsets := make([]uint64, numDocs)
-	for i := 0; i < int(numDocs); i++ {
-		bBoxesOffsets[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
-	}
 
 	bBoxesLen, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
@@ -188,16 +153,11 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 	pos += bBoxesLen
 
 	// Load Shape Metadata without expanding the Shape data
-	buf, shift, err = r.ReadArray(mem[pos:])
+	shapeOffsets, shapeOffsetsMem, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
 	pos += shift
-
-	shapeOffsets := make([]uint64, numDocs)
-	for i := 0; i < int(numDocs); i++ {
-		shapeOffsets[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
-	}
 
 	shapeLen, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)
@@ -207,8 +167,51 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 
 	excludedGeoDocs := createNewExcludeBitmap(except, docNums)
 
-	rv := newGeoCacheEntry(innerCells, innerDocIDs, crossCells, crossDocIDs, bBoxesOffsets,
-		bboxMem, shapeOffsets, shapeMem, numDocs, docNums, docScores, excludedGeoDocs, r)
+	rv := &geoCacheEntry{
+		innerCells:    innerCells,
+		innerCellsMem: innerCellsMem,
+
+		innerDocIDs:    innerDocIDs,
+		innerDocIDsMem: innerDocIDsMem,
+
+		crossCells:    crossCells,
+		crossCellsMem: crossCellsMem,
+
+		crossDocIDs:    crossDocIDs,
+		crossDocIDsMem: crossDocIDsMem,
+
+		bboxOffsets:    bBoxesOffsets,
+		bboxOffsetsMem: bBoxesOffsetsMem,
+		bboxMem:        bboxMem,
+
+		shapeOffsets:    shapeOffsets,
+		shapeOffsetsMem: shapeOffsetsMem,
+		shapeMem:        shapeMem,
+
+		numDocs: numDocs,
+
+		docNums:    docNums,
+		docNumsMem: docNumsMem,
+
+		docScores:    docScores,
+		docScoresMem: docScoresMem,
+
+		tracker: &ewma{
+			alpha:  0.4,
+			sample: 1,
+		},
+		refs: 1,
+
+		except:     excludedGeoDocs,
+		fileReader: r,
+
+		scoresPool: sync.Pool{
+			New: func() interface{} {
+				scores := make([]uint64, numDocs)
+				return &scores
+			},
+		},
+	}
 
 	gc.insertLOCKED(field, rv)
 
@@ -278,63 +281,53 @@ func (gc *geoIndexCache) cleanup() bool {
 }
 
 // geoCacheEntry represents a cached entry for a specific field in the geo index.
+// Each entry holds a copy of the memory to prevent the underlying memory from being
+// released while the entry is still in use.
+// Includes a pool for reusing score arrays to reduce memory allocations during queries.
 type geoCacheEntry struct {
-	innerCells  []uint64
-	innerDocIDs []uint64
+	innerCells    []uint64
+	innerCellsMem []byte
 
-	crossCells  []uint64
-	crossDocIDs []uint64
+	innerDocIDs    []uint64
+	innerDocIDsMem []byte
 
-	// contains offsets for each bounding box in the bboxMem slice
-	bboxOffsets []uint64
-	// contains raw unprocessed bounding box data for on demand processing
-	bboxMem []byte
+	crossCells    []uint64
+	crossCellsMem []byte
 
-	// contains offsets for each shape in the shapeMem slice
-	shapeOffsets []uint64
-	// contains raw unprocessed shape data for on demand processing
-	shapeMem []byte
+	crossDocIDs    []uint64
+	crossDocIDsMem []byte
 
-	numDocs   uint64
-	docNums   []uint64
-	docScores []uint64
+	bboxOffsets    []uint64
+	bboxOffsetsMem []byte
+	bboxMem        []byte
+
+	shapeOffsets    []uint64
+	shapeOffsetsMem []byte
+	shapeMem        []byte
+
+	numDocs      uint64
+	docNums      []uint64
+	docNumsMem   []byte
+	docScores    []uint64
+	docScoresMem []byte
 
 	tracker *ewma
 	refs    int64
 
 	except     *roaring.Bitmap
 	fileReader *FileReader
+
+	scoresPool sync.Pool
 }
 
-func newGeoCacheEntry(innerCells, innerDocIDs, crossCells, crossDocIDs, bboxOffsets []uint64,
-	bboxMem []byte, shapeOffsets []uint64, shapeMem []byte, numDocs uint64, docNums []uint64,
-	docScores []uint64, except *roaring.Bitmap, r *FileReader) *geoCacheEntry {
+func (gce *geoCacheEntry) GetScoreArray() []uint64 {
+	return *gce.scoresPool.Get().(*[]uint64)
+}
 
-	return &geoCacheEntry{
-		innerCells:  innerCells,
-		innerDocIDs: innerDocIDs,
-
-		crossCells:  crossCells,
-		crossDocIDs: crossDocIDs,
-
-		bboxOffsets: bboxOffsets,
-		bboxMem:     bboxMem,
-
-		shapeOffsets: shapeOffsets,
-		shapeMem:     shapeMem,
-
-		numDocs:   numDocs,
-		docNums:   docNums,
-		docScores: docScores,
-
-		tracker: &ewma{
-			alpha:  0.4,
-			sample: 1,
-		},
-		refs: 1,
-
-		except:     except,
-		fileReader: r,
+func (gce *geoCacheEntry) PutScoreArray(scores []uint64) {
+	if scores != nil {
+		clear(scores)
+		gce.scoresPool.Put(&scores)
 	}
 }
 

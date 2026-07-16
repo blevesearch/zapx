@@ -190,6 +190,7 @@ func (sb *SegmentBase) Close() (err error) {
 	sb.trainedIndexCache.Clear()
 	sb.synIndexCache.Clear()
 	sb.nstIndexCache.Clear()
+	sb.geoIndexCache.Clear()
 	return nil
 }
 

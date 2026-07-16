@@ -188,8 +188,7 @@ type geoShapeV2IndexSectionOpaque struct {
 	bytesWritten uint64
 
 	// temporary buffer for reuse
-	tmp  []byte // single elements
-	tmp2 []byte // large arrays
+	tmp []byte
 
 	init bool
 }
@@ -197,7 +196,6 @@ type geoShapeV2IndexSectionOpaque struct {
 func (g *geoShapeV2IndexSectionOpaque) Reset() error {
 	g.results = nil
 	g.tmp = g.tmp[:0]
-	g.tmp2 = g.tmp2[:0]
 	g.init = false
 	clear(g.indexContent)
 	clear(g.fieldAddrs)
@@ -210,15 +208,6 @@ func (g *geoShapeV2IndexSectionOpaque) grabBuf(size int) []byte {
 	if cap(buf) < size {
 		buf = make([]byte, size)
 		g.tmp = buf
-	}
-	return buf[:size]
-}
-
-func (g *geoShapeV2IndexSectionOpaque) grabBuf2(size int) []byte {
-	buf := g.tmp2
-	if cap(buf) < size {
-		buf = make([]byte, size)
-		g.tmp2 = buf
 	}
 	return buf[:size]
 }
@@ -357,22 +346,13 @@ func (g *geoShapeV2IndexSectionOpaque) writeIndexContent(content *geoIndexConten
 	}
 
 	// Write Doc ID to Doc Num mapping
-	buf := g.grabBuf2(8 * len(content.docNums))
-	for i, docNum := range content.docNums {
-		binary.BigEndian.PutUint64(buf[i*8:(i+1)*8], docNum)
-	}
-
-	_, err = w.WriteArray(buf)
+	_, err = w.WriteUint64Array(content.docNums)
 	if err != nil {
 		return err
 	}
 
 	// Write the Document Scores
-	buf = g.grabBuf2(8 * len(content.docScores))
-	for i, docScore := range content.docScores {
-		binary.BigEndian.PutUint64(buf[i*8:(i+1)*8], docScore)
-	}
-	_, err = w.WriteArray(buf)
+	_, err = w.WriteUint64Array(content.docScores)
 	if err != nil {
 		return err
 	}
@@ -381,21 +361,13 @@ func (g *geoShapeV2IndexSectionOpaque) writeIndexContent(content *geoIndexConten
 	inner, innerDocIDs := sortArrayPair(content.innerCells, content.innerDocIDs)
 
 	// Write Inner Cells
-	buf = g.grabBuf2(8 * len(inner))
-	for i, cell := range inner {
-		binary.BigEndian.PutUint64(buf[i*8:(i+1)*8], cell)
-	}
-	_, err = w.WriteArray(buf)
+	_, err = w.WriteUint64Array(inner)
 	if err != nil {
 		return err
 	}
 
 	// Write Inner Cell Doc IDs
-	buf = g.grabBuf2(8 * len(innerDocIDs))
-	for i, docID := range innerDocIDs {
-		binary.BigEndian.PutUint64(buf[i*8:(i+1)*8], docID)
-	}
-	_, err = w.WriteArray(buf)
+	_, err = w.WriteUint64Array(innerDocIDs)
 	if err != nil {
 		return err
 	}
@@ -404,21 +376,13 @@ func (g *geoShapeV2IndexSectionOpaque) writeIndexContent(content *geoIndexConten
 	cross, crossDocIDs := sortArrayPair(content.crossCells, content.crossDocIDs)
 
 	// Write Cross Cells
-	buf = g.grabBuf2(8 * len(cross))
-	for i, cell := range cross {
-		binary.BigEndian.PutUint64(buf[i*8:(i+1)*8], cell)
-	}
-	_, err = w.WriteArray(buf)
+	_, err = w.WriteUint64Array(cross)
 	if err != nil {
 		return err
 	}
 
 	// Write Cross Cell Doc IDs
-	buf = g.grabBuf2(8 * len(crossDocIDs))
-	for i, docID := range crossDocIDs {
-		binary.BigEndian.PutUint64(buf[i*8:(i+1)*8], docID)
-	}
-	_, err = w.WriteArray(buf)
+	_, err = w.WriteUint64Array(crossDocIDs)
 	if err != nil {
 		return err
 	}
@@ -450,76 +414,46 @@ func loadGeoIndexContent(r *FileReader, mem []byte) (*geoIndexContent, error) {
 	}
 
 	// Load Doc ID to Doc Num mapping
-	buf, shift, err := r.ReadArray(mem[pos:])
+	docNums, _, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
 	pos += shift
-
-	docNums := make([]uint64, numDocs)
-	for i := 0; i < int(numDocs); i++ {
-		docNums[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
-	}
 
 	// Load the Document Scores
-	buf, shift, err = r.ReadArray(mem[pos:])
+	docScores, _, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
 	pos += shift
-
-	docScores := make([]uint64, numDocs)
-	for i := 0; i < int(numDocs); i++ {
-		docScores[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
-	}
 
 	// Load Inner Cells
-	buf, shift, err = r.ReadArray(mem[pos:])
+	innerCells, _, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
 	pos += shift
-
-	innerCells := make([]uint64, len(buf)/8)
-	for i := 0; i < len(buf)/8; i++ {
-		innerCells[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
-	}
 
 	// Load Inner Cell Doc IDs
-	buf, shift, err = r.ReadArray(mem[pos:])
+	innerDocIDs, _, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
 	pos += shift
-
-	innerDocIDs := make([]uint64, len(buf)/8)
-	for i := 0; i < len(buf)/8; i++ {
-		innerDocIDs[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
-	}
 
 	// Load Cross Cells
-	buf, shift, err = r.ReadArray(mem[pos:])
+	crossCells, _, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
 	pos += shift
-
-	crossCells := make([]uint64, len(buf)/8)
-	for i := 0; i < len(buf)/8; i++ {
-		crossCells[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
-	}
 
 	// Load Cross Cell Doc IDs
-	buf, shift, err = r.ReadArray(mem[pos:])
+	crossDocIDs, _, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
 	pos += shift
-
-	crossDocIDs := make([]uint64, len(buf)/8)
-	for i := 0; i < len(buf)/8; i++ {
-		crossDocIDs[i] = binary.BigEndian.Uint64(buf[i*8 : (i+1)*8])
-	}
 
 	// Load BBox Metadata
 	bBoxes, shift, err := r.ReadArrayWithOffsets(mem[pos:])

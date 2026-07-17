@@ -60,11 +60,11 @@ var alignPad [8]byte
 // FileWriter wraps a CountHashWriter and applies a user provided
 // writer callback to the data being written.
 type FileWriter struct {
-	id        string
-	c         *CountHashWriter
-	tmp1      []byte // Buffer for small writes
-	tmp2      []byte // Buffer for larger writes
-	processor func(data []byte) []byte
+	id         string
+	c          *CountHashWriter
+	varintBuf  []byte // Reusable buffer for varint length prefixes
+	payloadBuf []byte // Reusable buffer for encoding array payloads
+	processor  func(data []byte) []byte
 }
 
 // creates an empty FileWriter with no callback. Used
@@ -115,41 +115,45 @@ func (w *FileWriter) Sum32() uint32 {
 	return w.c.Sum32()
 }
 
-func (w *FileWriter) grabBuf1(size int) []byte {
-	if cap(w.tmp1) < size {
-		w.tmp1 = make([]byte, size)
+func (w *FileWriter) grabVarintBuf(size int) []byte {
+	if cap(w.varintBuf) < size {
+		w.varintBuf = make([]byte, size)
 	}
-	return w.tmp1[:size]
+	return w.varintBuf[:size]
 }
 
-func (w *FileWriter) grabBuf2(size int) []byte {
-	if cap(w.tmp2) < size {
-		w.tmp2 = make([]byte, size)
+func (w *FileWriter) grabPayloadBuf(size int) []byte {
+	if cap(w.payloadBuf) < size {
+		w.payloadBuf = make([]byte, size)
 	}
-	return w.tmp2[:size]
+	return w.payloadBuf[:size]
 }
 
 // WriteUint64Array writes arr as a length-prefixed array of little-endian
 // uint64 values, padded so the payload begins on an 8-byte boundary in the
-// file. Padding is required as per go's unsafe.Pointer conversion rules.
+// file. The alignment is what lets ReadUint64Array return a zero-copy
+// []uint64 view over the mmap'd file within go's unsafe.Pointer conversion
+// rules.
 func (w *FileWriter) WriteUint64Array(arr []uint64) (int, error) {
 	// encode the array as a contiguous slice of bytes, little-endian.
-	buf := w.grabBuf2(len(arr) * 8)
+	buf := w.grabPayloadBuf(len(arr) * 8)
 	for i, v := range arr {
 		binary.LittleEndian.PutUint64(buf[i*8:(i+1)*8], v)
 	}
 	buf = w.process(buf)
 
 	// write the length of the array as a varint
-	numBuf := w.grabBuf1(binary.MaxVarintLen64)
+	numBuf := w.grabVarintBuf(binary.MaxVarintLen64)
 	n := binary.PutUvarint(numBuf, uint64(len(buf)))
 	total, err := w.Write(numBuf[:n])
 	if err != nil {
 		return total, err
 	}
 
-	// pad so buf starts on an 8-byte boundary in the file
-	// write the padding length as well
+	// pad so buf starts on an 8-byte boundary in the file, and write the
+	// padding length first so the reader can skip the padding. The +1
+	// accounts for the pad-length byte itself, which is written before
+	// the padding.
 	pad := byte((8 - (uint64(w.Count())+1)%8) % 8)
 	written, err := w.Write([]byte{pad})
 	total += written
@@ -191,7 +195,7 @@ func (w *FileWriter) WriteArrayWithOffsets(arr [][]byte) (int, error) {
 	}
 
 	// write the concatenated payloads as a length-prefixed byte slice
-	numBuf := w.grabBuf1(binary.MaxVarintLen64)
+	numBuf := w.grabVarintBuf(binary.MaxVarintLen64)
 	n := binary.PutUvarint(numBuf, uint64(len(buf)))
 	written, err := w.Write(numBuf[:n])
 	total += written
@@ -242,6 +246,12 @@ func (r *FileReader) process(data []byte) ([]byte, error) {
 // ReadUint64Array reads an array written by WriteUint64Array and returns its
 // values, along with the raw byte buffer they were decoded from (mem) when
 // that buffer is a zero-copy view worth retaining - nil otherwise.
+//
+// Callers must treat vals as read-only: on the zero-copy path it aliases the
+// mmap'd file (or the reader callback's output buffer) rather than a private
+// copy. When mem is non-nil, callers holding on to vals must retain mem
+// alongside it to keep the backing array reachable, since vals is derived
+// via unsafe pointer conversion.
 func (r *FileReader) ReadUint64Array(data []byte) (vals []uint64, mem []byte, shift uint64, err error) {
 	var pos uint64
 
@@ -282,9 +292,11 @@ func (r *FileReader) ReadUint64Array(data []byte) (vals []uint64, mem []byte, sh
 	return vals, nil, pos, nil
 }
 
-// ReadArrayWithOffsets reads an array written by WriteArrayWithOffsets and returns its
-// values, along with the raw byte buffer they were decoded from (mem) when
-// that buffer is a zero-copy view worth retaining - nil otherwise.
+// ReadArrayWithOffsets reads an array written by WriteArrayWithOffsets and
+// returns the individual payloads, each processed through the reader
+// callback, along with the number of bytes consumed from data. Without a
+// callback the payloads are zero-copy subslices of data and must be treated
+// as read-only.
 func (r *FileReader) ReadArrayWithOffsets(data []byte) ([][]byte, uint64, error) {
 	var pos uint64
 	// read the offsets as a length-prefixed array of uint64 values

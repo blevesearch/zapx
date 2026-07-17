@@ -63,7 +63,9 @@ func (g *geoShapeV2IndexSection) AddrForField(opaque map[int]resetable, fieldID 
 type geoIndexInfo struct {
 	content *geoIndexContent
 
-	docIDMap []uint64
+	// newDocNums maps a document's old segment doc number (the index) to its
+	// doc number in the merged segment, with docDropped marking deleted docs.
+	newDocNums []uint64
 }
 
 func (g *geoShapeV2IndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
@@ -108,10 +110,10 @@ func (g *geoShapeV2IndexSection) Merge(opaque map[int]resetable, segments []*Seg
 				return err
 			}
 
-			// Append the content and the corresponding doc ID mapping for this segment
+			// Append the content and the corresponding doc number remapping for this segment
 			indexInfos = append(indexInfos, &geoIndexInfo{
-				content:  content,
-				docIDMap: newDocNumsIn[segI],
+				content:    content,
+				newDocNums: newDocNumsIn[segI],
 			})
 		}
 
@@ -402,7 +404,7 @@ func (g *geoShapeV2IndexSectionOpaque) writeIndexContent(content *geoIndexConten
 	return nil
 }
 
-// Used during segment merging, so load everything including bounding boxes and shapes
+// loadGeoIndexContent decodes a field's complete geo index content from mem.
 func loadGeoIndexContent(r *FileReader, mem []byte) (*geoIndexContent, error) {
 	var pos uint64
 
@@ -481,24 +483,27 @@ func loadGeoIndexContent(r *FileReader, mem []byte) (*geoIndexContent, error) {
 	}, nil
 }
 
+// mergeIndexContents combines the geo index contents of multiple segments into
+// a single geoIndexContent, dropping deleted documents and remapping doc numbers.
 func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndexInfo) (*geoIndexContent, error) {
 	mergedContent := &geoIndexContent{}
 	mergedContent.alloc()
 
 	var numDocs uint64
-	newDocNumMapping := make(map[uint64]uint64)
+	newGeoDocIDs := make(map[uint64]uint64)
 
-	// Calculate the new docNums and create a mapping from old docNum to new docNum
+	// Assign geo docIDs in the merged segment and build a mapping from
+	// merged-segment doc number to merged geo docID
 	for _, indexInfo := range indexInfos {
-		for _, docNum := range indexInfo.content.docNums {
-			newDocNum := indexInfo.docIDMap[docNum]
+		for _, oldDocNum := range indexInfo.content.docNums {
+			newDocNum := indexInfo.newDocNums[oldDocNum]
 			if newDocNum == docDropped {
 				continue
 			}
 
-			newDocNumInternal := numDocs
+			newGeoDocID := numDocs
 			numDocs++
-			newDocNumMapping[newDocNum] = newDocNumInternal
+			newGeoDocIDs[newDocNum] = newGeoDocID
 			mergedContent.docNums = append(mergedContent.docNums, newDocNum)
 		}
 	}
@@ -508,37 +513,37 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 	}
 
 	for _, indexInfo := range indexInfos {
-		// Merge inner cells and their corresponding doc IDs
+		// Merge inner cells and their corresponding geo docIDs
 		for i, cell := range indexInfo.content.innerCells {
-			// Calculate the new docNum for the current cell's doc ID
-			internalDocNum := indexInfo.content.innerDocIDs[i]
-			docNum := indexInfo.content.docNums[internalDocNum]
-			newDocNum := indexInfo.docIDMap[docNum]
+			// Calculate the merged geo docID for the current cell's document
+			geoDocID := indexInfo.content.innerDocIDs[i]
+			oldDocNum := indexInfo.content.docNums[geoDocID]
+			newDocNum := indexInfo.newDocNums[oldDocNum]
 			if newDocNum == docDropped {
 				continue
 			}
-			newDocNumInternal := newDocNumMapping[newDocNum]
+			newGeoDocID := newGeoDocIDs[newDocNum]
 			mergedContent.innerCells = append(mergedContent.innerCells, cell)
-			mergedContent.innerDocIDs = append(mergedContent.innerDocIDs, newDocNumInternal)
+			mergedContent.innerDocIDs = append(mergedContent.innerDocIDs, newGeoDocID)
 		}
-		// Merge cross cells and their corresponding doc IDs
+		// Merge cross cells and their corresponding geo docIDs
 		for i, cell := range indexInfo.content.crossCells {
-			// Calculate the new docNum for the current cell's doc ID
-			internalDocNum := indexInfo.content.crossDocIDs[i]
-			docNum := indexInfo.content.docNums[internalDocNum]
-			newDocNum := indexInfo.docIDMap[docNum]
+			// Calculate the merged geo docID for the current cell's document
+			geoDocID := indexInfo.content.crossDocIDs[i]
+			oldDocNum := indexInfo.content.docNums[geoDocID]
+			newDocNum := indexInfo.newDocNums[oldDocNum]
 			if newDocNum == docDropped {
 				continue
 			}
-			newDocNumInternal := newDocNumMapping[newDocNum]
+			newGeoDocID := newGeoDocIDs[newDocNum]
 			mergedContent.crossCells = append(mergedContent.crossCells, cell)
-			mergedContent.crossDocIDs = append(mergedContent.crossDocIDs, newDocNumInternal)
+			mergedContent.crossDocIDs = append(mergedContent.crossDocIDs, newGeoDocID)
 		}
 		// Merge bounding boxes
 		for i, bbox := range indexInfo.content.boundingBoxes {
-			internalDocNum := uint64(i)
-			docNum := indexInfo.content.docNums[internalDocNum]
-			newDocNum := indexInfo.docIDMap[docNum]
+			geoDocID := uint64(i)
+			oldDocNum := indexInfo.content.docNums[geoDocID]
+			newDocNum := indexInfo.newDocNums[oldDocNum]
 			if newDocNum == docDropped {
 				continue
 			}
@@ -546,9 +551,9 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 		}
 		// Merge shapes
 		for i, shape := range indexInfo.content.shapes {
-			internalDocNum := uint64(i)
-			docNum := indexInfo.content.docNums[internalDocNum]
-			newDocNum := indexInfo.docIDMap[docNum]
+			geoDocID := uint64(i)
+			oldDocNum := indexInfo.content.docNums[geoDocID]
+			newDocNum := indexInfo.newDocNums[oldDocNum]
 			if newDocNum == docDropped {
 				continue
 			}
@@ -556,9 +561,9 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 		}
 		// Merge document scores
 		for i, score := range indexInfo.content.docScores {
-			internalDocNum := uint64(i)
-			docNum := indexInfo.content.docNums[internalDocNum]
-			newDocNum := indexInfo.docIDMap[docNum]
+			geoDocID := uint64(i)
+			oldDocNum := indexInfo.content.docNums[geoDocID]
+			newDocNum := indexInfo.newDocNums[oldDocNum]
 			if newDocNum == docDropped {
 				continue
 			}

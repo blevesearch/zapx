@@ -218,6 +218,10 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 	return rv, nil
 }
 
+// createNewExcludeBitmap translates an exclusion bitmap from segment doc
+// number space into geo docID space: bit i is set in the result when the
+// segment doc number at docNums[i] is present in except. Returns nil when
+// there is nothing to exclude.
 func createNewExcludeBitmap(except *roaring.Bitmap, docNums []uint64) *roaring.Bitmap {
 	if except == nil || except.IsEmpty() {
 		return nil
@@ -257,6 +261,14 @@ func (gc *geoIndexCache) monitor() {
 	}
 }
 
+// cleanup runs one eviction pass over the cache. For each entry it folds the
+// hit count accumulated since the last pass into the entry's moving average
+// (see ewma.add), then evicts entries that have no outstanding references and
+// whose average traffic has decayed to at most (1 - alpha) — the value the
+// average falls to after one zero-hit pass from an average of 1 hit per pass.
+// In other words, an entry is evicted once it is unreferenced and averages
+// less than one hit per monitoring cycle. Returns true when the cache is
+// empty, signalling the monitor goroutine to exit.
 func (gc *geoIndexCache) cleanup() bool {
 	gc.m.Lock()
 
@@ -370,18 +382,18 @@ func (gce *geoCacheEntry) CrossDocIDs() []uint64 {
 	return gce.crossDocIDs
 }
 
-func (gce *geoCacheEntry) BoundingBox(docNum uint64) ([]byte, error) {
-	if docNum >= gce.numDocs {
-		return nil, fmt.Errorf("docNum out of range")
+func (gce *geoCacheEntry) BoundingBox(geoDocID uint64) ([]byte, error) {
+	if geoDocID >= gce.numDocs {
+		return nil, fmt.Errorf("geo docID out of range")
 	}
 
 	var offsetStart uint64
-	if docNum != 0 {
-		offsetStart = gce.bboxOffsets[docNum-1]
+	if geoDocID != 0 {
+		offsetStart = gce.bboxOffsets[geoDocID-1]
 	}
-	offsetEnd := gce.bboxOffsets[docNum]
+	offsetEnd := gce.bboxOffsets[geoDocID]
 	if offsetEnd == offsetStart {
-		return nil, fmt.Errorf("no bounding box for docNum %d", docNum)
+		return nil, fmt.Errorf("no bounding box for geo docID %d", geoDocID)
 	}
 
 	buf, err := gce.fileReader.process(gce.bboxMem[offsetStart:offsetEnd])
@@ -392,18 +404,18 @@ func (gce *geoCacheEntry) BoundingBox(docNum uint64) ([]byte, error) {
 	return buf, nil
 }
 
-func (gce *geoCacheEntry) Shape(docNum uint64) ([]byte, error) {
-	if docNum >= gce.numDocs {
-		return nil, fmt.Errorf("docNum out of range")
+func (gce *geoCacheEntry) Shape(geoDocID uint64) ([]byte, error) {
+	if geoDocID >= gce.numDocs {
+		return nil, fmt.Errorf("geo docID out of range")
 	}
 
 	var offsetStart uint64
-	if docNum != 0 {
-		offsetStart = gce.shapeOffsets[docNum-1]
+	if geoDocID != 0 {
+		offsetStart = gce.shapeOffsets[geoDocID-1]
 	}
-	offsetEnd := gce.shapeOffsets[docNum]
+	offsetEnd := gce.shapeOffsets[geoDocID]
 	if offsetEnd == offsetStart {
-		return nil, fmt.Errorf("no shape for docNum %d", docNum)
+		return nil, fmt.Errorf("no shape for geo docID %d", geoDocID)
 	}
 
 	buf, err := gce.fileReader.process(gce.shapeMem[offsetStart:offsetEnd])
@@ -426,6 +438,6 @@ func (gce *geoCacheEntry) DocScores() []uint64 {
 	return gce.docScores
 }
 
-func (gce *geoCacheEntry) Exclude() *roaring.Bitmap {
+func (gce *geoCacheEntry) Excluded() *roaring.Bitmap {
 	return gce.except
 }

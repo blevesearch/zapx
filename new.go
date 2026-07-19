@@ -100,6 +100,9 @@ var interimPool = sync.Pool{New: func() interface{} { return &interim{} }}
 // interim holds temporary working data used while converting from
 // analysis results to a zap-encoded segment
 type interim struct {
+	// atomic access to this variable, moved to top to correct alignment issues on ARM, 386 and 32-bit MIPS.
+	bytesWritten uint64
+
 	results []index.Document
 
 	// edge list for nested documents: child -> parent
@@ -129,9 +132,6 @@ type interim struct {
 
 	lastNumDocs int
 	lastOutSize int
-
-	// atomic access to this variable
-	bytesWritten uint64
 
 	opaque map[int]resetable
 }

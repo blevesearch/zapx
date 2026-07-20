@@ -57,7 +57,7 @@ func (gc *geoIndexCache) Clear() {
 	gc.m.Unlock()
 }
 
-func (gc *geoIndexCache) loadOrCreate(field uint16, mem []byte, except *roaring.Bitmap, r *FileReader) (*geoCacheEntry, error) {
+func (gc *geoIndexCache) loadOrCreate(field uint16, mem []byte, except *roaring.Bitmap, r *FileReader) (*geoData, error) {
 	gc.m.RLock()
 	if gc.isClosed {
 		gc.m.RUnlock()
@@ -67,7 +67,7 @@ func (gc *geoIndexCache) loadOrCreate(field uint16, mem []byte, except *roaring.
 	entry, ok := gc.cache[field]
 	if ok {
 		gc.m.RUnlock()
-		return entry.load(), nil
+		return entry.load(except), nil
 	}
 	gc.m.RUnlock()
 
@@ -79,7 +79,7 @@ func (gc *geoIndexCache) loadOrCreate(field uint16, mem []byte, except *roaring.
 
 	entry, ok = gc.cache[field]
 	if ok {
-		return entry.load(), nil
+		return entry.load(except), nil
 	}
 
 	return gc.createAndCacheLocked(field, mem, except, r)
@@ -87,7 +87,7 @@ func (gc *geoIndexCache) loadOrCreate(field uint16, mem []byte, except *roaring.
 }
 
 func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
-	except *roaring.Bitmap, r *FileReader) (*geoCacheEntry, error) {
+	except *roaring.Bitmap, r *FileReader) (*geoData, error) {
 
 	var pos uint64
 	// Load Num Docs
@@ -104,8 +104,15 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 	}
 	pos += shift
 
-	// Load the Document Scores
-	docScores, docScoresMem, shift, err := r.ReadUint64Array(mem[pos:])
+	// Load the Document Scores Inner
+	docScoresInner, docScoresInnerMem, shift, err := r.ReadUint64Array(mem[pos:])
+	if err != nil {
+		return nil, err
+	}
+	pos += shift
+
+	// Load the Document Scores Cross
+	docScoresCross, docScoresCrossMem, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
@@ -165,8 +172,6 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 	shapeMem := mem[pos : pos+shapeLen]
 	pos += shapeLen
 
-	excludedGeoDocs := createNewExcludeBitmap(except, docNums)
-
 	rv := &geoCacheEntry{
 		innerCells:    innerCells,
 		innerCellsMem: innerCellsMem,
@@ -193,8 +198,10 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 		docNums:    docNums,
 		docNumsMem: docNumsMem,
 
-		docScores:    docScores,
-		docScoresMem: docScoresMem,
+		docScoresInner:    docScoresInner,
+		docScoresInnerMem: docScoresInnerMem,
+		docScoresCross:    docScoresCross,
+		docScoresCrossMem: docScoresCrossMem,
 
 		tracker: &ewma{
 			alpha:  0.4,
@@ -202,7 +209,6 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 		},
 		refs: 1,
 
-		except:     excludedGeoDocs,
 		fileReader: r,
 
 		scoresPool: sync.Pool{
@@ -215,7 +221,13 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 
 	gc.insertLOCKED(field, rv)
 
-	return rv, nil
+	// the entry is created with refs == 1, which accounts for the view
+	// returned here, so we build the view directly rather than calling
+	// load() (which would bump the ref count a second time)
+	return &geoData{
+		geoCacheEntry: rv,
+		except:        createNewExcludeBitmap(except, rv.docNums),
+	}, nil
 }
 
 // createNewExcludeBitmap translates an exclusion bitmap from segment doc
@@ -317,19 +329,39 @@ type geoCacheEntry struct {
 	shapeOffsetsMem []byte
 	shapeMem        []byte
 
-	numDocs      uint64
-	docNums      []uint64
-	docNumsMem   []byte
-	docScores    []uint64
-	docScoresMem []byte
+	numDocs    uint64
+	docNums    []uint64
+	docNumsMem []byte
+
+	docScoresInner    []uint64
+	docScoresInnerMem []byte
+
+	docScoresCross    []uint64
+	docScoresCrossMem []byte
 
 	tracker *ewma
 	refs    int64
 
-	except     *roaring.Bitmap
 	fileReader *FileReader
 
 	scoresPool sync.Pool
+}
+
+// geoData is a per-load view over a shared geoCacheEntry. The heavy,
+// immutable geo data (cells, scores, docNums, ...) lives on the shared
+// entry, while the exclude bitmap is derived fresh per load from the
+// snapshot's except bitmap. This mirrors the vector cache, and prevents
+// a snapshot's deletions from being baked into the shared entry and
+// going stale for subsequent snapshots that hit the same entry.
+type geoData struct {
+	*geoCacheEntry
+	except *roaring.Bitmap
+}
+
+// Excluded returns the per-load set of excluded geo docIDs, rather than
+// anything cached on the shared entry.
+func (g *geoData) Excluded() *roaring.Bitmap {
+	return g.except
 }
 
 func (gce *geoCacheEntry) GetScoreArray() []uint64 {
@@ -347,11 +379,17 @@ func (gce *geoCacheEntry) Close() {
 	gce.decRef()
 }
 
-func (gce *geoCacheEntry) load() *geoCacheEntry {
+func (gce *geoCacheEntry) load(except *roaring.Bitmap) *geoData {
 	gce.incHits()
 	gce.incRef()
 
-	return gce
+	// derive the exclude bitmap fresh per load: the shared entry is
+	// immutable, but the set of excluded docs varies by snapshot, so it
+	// must not be cached on the entry
+	return &geoData{
+		geoCacheEntry: gce,
+		except:        createNewExcludeBitmap(except, gce.docNums),
+	}
 }
 
 func (gce *geoCacheEntry) incHits() {
@@ -434,10 +472,6 @@ func (gce *geoCacheEntry) NumDocs() uint64 {
 	return gce.numDocs
 }
 
-func (gce *geoCacheEntry) DocScores() []uint64 {
-	return gce.docScores
-}
-
-func (gce *geoCacheEntry) Excluded() *roaring.Bitmap {
-	return gce.except
+func (gce *geoCacheEntry) DocScores() ([]uint64, []uint64) {
+	return gce.docScoresInner, gce.docScoresCross
 }

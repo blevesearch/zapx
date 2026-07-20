@@ -252,8 +252,9 @@ type geoIndexContent struct {
 	crossCells  []uint64
 	crossDocIDs []uint64
 
-	docNums   []uint64
-	docScores []uint64
+	docNums        []uint64
+	docScoresInner []uint64
+	docScoresCross []uint64
 
 	boundingBoxes [][]byte
 	shapes        [][]byte
@@ -268,7 +269,8 @@ func (g *geoIndexContent) alloc() {
 	g.crossDocIDs = make([]uint64, 0)
 
 	g.docNums = make([]uint64, 0)
-	g.docScores = make([]uint64, 0)
+	g.docScoresInner = make([]uint64, 0)
+	g.docScoresCross = make([]uint64, 0)
 
 	g.boundingBoxes = make([][]byte, 0)
 	g.shapes = make([][]byte, 0)
@@ -301,7 +303,9 @@ func (g *geoIndexContent) process(f index.GeoShapeV2Field, docNum uint32) {
 	// Append bounding box bytes, shape bytes and the document score
 	g.boundingBoxes = append(g.boundingBoxes, f.EncodedBoundingBox())
 	g.shapes = append(g.shapes, f.EncodedShape())
-	g.docScores = append(g.docScores, f.Score())
+	innerScore, crossScore := f.Scores()
+	g.docScoresInner = append(g.docScoresInner, innerScore)
+	g.docScoresCross = append(g.docScoresCross, crossScore)
 }
 
 func (g *geoShapeV2IndexSectionOpaque) persist(w *FileWriter) error {
@@ -353,8 +357,14 @@ func (g *geoShapeV2IndexSectionOpaque) writeIndexContent(content *geoIndexConten
 		return err
 	}
 
-	// Write the Document Scores
-	_, err = w.WriteUint64Array(content.docScores)
+	// Write the Document Scores Inner
+	_, err = w.WriteUint64Array(content.docScoresInner)
+	if err != nil {
+		return err
+	}
+
+	// Write the Document Scores Cross
+	_, err = w.WriteUint64Array(content.docScoresCross)
 	if err != nil {
 		return err
 	}
@@ -422,8 +432,15 @@ func loadGeoIndexContent(r *FileReader, mem []byte) (*geoIndexContent, error) {
 	}
 	pos += shift
 
-	// Load the Document Scores
-	docScores, _, shift, err := r.ReadUint64Array(mem[pos:])
+	// Load the Document Scores Inner
+	docScoresInner, _, shift, err := r.ReadUint64Array(mem[pos:])
+	if err != nil {
+		return nil, err
+	}
+	pos += shift
+
+	// Load the Document Scores Cross
+	docScoresCross, _, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
@@ -472,14 +489,15 @@ func loadGeoIndexContent(r *FileReader, mem []byte) (*geoIndexContent, error) {
 	pos += shift
 
 	return &geoIndexContent{
-		docNums:       docNums,
-		docScores:     docScores,
-		innerCells:    innerCells,
-		innerDocIDs:   innerDocIDs,
-		crossCells:    crossCells,
-		crossDocIDs:   crossDocIDs,
-		boundingBoxes: bBoxes,
-		shapes:        shapes,
+		docNums:        docNums,
+		docScoresInner: docScoresInner,
+		docScoresCross: docScoresCross,
+		innerCells:     innerCells,
+		innerDocIDs:    innerDocIDs,
+		crossCells:     crossCells,
+		crossDocIDs:    crossDocIDs,
+		boundingBoxes:  bBoxes,
+		shapes:         shapes,
 	}, nil
 }
 
@@ -559,15 +577,25 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 			}
 			mergedContent.shapes = append(mergedContent.shapes, shape)
 		}
-		// Merge document scores
-		for i, score := range indexInfo.content.docScores {
+		// Merge document scores inner
+		for i, score := range indexInfo.content.docScoresInner {
 			geoDocID := uint64(i)
 			oldDocNum := indexInfo.content.docNums[geoDocID]
 			newDocNum := indexInfo.newDocNums[oldDocNum]
 			if newDocNum == docDropped {
 				continue
 			}
-			mergedContent.docScores = append(mergedContent.docScores, score)
+			mergedContent.docScoresInner = append(mergedContent.docScoresInner, score)
+		}
+		// Merge document scores cross
+		for i, score := range indexInfo.content.docScoresCross {
+			geoDocID := uint64(i)
+			oldDocNum := indexInfo.content.docNums[geoDocID]
+			newDocNum := indexInfo.newDocNums[oldDocNum]
+			if newDocNum == docDropped {
+				continue
+			}
+			mergedContent.docScoresCross = append(mergedContent.docScoresCross, score)
 		}
 	}
 

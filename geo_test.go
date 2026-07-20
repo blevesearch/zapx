@@ -35,7 +35,8 @@ type stubGeoShapeV2Field struct {
 	crossCells []uint64
 	bbox       []byte
 	shape      []byte
-	score      uint64
+	scoreInner uint64
+	scoreCross uint64
 }
 
 func (s *stubGeoShapeV2Field) Name() string {
@@ -89,8 +90,8 @@ func (s *stubGeoShapeV2Field) EncodedShape() []byte {
 	return s.shape
 }
 
-func (s *stubGeoShapeV2Field) Score() uint64 {
-	return s.score
+func (s *stubGeoShapeV2Field) Scores() (uint64, uint64) {
+	return s.scoreInner, s.scoreCross
 }
 
 // stubGeoDocument holds a mix of text and geo fields.
@@ -150,7 +151,9 @@ type geoTestDoc struct {
 	cross []uint64
 	bbox  []byte
 	shape []byte
-	score uint64
+
+	scoreInner uint64
+	scoreCross uint64
 }
 
 func newGeoStubDocument(d geoTestDoc) index.Document {
@@ -165,7 +168,8 @@ func newGeoStubDocument(d geoTestDoc) index.Document {
 			crossCells: d.cross,
 			bbox:       d.bbox,
 			shape:      d.shape,
-			score:      d.score,
+			scoreInner: d.scoreInner,
+			scoreCross: d.scoreCross,
 		})
 	}
 	return &stubGeoDocument{
@@ -230,12 +234,18 @@ func verifyGeoShapeV2Data(t *testing.T, geoData seg.GeoShapeV2Data,
 		t.Fatalf("expected doc nums %v, got %v", wantDocNums, geoData.DocNums())
 	}
 
-	wantScores := make([]uint64, 0, len(geoDocs))
+	wantScoresInner := make([]uint64, 0, len(geoDocs))
+	wantScoresCross := make([]uint64, 0, len(geoDocs))
 	for _, d := range geoDocs {
-		wantScores = append(wantScores, d.score)
+		wantScoresInner = append(wantScoresInner, d.scoreInner)
+		wantScoresCross = append(wantScoresCross, d.scoreCross)
 	}
-	if !reflect.DeepEqual(geoData.DocScores(), wantScores) {
-		t.Fatalf("expected doc scores %v, got %v", wantScores, geoData.DocScores())
+	gotScoresInner, gotScoresCross := geoData.DocScores()
+	if !reflect.DeepEqual(gotScoresInner, wantScoresInner) {
+		t.Fatalf("expected inner doc scores %v, got %v", wantScoresInner, gotScoresInner)
+	}
+	if !reflect.DeepEqual(gotScoresCross, wantScoresCross) {
+		t.Fatalf("expected cross doc scores %v, got %v", wantScoresCross, gotScoresCross)
 	}
 
 	wantInner, wantInnerDocIDs := sortedCellPairs(geoDocs,
@@ -327,13 +337,14 @@ func equalUint64Slices(got, want []uint64) bool {
 func TestGeoIndexSectionRoundTrip(t *testing.T) {
 	docs := []geoTestDoc{
 		{
-			id:     "a",
-			hasGeo: true,
-			inner:  []uint64{30, 10},
-			cross:  []uint64{25},
-			bbox:   []byte("bbox-a"),
-			shape:  []byte("shape-a"),
-			score:  100,
+			id:         "a",
+			hasGeo:     true,
+			inner:      []uint64{30, 10},
+			cross:      []uint64{25},
+			bbox:       []byte("bbox-a"),
+			shape:      []byte("shape-a"),
+			scoreInner: 100,
+			scoreCross: 100 + 1000,
 		},
 		{
 			// no geo field: must not appear in the geo data, and the
@@ -342,13 +353,14 @@ func TestGeoIndexSectionRoundTrip(t *testing.T) {
 			hasGeo: false,
 		},
 		{
-			id:     "c",
-			hasGeo: true,
-			inner:  []uint64{20, 5},
-			cross:  []uint64{35, 15},
-			bbox:   []byte("bbox-c"),
-			shape:  []byte("shape-c"),
-			score:  102,
+			id:         "c",
+			hasGeo:     true,
+			inner:      []uint64{20, 5},
+			cross:      []uint64{35, 15},
+			bbox:       []byte("bbox-c"),
+			shape:      []byte("shape-c"),
+			scoreInner: 102,
+			scoreCross: 102 + 1000,
 		},
 	}
 	geoDocs := []geoTestDoc{docs[0], docs[2]}
@@ -428,45 +440,49 @@ func TestGeoIndexSectionRoundTrip(t *testing.T) {
 func TestGeoIndexMerge(t *testing.T) {
 	segADocs := []geoTestDoc{
 		{
-			id:     "a0",
-			hasGeo: true,
-			inner:  []uint64{30, 10},
-			bbox:   []byte("bbox-a0"),
-			shape:  []byte("shape-a0"),
-			score:  100,
+			id:         "a0",
+			hasGeo:     true,
+			inner:      []uint64{30, 10},
+			bbox:       []byte("bbox-a0"),
+			shape:      []byte("shape-a0"),
+			scoreInner: 100,
+			scoreCross: 100 + 1000,
 		},
 		{
 			// dropped during the merge
-			id:     "a1",
-			hasGeo: true,
-			inner:  []uint64{20},
-			cross:  []uint64{40},
-			bbox:   []byte("bbox-a1"),
-			shape:  []byte("shape-a1"),
-			score:  101,
+			id:         "a1",
+			hasGeo:     true,
+			inner:      []uint64{20},
+			cross:      []uint64{40},
+			bbox:       []byte("bbox-a1"),
+			shape:      []byte("shape-a1"),
+			scoreInner: 101,
+			scoreCross: 101 + 1000,
 		},
 	}
 	segBDocs := []geoTestDoc{
 		{
-			id:     "b0",
-			hasGeo: true,
-			inner:  []uint64{5, 50},
-			cross:  []uint64{45},
-			bbox:   []byte("bbox-b0"),
-			shape:  []byte("shape-b0"),
-			score:  200,
+			id:         "b0",
+			hasGeo:     true,
+			inner:      []uint64{5, 50},
+			cross:      []uint64{45},
+			bbox:       []byte("bbox-b0"),
+			shape:      []byte("shape-b0"),
+			scoreInner: 200,
+			scoreCross: 200 + 1000,
 		},
 		{
 			id:     "b1",
 			hasGeo: false,
 		},
 		{
-			id:     "b2",
-			hasGeo: true,
-			cross:  []uint64{60, 55},
-			bbox:   []byte("bbox-b2"),
-			shape:  []byte("shape-b2"),
-			score:  202,
+			id:         "b2",
+			hasGeo:     true,
+			cross:      []uint64{60, 55},
+			bbox:       []byte("bbox-b2"),
+			shape:      []byte("shape-b2"),
+			scoreInner: 202,
+			scoreCross: 202 + 1000,
 		},
 	}
 	// no geo field anywhere in this segment

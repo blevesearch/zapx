@@ -226,6 +226,102 @@ func TestWriteReadUint64Array(t *testing.T) {
 	}
 }
 
+func TestWriteReadUint32Array(t *testing.T) {
+	arrays := [][]uint32{
+		nil,
+		{},
+		{0},
+		{42},
+		{math.MaxUint32},
+		{7, 3, 9, 0, math.MaxUint32, 1 << 20},
+	}
+	longArr := make([]uint32, 1000)
+	for i := range longArr {
+		longArr[i] = uint32(i) * 3
+	}
+	arrays = append(arrays, longArr)
+
+	callbackContext := []byte("test-uint32-array")
+
+	// vary the number of bytes written before the arrays so every padding
+	// length gets exercised (uint32 arrays align to a 4-byte boundary)
+	for prefix := 0; prefix < 4; prefix++ {
+		var buf bytes.Buffer
+		fw, err := NewFileWriter(NewCountHashWriter(&buf), callbackContext)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if prefix > 0 {
+			if _, err = fw.Write(make([]byte, prefix)); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		writtenLens := make([]int, len(arrays))
+		for i, arr := range arrays {
+			writtenLens[i], err = fw.WriteUint32Array(arr)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		fr, err := NewFileReader(fw.id, callbackContext)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		data := buf.Bytes()
+		pos := uint64(prefix)
+		for i, arr := range arrays {
+			// the payload must begin on a 4-byte boundary in the file
+			bufLen, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+			pad := data[pos+uint64(n)]
+			payloadStart := pos + uint64(n) + 1 + uint64(pad)
+			if bufLen > 0 && payloadStart%4 != 0 {
+				t.Fatalf("prefix %d array %d: payload starts at unaligned offset %d",
+					prefix, i, payloadStart)
+			}
+
+			vals, mem, shift, err := fr.ReadUint32Array(data[pos:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if shift != uint64(writtenLens[i]) {
+				t.Fatalf("prefix %d array %d: wrote %d bytes but read consumed %d",
+					prefix, i, writtenLens[i], shift)
+			}
+			if len(vals) != len(arr) {
+				t.Fatalf("prefix %d array %d: expected %d values, got %d",
+					prefix, i, len(arr), len(vals))
+			}
+			for j := range arr {
+				if vals[j] != arr[j] {
+					t.Fatalf("prefix %d array %d: expected %d at index %d, got %d",
+						prefix, i, arr[j], j, vals[j])
+				}
+			}
+
+			if len(arr) > 0 {
+				if fw.processor == nil && isLittleEndian && mem == nil {
+					t.Fatalf("prefix %d array %d: expected zero-copy read, got a decoded copy",
+						prefix, i)
+				}
+				if fw.processor != nil && mem != nil {
+					t.Fatalf("prefix %d array %d: expected a decoded copy with a writer callback, got a zero-copy view",
+						prefix, i)
+				}
+			}
+
+			pos += shift
+		}
+
+		if pos != uint64(len(data)) {
+			t.Fatalf("prefix %d: %d bytes left unconsumed", prefix, uint64(len(data))-pos)
+		}
+	}
+}
+
 // Initializes encryption related file callbacks and
 // runs all file I/O related tests
 func TestFileCallbacks(t *testing.T) {
@@ -269,6 +365,7 @@ func TestFileCallbacks(t *testing.T) {
 	TestRoaringSizes(t)
 
 	TestWriteReadUint64Array(t)
+	TestWriteReadUint32Array(t)
 
 	TestGeoIndexSectionRoundTrip(t)
 	TestGeoIndexMerge(t)

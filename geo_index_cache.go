@@ -98,7 +98,7 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 	}
 
 	// Load Doc ID to Doc Num mapping
-	docNums, docNumsMem, shift, err := r.ReadUint64Array(mem[pos:])
+	docNums, docNumsMem, shift, err := r.ReadUint32Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +126,7 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 	pos += shift
 
 	// Load Inner Cell Doc IDs
-	innerDocIDs, innerDocIDsMem, shift, err := r.ReadUint64Array(mem[pos:])
+	innerDocIDs, innerDocIDsMem, shift, err := r.ReadUint32Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +140,7 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 	pos += shift
 
 	// Load Cross Cell Doc IDs
-	crossDocIDs, crossDocIDsMem, shift, err := r.ReadUint64Array(mem[pos:])
+	crossDocIDs, crossDocIDsMem, shift, err := r.ReadUint32Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
@@ -229,14 +229,14 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 
 // createNewExcludeBitmap translates an exclusion bitmap from segment doc
 // number space into geo docID space
-func createNewExcludeBitmap(except *roaring.Bitmap, docNums []uint64) *roaring.Bitmap {
+func createNewExcludeBitmap(except *roaring.Bitmap, docNums []uint32) *roaring.Bitmap {
 	if except == nil || except.IsEmpty() {
 		return nil
 	}
 
 	newExcept := roaring.New()
 	for i, docNum := range docNums {
-		if except.Contains(uint32(docNum)) {
+		if except.Contains(docNum) {
 			newExcept.Add(uint32(i))
 		}
 	}
@@ -304,13 +304,13 @@ type geoCacheEntry struct {
 	innerCells    []uint64
 	innerCellsMem []byte
 
-	innerDocIDs    []uint64
+	innerDocIDs    []uint32
 	innerDocIDsMem []byte
 
 	crossCells    []uint64
 	crossCellsMem []byte
 
-	crossDocIDs    []uint64
+	crossDocIDs    []uint32
 	crossDocIDsMem []byte
 
 	bboxOffsets    []uint64
@@ -322,7 +322,7 @@ type geoCacheEntry struct {
 	shapeMem        []byte
 
 	numDocs    uint64
-	docNums    []uint64
+	docNums    []uint32
 	docNumsMem []byte
 
 	docScoresInner    []uint64
@@ -392,7 +392,7 @@ func (gce *geoCacheEntry) InnerCells() []uint64 {
 	return gce.innerCells
 }
 
-func (gce *geoCacheEntry) InnerDocIDs() []uint64 {
+func (gce *geoCacheEntry) InnerDocIDs() []uint32 {
 	return gce.innerDocIDs
 }
 
@@ -400,7 +400,7 @@ func (gce *geoCacheEntry) CrossCells() []uint64 {
 	return gce.crossCells
 }
 
-func (gce *geoCacheEntry) CrossDocIDs() []uint64 {
+func (gce *geoCacheEntry) CrossDocIDs() []uint32 {
 	return gce.crossDocIDs
 }
 
@@ -448,7 +448,7 @@ func (gce *geoCacheEntry) Shape(geoDocID uint64) ([]byte, error) {
 	return buf, nil
 }
 
-func (gce *geoCacheEntry) DocNums() []uint64 {
+func (gce *geoCacheEntry) DocNums() []uint32 {
 	return gce.docNums
 }
 

@@ -173,12 +173,65 @@ func (w *FileWriter) WriteUint64Array(arr []uint64) (int, error) {
 	return total, err
 }
 
+// WriteUint32Array writes arr as a length-prefixed array of little-endian
+// uint32 values, padded so the payload begins on a 4-byte boundary in the
+// file. Padding is required for the zero-copy reads in ReadUint32Array because
+// of go's unsafe.Pointer conversion rules.
+func (w *FileWriter) WriteUint32Array(arr []uint32) (int, error) {
+	// encode the array as a contiguous slice of bytes, little-endian.
+	buf := w.grabPayloadBuf(len(arr) * 4)
+	for i, v := range arr {
+		binary.LittleEndian.PutUint32(buf[i*4:(i+1)*4], v)
+	}
+	buf = w.process(buf)
+
+	// write the length of the array as a varint
+	numBuf := w.grabVarintBuf(binary.MaxVarintLen64)
+	n := binary.PutUvarint(numBuf, uint64(len(buf)))
+	total, err := w.Write(numBuf[:n])
+	if err != nil {
+		return total, err
+	}
+
+	// pad so buf starts on a 4-byte boundary in the file, and write the
+	// padding length first so the reader can skip the padding. The +1
+	// accounts for the pad-length byte itself, which is written before
+	// the padding.
+	pad := byte((4 - (uint64(w.Count())+1)%4) % 4)
+	written, err := w.Write([]byte{pad})
+	total += written
+	if err != nil {
+		return total, err
+	}
+	if pad > 0 {
+		// write the actual padding bytes, which are always zero
+		written, err = w.Write(alignPad[:pad])
+		total += written
+		if err != nil {
+			return total, err
+		}
+	}
+
+	// write the actual array bytes
+	written, err = w.Write(buf)
+	total += written
+	return total, err
+}
+
 // WriteArrayWithOffsets writes a slice of byte slices as a length-prefixed
 // array of offsets, followed by the concatenated payloads. Each offset is
 // the end position of the corresponding payload in the concatenated buffer.
 func (w *FileWriter) WriteArrayWithOffsets(arr [][]byte) (int, error) {
 	offsets := make([]uint64, len(arr))
-	buf := make([]byte, 0)
+
+	// preallocate the payload buffer from the summed input lengths so it is
+	// not repeatedly reallocated as payloads are appended. This is an exact
+	// fit when no writer callback is set and a close estimate otherwise.
+	var payloadLen int
+	for _, a := range arr {
+		payloadLen += len(a)
+	}
+	buf := make([]byte, 0, payloadLen)
 
 	for i, a := range arr {
 		a = w.process(a)
@@ -280,6 +333,50 @@ func (r *FileReader) ReadUint64Array(data []byte) (vals []uint64, mem []byte, sh
 	vals = make([]uint64, len(buf)/8)
 	for i := range vals {
 		vals[i] = binary.LittleEndian.Uint64(buf[i*8 : (i+1)*8])
+	}
+
+	return vals, nil, pos, nil
+}
+
+// ReadUint32Array reads an array written by WriteUint32Array and returns its
+// values, along with the raw byte buffer they were decoded from (mem) when
+// that buffer is a zero-copy view worth retaining - nil otherwise.
+// Callers must treat both vals and mem as read-only.
+func (r *FileReader) ReadUint32Array(data []byte) (vals []uint32, mem []byte, shift uint64, err error) {
+	var pos uint64
+
+	// read the length of the array as a varint
+	bufLen, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
+	pos += uint64(n)
+
+	// read the padding length and skip over the padding bytes
+	pad := data[pos]
+	pos += 1 + uint64(pad)
+
+	if bufLen == 0 {
+		return nil, nil, pos, nil
+	}
+
+	// read the actual array bytes and apply the reader callback
+	src := data[pos : pos+bufLen]
+	buf, err := r.process(src)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	pos += bufLen
+
+	// if the host is little-endian and the processed buffer is the same length
+	// as the original buffer and has the same backing array, we can return a
+	// zero-copy view of the buffer as a []uint32 slice.
+	if isLittleEndian && len(buf) == len(src) && unsafe.SliceData(buf) == unsafe.SliceData(src) &&
+		uintptr(unsafe.Pointer(&buf[0]))%4 == 0 {
+		return unsafe.Slice((*uint32)(unsafe.Pointer(&buf[0])), len(buf)/4), buf, pos, nil
+	}
+
+	// decode the buffer into a new []uint32 slice
+	vals = make([]uint32, len(buf)/4)
+	for i := range vals {
+		vals[i] = binary.LittleEndian.Uint32(buf[i*4 : (i+1)*4])
 	}
 
 	return vals, nil, pos, nil

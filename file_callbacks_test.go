@@ -129,10 +129,7 @@ func initFileCallbacks(t *testing.T) {
 }
 
 // TestWriteReadUint64Array round-trips uint64 arrays through
-// WriteUint64Array and ReadUint64Array. It runs both without file callbacks
-// (when invoked standalone) and with encryption callbacks (when invoked via
-// TestFileCallbacks): without a writer callback the read is expected to take
-// the zero-copy path, with encryption it must fall back to decoding a copy.
+// WriteUint64Array and ReadUint64Array.
 func TestWriteReadUint64Array(t *testing.T) {
 	arrays := [][]uint64{
 		nil,

@@ -15,8 +15,7 @@
 package zap
 
 // ewma maintains an exponentially weighted moving average of the number of
-// hits a cache entry receives per monitoring cycle. The index caches use it
-// to decide when a cached entry's traffic has died down enough to evict it.
+// hits a cache entry receives per monitoring cycle.
 type ewma struct {
 	// alpha is the smoothing factor in (0, 1): the weight given to the most
 	// recent sample. Higher values react faster to changes in traffic, lower

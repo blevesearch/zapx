@@ -221,9 +221,6 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 
 	gc.insertLOCKED(field, rv)
 
-	// the entry is created with refs == 1, which accounts for the view
-	// returned here, so we build the view directly rather than calling
-	// load() (which would bump the ref count a second time)
 	return &geoData{
 		geoCacheEntry: rv,
 		except:        createNewExcludeBitmap(except, rv.docNums),
@@ -231,9 +228,7 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 }
 
 // createNewExcludeBitmap translates an exclusion bitmap from segment doc
-// number space into geo docID space: bit i is set in the result when the
-// segment doc number at docNums[i] is present in except. Returns nil when
-// there is nothing to exclude.
+// number space into geo docID space
 func createNewExcludeBitmap(except *roaring.Bitmap, docNums []uint64) *roaring.Bitmap {
 	if except == nil || except.IsEmpty() {
 		return nil
@@ -276,11 +271,8 @@ func (gc *geoIndexCache) monitor() {
 // cleanup runs one eviction pass over the cache. For each entry it folds the
 // hit count accumulated since the last pass into the entry's moving average
 // (see ewma.add), then evicts entries that have no outstanding references and
-// whose average traffic has decayed to at most (1 - alpha) — the value the
-// average falls to after one zero-hit pass from an average of 1 hit per pass.
-// In other words, an entry is evicted once it is unreferenced and averages
-// less than one hit per monitoring cycle. Returns true when the cache is
-// empty, signalling the monitor goroutine to exit.
+// whose average traffic has decayed to at most (1 - alpha)
+// Returns true when the cache is empty, signalling the monitor goroutine to exit.
 func (gc *geoIndexCache) cleanup() bool {
 	gc.m.Lock()
 
@@ -347,19 +339,14 @@ type geoCacheEntry struct {
 	scoresPool sync.Pool
 }
 
-// geoData is a per-load view over a shared geoCacheEntry. The heavy,
-// immutable geo data (cells, scores, docNums, ...) lives on the shared
-// entry, while the exclude bitmap is derived fresh per load from the
-// snapshot's except bitmap. This mirrors the vector cache, and prevents
-// a snapshot's deletions from being baked into the shared entry and
-// going stale for subsequent snapshots that hit the same entry.
+// geoData is a per-load view over a shared geoCacheEntry.
+// The exclude bitmap is derived fresh per load from the
+// snapshot's except bitmap.
 type geoData struct {
 	*geoCacheEntry
 	except *roaring.Bitmap
 }
 
-// Excluded returns the per-load set of excluded geo docIDs, rather than
-// anything cached on the shared entry.
 func (g *geoData) Excluded() *roaring.Bitmap {
 	return g.except
 }
@@ -383,9 +370,6 @@ func (gce *geoCacheEntry) load(except *roaring.Bitmap) *geoData {
 	gce.incHits()
 	gce.incRef()
 
-	// derive the exclude bitmap fresh per load: the shared entry is
-	// immutable, but the set of excluded docs varies by snapshot, so it
-	// must not be cached on the entry
 	return &geoData{
 		geoCacheEntry: gce,
 		except:        createNewExcludeBitmap(except, gce.docNums),

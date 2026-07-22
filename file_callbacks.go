@@ -44,11 +44,10 @@ import (
 const DefaultFileCallbackId = ""
 
 // isLittleEndian reports whether the running architecture stores multi-byte
-// integers least-significant-byte first. WriteUint64Array always encodes
-// little-endian on disk; on a little-endian host that means the on-disk bytes
-// are already a valid in-memory []uint64, so ReadUint64Array can hand back a
-// view directly over them instead of decoding a copy. On any other host we
-// always fall back to decoding, since the raw bytes would decode wrong.
+// integers least-significant-byte first. WriteUint64Array always writes
+// little-endian on disk, so on a little-endian host ReadUint64Array can
+// return a zero-copy view of the mmap'd file rather than decoding a copy.
+// On any other host we default to decoding a copy.
 var isLittleEndian = func() bool {
 	var x uint16 = 1
 	return *(*byte)(unsafe.Pointer(&x)) == 1
@@ -131,9 +130,8 @@ func (w *FileWriter) grabPayloadBuf(size int) []byte {
 
 // WriteUint64Array writes arr as a length-prefixed array of little-endian
 // uint64 values, padded so the payload begins on an 8-byte boundary in the
-// file. The alignment is what lets ReadUint64Array return a zero-copy
-// []uint64 view over the mmap'd file within go's unsafe.Pointer conversion
-// rules.
+// file. Padding is required for zero-copy reads becaus of go's
+// unsafe.Pointer conversion rules.
 func (w *FileWriter) WriteUint64Array(arr []uint64) (int, error) {
 	// encode the array as a contiguous slice of bytes, little-endian.
 	buf := w.grabPayloadBuf(len(arr) * 8)
@@ -246,12 +244,7 @@ func (r *FileReader) process(data []byte) ([]byte, error) {
 // ReadUint64Array reads an array written by WriteUint64Array and returns its
 // values, along with the raw byte buffer they were decoded from (mem) when
 // that buffer is a zero-copy view worth retaining - nil otherwise.
-//
-// Callers must treat vals as read-only: on the zero-copy path it aliases the
-// mmap'd file (or the reader callback's output buffer) rather than a private
-// copy. When mem is non-nil, callers holding on to vals must retain mem
-// alongside it to keep the backing array reachable, since vals is derived
-// via unsafe pointer conversion.
+// Callers must treat both vals and mem as read-only.
 func (r *FileReader) ReadUint64Array(data []byte) (vals []uint64, mem []byte, shift uint64, err error) {
 	var pos uint64
 
@@ -294,9 +287,8 @@ func (r *FileReader) ReadUint64Array(data []byte) (vals []uint64, mem []byte, sh
 
 // ReadArrayWithOffsets reads an array written by WriteArrayWithOffsets and
 // returns the individual payloads, each processed through the reader
-// callback, along with the number of bytes consumed from data. Without a
-// callback the payloads are zero-copy subslices of data and must be treated
-// as read-only.
+// callback, along with the number of bytes consumed from data.
+// Callers must treat the returned payloads as read-only.
 func (r *FileReader) ReadArrayWithOffsets(data []byte) ([][]byte, uint64, error) {
 	var pos uint64
 	// read the offsets as a length-prefixed array of uint64 values

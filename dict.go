@@ -122,11 +122,9 @@ func (d *Dictionary) AutomatonIterator(a segment.Automaton,
 	return d.automatonIterator(a, startKeyInclusive, endKeyExclusive, false)
 }
 
-// AutomatonIteratorOmitCount is like AutomatonIterator, but the returned
-// iterator does not populate DictEntry.Count. Skipping the count avoids a
-// full postings-list read (roaring bitmap deserialization) per visited term,
-// and is intended for candidate-term collection (e.g. fuzzy/regexp/wildcard
-// searchers) where the per-term count is discarded.
+// AutomatonIteratorOmitCount is intended only for candidate-term collection in
+// fuzzy/prefix queries. It returns an iterator which visits terms in the fst
+// within the specified start/end key range, but omits the postings list deserialization.
 func (d *Dictionary) AutomatonIteratorOmitCount(a segment.Automaton,
 	startKeyInclusive, endKeyExclusive []byte) segment.DictionaryIterator {
 	return d.automatonIterator(a, startKeyInclusive, endKeyExclusive, true)

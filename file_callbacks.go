@@ -225,8 +225,7 @@ func (w *FileWriter) WriteArrayWithOffsets(arr [][]byte) (int, error) {
 	offsets := make([]uint64, len(arr))
 
 	// preallocate the payload buffer from the summed input lengths so it is
-	// not repeatedly reallocated as payloads are appended. This is an exact
-	// fit when no writer callback is set and a close estimate otherwise.
+	// not repeatedly reallocated as payloads are appended.
 	var payloadLen int
 	for _, a := range arr {
 		payloadLen += len(a)

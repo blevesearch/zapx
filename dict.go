@@ -134,47 +134,81 @@ func (d *Dictionary) MaxTFNorm(term []byte, avgDocLength float64) float32 {
 	if d.sb == nil || avgDocLength <= 0 {
 		return 0
 	}
+
 	pl, err := d.PostingsList(term, nil, nil)
 	if err != nil || pl == emptyPostingsList {
 		return 0
 	}
-	cpl, _ := pl.(*PostingsList)
+	cpl, ok := pl.(*PostingsList)
+	if !ok {
+		return 0
+	}
+	return cpl.MaxTFNorm(avgDocLength)
+}
+
+// MaxTFNorm returns the maximum BM25 tf-norm contribution of any document in
+// this posting list, for use as a WAND / MaxScore per-term score ceiling.
+//
+// The returned value is:
+//
+//	max_d( sqrt(freq_d) × k1 / (sqrt(freq_d) + k1×(1−b + b×fl_d/avgDocLength)) )
+//
+// where fl_d = 1/(norm_d²) is the document field length.
+//
+// Multiply the result by scorer.IDF() × scorer.QueryWeight() to get the
+// per-term score upper bound used by WAND / MaxScore pruning.
+//
+// Callers should prefer this over Dictionary.MaxTFNorm: a searcher that has
+// already resolved the term holds this posting list, which carries the segment,
+// field and postings offset the §14 sidecar lookup needs, so the bound costs a
+// binary search and nothing else.  Dictionary.MaxTFNorm re-resolves the term
+// from the FST to reach the same place — on a 6-field keyword-ID disjunction
+// that redundant work was ~48% of every dictionary lookup in the query.
+func (p *PostingsList) MaxTFNorm(avgDocLength float64) float32 {
+	if p == nil || p.sb == nil || avgDocLength <= 0 {
+		return 0
+	}
+
+	// Term absent from this segment: no FST value was recorded and there is no
+	// 1-hit norm.  Must be checked before iterating — a recycled PostingsList
+	// keeps a non-nil (cleared) postings bitmap, so Iterator() would happily
+	// build chunk decoders and scan zero documents.
+	if p.normBits1Hit == 0 && p.postingsOffset == 0 {
+		return 0
+	}
 
 	// §14 early-out: a general-encoding term has a sidecar entry keyed on its
-	// FST value, which PostingsList has already resolved into cpl.postingsOffset
-	// — no extra FST traversal and no term→offset cache needed.
-	if cpl != nil && cpl.normBits1Hit == 0 && cpl.postingsOffset > 0 &&
-		cpl.postingsOffset&FSTValEncodingMask == FSTValEncodingGeneral {
-		if maxFreq, minFieldLen, found := d.sb.lookupMaxTFNorm(d.fieldID, cpl.postingsOffset); found {
+	// FST value, which is already held here as postingsOffset — no FST
+	// traversal and no term→offset cache needed.
+	if p.normBits1Hit == 0 &&
+		p.postingsOffset&FSTValEncodingMask == FSTValEncodingGeneral {
+		if maxFreq, minFieldLen, found := p.sb.lookupMaxTFNorm(p.fieldID, p.postingsOffset); found {
 			return float32(wandTFNorm(float64(maxFreq), normFromFieldLen(minFieldLen), avgDocLength))
 		}
 	}
 
-	// Neither early-out fired: fall back to scanning the posting list.  On a
-	// v18-native index this is reachable only for 1-hit terms (handled in O(1)
-	// below) or for terms whose sidecar entry is missing because a source
-	// segment lacked one at merge time.  The result is not memoised, so a
-	// missing sidecar entry costs this scan on every query — see §14.
-	var maxTFNorm float32
-
 	// 1-hit optimisation: only one doc, freq=1, norm stored in FST value.
-	if cpl != nil && cpl.normBits1Hit != 0 {
+	if p.normBits1Hit != 0 {
 		// v18: normBits1Hit stores fieldLen (NormBits1Hit = 1 → fieldLen=1).
 		// Norm = 1/sqrt(fieldLen); for fieldLen=1 this gives norm=1.0,
 		// which is the correct conservative upper bound.
-		norm := normFromFieldLen(uint32(cpl.normBits1Hit))
-		maxTFNorm = float32(wandTFNorm(1, norm, avgDocLength))
-	} else {
-		iter := pl.Iterator(true, true, false, nil)
-		for {
-			p, e := iter.Next()
-			if p == nil || e != nil {
-				break
-			}
-			v := float32(wandTFNorm(float64(p.Frequency()), p.Norm(), avgDocLength))
-			if v > maxTFNorm {
-				maxTFNorm = v
-			}
+		return float32(wandTFNorm(1, normFromFieldLen(uint32(p.normBits1Hit)), avgDocLength))
+	}
+
+	// No sidecar entry and not 1-hit: scan the posting list.  On a v18-native
+	// index this is reachable only for terms whose sidecar entry is missing
+	// because a source segment lacked one at merge time.  The result is not
+	// memoised, so such a term costs this scan on every query — see §14.
+	var maxTFNorm float32
+	iter := p.Iterator(true, true, false, nil)
+	for {
+		e, err := iter.Next()
+		if e == nil || err != nil {
+			break
+		}
+		v := float32(wandTFNorm(float64(e.Frequency()), e.Norm(), avgDocLength))
+		if v > maxTFNorm {
+			maxTFNorm = v
 		}
 	}
 

@@ -1015,6 +1015,32 @@ func (p *Posting) NormUint64() uint64 {
 	return uint64(math.Float32bits(p.norm))
 }
 
+// Release hands this iterator's chunk decoders back to the shared pool and
+// detaches them.  Call it only when the iterator is finished and will not be
+// reused — bleve does so for TermFieldReaders it is discarding rather than
+// recycling, where the iterators are otherwise immediate garbage.
+//
+// Without this, reuse of a decoder's 6 KB of PFOR scratch buffers depends on the
+// caller handing the whole PostingsIterator back, which for bleve means landing
+// in the per-field TFR cache; a query with more concurrent term readers on one
+// field than that cache holds re-allocates the buffers on every query.
+//
+// Safe to call more than once: the decoder fields are cleared, so a second call
+// releases nothing.  Using the iterator after Release is not supported.
+func (i *PostingsIterator) Release() {
+	if i == nil {
+		return
+	}
+	if i.freqNormReader != nil {
+		releaseChunkedIntDecoder(i.freqNormReader)
+		i.freqNormReader = nil
+	}
+	if i.locReader != nil {
+		releaseChunkedIntDecoder(i.locReader)
+		i.locReader = nil
+	}
+}
+
 // NormColumn returns the exact analyzed field length recorded for docNum in the
 // per-field norm column (§20/v18+). Returns 0 when normColumn is unavailable
 // (pre-v18 segments, or a field without a norm column). Called lazily by

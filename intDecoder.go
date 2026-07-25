@@ -116,6 +116,20 @@ func newChunkedIntDecoder(buf []byte, offset uint64, rv *chunkedIntDecoder, fr *
 	} else {
 		rv.chunkOffsets = make([]uint64, int(numChunks))
 	}
+
+	// The directory holds one entry per chunk. Under PFORChunkMode a term matching
+	// no more than pforBlockSize documents gets a single chunk (§75), so for the
+	// sparse terms that used to dominate this loop there is now exactly one entry
+	// to decode. Dense terms have many, but they amortise it over the postings
+	// they go on to read.
+	//
+	// A hand-rolled uvarint reader was tried here, inlining the single-byte case to
+	// avoid binary.Uvarint's call and 10-byte subslice per entry. Before the chunk
+	// mode changed it was worth up to 18%; measured again after, it is worth
+	// nothing — between -0.61% and +0.56% across EntityMedium6FieldDisj,
+	// QueryBestHotelLisbon, TermTier5 and TopicalDisjunction3CrossTopic — so the
+	// plain library call is kept. Fixing the directory's SIZE removed the reason to
+	// micro-optimise its decode.
 	for i := 0; i < int(numChunks); i++ {
 		rv.chunkOffsets[i], read = binary.Uvarint(buf[offset+n : offset+n+binary.MaxVarintLen64])
 		n += uint64(read)

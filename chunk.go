@@ -24,12 +24,36 @@ import (
 var LegacyChunkMode uint32 = 1024
 
 // DefaultChunkMode is the most recent improvement to chunking and should
-// be used by default.  v18: PFOR block encoding (mode 1027).
-var DefaultChunkMode uint32 = 1027
+// be used by default.  v18: PFOR block encoding (mode 1028).
+var DefaultChunkMode uint32 = 1028
 
-// PFORChunkMode signals PFOR block encoding for the freq stream (v18+).
-// getChunkSize returns pforBlockSize (256) for this mode.
-var PFORChunkMode uint32 = 1027
+// PFORChunkMode signals PFOR block encoding for the freq stream (v18+), with a
+// cardinality-adaptive chunk size (§75): a term matching no more than
+// pforBlockSize documents gets ONE chunk spanning the segment, rather than one
+// chunk per 256-docNum window.
+//
+// The window-per-256-docNums rule this replaces sized chunks by the SEGMENT, not
+// by the term, so the chunk-offset directory held ceil(maxDocs/256) entries
+// however few documents the term matched. Measured on the §26 entity corpus
+// (6 keyword-ID fields, 500k docs, 15 segments, ~1-4 matches per field/segment):
+//
+//	per query: 31 posting iterators, 272 directory entries each = 8,440 entries,
+//	           indexing 9 BYTES of freq data per list
+//
+// The directory was ~30x the payload it described, and every entry was decoded
+// before the first posting could be read. Dense terms were never the problem:
+// TermTier1 (DF 100%) has 131 entries indexing 33,327 bytes, 0.4% overhead.
+//
+// Note the mode number moved 1027 -> 1028 and 1027 was REMOVED rather than
+// redefined. chunkMode is persisted per segment and both the reader
+// (Dictionary.postingsList) and the writers re-derive chunkSize from it plus the
+// cardinality, so redefining 1027 in place would make an existing prototype-v18
+// segment silently misread — a low-cardinality term taken as one chunk out of a
+// directory that actually holds hundreds, returning whatever bytes live there.
+// Dropping 1027 instead means such a segment fails loudly on its first postings
+// read with "unknown chunk mode". v18 is unreleased, so there is no compatibility
+// obligation, only an obligation not to corrupt quietly.
+var PFORChunkMode uint32 = 1028
 
 var ErrChunkSizeZero = errors.New("chunk size is zero")
 
@@ -84,10 +108,29 @@ func getChunkSize(chunkMode uint32, cardinality uint64, maxDocs uint64) (uint64,
 		}
 		return chunkSize, nil
 
-	case chunkMode == 1027:
-		// PFOR block encoding: fixed 256-doc (docNum-aligned) blocks.
-		// Each block covers docNums [k*256, (k+1)*256); the actual number of
-		// posting-list entries within the range is stored in the block header.
+	// NOTE: mode 1027 (PFOR with unconditional 256-docNum windows) was removed in
+	// favour of 1028 below; see PFORChunkMode. A segment written by an earlier
+	// prototype build reaches the default case and fails loudly.
+
+	case chunkMode == 1028:
+		// PFOR block encoding, cardinality-adaptive (§75).
+		//
+		// A term matching no more than one block's worth of documents gets a
+		// single chunk spanning the segment, so its chunk-offset directory holds
+		// one entry instead of ceil(maxDocs/256). The block header stores the
+		// entry count (1..255, with 0 meaning 256), and the v18 freq stream holds
+		// exactly one value per document — norms live in SectionNormColumn — so
+		// cardinality <= pforBlockSize guarantees the single block stays within
+		// the count the header can represent.
+		//
+		// Above the threshold, chunks are docNum-aligned windows, which is what
+		// lets a chunk index be derived from a docNum as docNum/chunkSize.
+		if cardinality <= pforBlockSize {
+			if maxDocs == 0 {
+				return 0, ErrChunkSizeZero
+			}
+			return maxDocs, nil
+		}
 		return pforBlockSize, nil
 	}
 	return 0, fmt.Errorf("unknown chunk mode %d", chunkMode)

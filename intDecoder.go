@@ -17,6 +17,7 @@ package zap
 import (
 	"encoding/binary"
 	"fmt"
+	"sync"
 )
 
 type chunkedIntDecoder struct {
@@ -41,9 +42,61 @@ type chunkedIntDecoder struct {
 }
 
 // newChunkedIntDecoder expects an optional or reset chunkedIntDecoder for better reuse.
+// chunkedIntDecoderPool recycles decoders across queries.
+//
+// A decoder's PFOR scratch buffers are 3 x pforBlockSize slices (6 KB), kept
+// across reuse by newChunkedIntDecoder. Reuse used to depend entirely on the
+// PostingsIterator being handed back by the caller, which in bleve means the
+// TermFieldReader landing in the per-field TFR cache — capped at
+// DefaultFieldTFRCacheThreshold (4). A query holding more concurrent term
+// readers on one field than that cap allocates the surplus fresh every time, so
+// an 8-term single-field disjunction paid ~390 KB/op of PFOR buffers, 4x
+// baseline's total allocation for the query.
+//
+// Pooling here decouples buffer reuse from TFR cache capacity: it works for any
+// term count, and resident memory is bounded by concurrency rather than by
+// (fields x cache threshold). Released via PostingsIterator.Release().
+var chunkedIntDecoderPool = sync.Pool{
+	New: func() interface{} { return &chunkedIntDecoder{} },
+}
+
+// releaseChunkedIntDecoder returns d to the pool. It drops references to segment
+// memory so a pooled decoder never pins an mmap'd region, and resets all decode
+// state while KEEPING the capacity of the PFOR scratch buffers — retaining that
+// capacity is the entire point of pooling.
+//
+// Resetting pforMode is required for correctness, not tidiness. A decoder is
+// pooled without regard to which slot it served: freqNormReader has
+// SetPFORMode() called on it, locReader never does and relies on pforMode being
+// false. A decoder released from a freqNormReader slot and handed out as a
+// locReader would otherwise PFOR-decode the location stream ("pfor: read past
+// end of block"). Before pooling this could not happen, because reuse was 1:1
+// with the same slot of the same PostingsIterator.
+func releaseChunkedIntDecoder(d *chunkedIntDecoder) {
+	if d == nil {
+		return
+	}
+	d.data = nil
+	d.curChunkBytes = nil
+	d.fr = nil
+	d.r = nil
+	d.bytesRead = 0
+	d.startOffset = 0
+	d.dataStartOffset = 0
+	d.pforMode = false
+	d.pforPos = 0
+	d.pforDecoded = d.pforDecoded[:0]
+	d.pforExcIdx = d.pforExcIdx[:0]
+	d.pforExcVal = d.pforExcVal[:0]
+	d.chunkOffsets = d.chunkOffsets[:0]
+	chunkedIntDecoderPool.Put(d)
+}
+
 func newChunkedIntDecoder(buf []byte, offset uint64, rv *chunkedIntDecoder, fr *FileReader) *chunkedIntDecoder {
 	if rv == nil {
-		rv = &chunkedIntDecoder{startOffset: offset, data: buf}
+		rv = chunkedIntDecoderPool.Get().(*chunkedIntDecoder)
+		rv.startOffset = offset
+		rv.data = buf
 	} else {
 		rv.startOffset = offset
 		rv.data = buf

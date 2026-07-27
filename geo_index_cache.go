@@ -213,7 +213,12 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 
 		scoresPool: sync.Pool{
 			New: func() interface{} {
-				scores := make([]uint64, numDocs)
+				var scores map[uint32]uint64
+				if numDocs > 100 {
+					scores = make(map[uint32]uint64, 100)
+				} else {
+					scores = make(map[uint32]uint64, numDocs)
+				}
 				return &scores
 			},
 		},
@@ -351,11 +356,11 @@ func (g *geoData) Excluded() *roaring.Bitmap {
 	return g.except
 }
 
-func (gce *geoCacheEntry) GetScoreArray() []uint64 {
-	return *gce.scoresPool.Get().(*[]uint64)
+func (gce *geoCacheEntry) GetScoreArray() map[uint32]uint64 {
+	return *gce.scoresPool.Get().(*map[uint32]uint64)
 }
 
-func (gce *geoCacheEntry) PutScoreArray(scores []uint64) {
+func (gce *geoCacheEntry) PutScoreArray(scores map[uint32]uint64) {
 	if scores != nil {
 		clear(scores)
 		gce.scoresPool.Put(&scores)

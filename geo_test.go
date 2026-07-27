@@ -297,24 +297,18 @@ func verifyGeoShapeV2Data(t *testing.T, geoData seg.GeoShapeV2Data,
 		t.Fatal("expected error for out of range shape geo docID")
 	}
 
-	// score arrays from the pool must be zeroed and NumDocs long, even
-	// after returning a dirtied one
+	// score maps from the pool must be empty, even after returning a dirtied one
 	scores := geoData.GetScoreArray()
-	if uint64(len(scores)) != numDocs {
-		t.Fatalf("expected score array of length %d, got %d", numDocs, len(scores))
+	if len(scores) != 0 {
+		t.Fatalf("expected empty score map, got %d entries", len(scores))
 	}
-	for i := range scores {
+	for i := uint32(0); uint64(i) < numDocs; i++ {
 		scores[i] = uint64(i) + 1
 	}
 	geoData.PutScoreArray(scores)
 	scores = geoData.GetScoreArray()
-	if uint64(len(scores)) != numDocs {
-		t.Fatalf("expected score array of length %d, got %d", numDocs, len(scores))
-	}
-	for i, s := range scores {
-		if s != 0 {
-			t.Fatalf("expected zeroed score array, got %d at index %d", s, i)
-		}
+	if len(scores) != 0 {
+		t.Fatalf("expected empty score map after reuse, got %d entries", len(scores))
 	}
 	geoData.PutScoreArray(scores)
 }

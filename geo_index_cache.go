@@ -356,11 +356,11 @@ func (g *geoData) Excluded() *roaring.Bitmap {
 	return g.except
 }
 
-func (gce *geoCacheEntry) GetScoreArray() map[uint32]uint64 {
+func (gce *geoCacheEntry) GetScoreMap() map[uint32]uint64 {
 	return *gce.scoresPool.Get().(*map[uint32]uint64)
 }
 
-func (gce *geoCacheEntry) PutScoreArray(scores map[uint32]uint64) {
+func (gce *geoCacheEntry) PutScoreMap(scores map[uint32]uint64) {
 	if scores != nil {
 		clear(scores)
 		gce.scoresPool.Put(&scores)

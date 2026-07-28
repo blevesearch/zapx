@@ -298,19 +298,19 @@ func verifyGeoShapeV2Data(t *testing.T, geoData seg.GeoShapeV2Data,
 	}
 
 	// score maps from the pool must be empty, even after returning a dirtied one
-	scores := geoData.GetScoreArray()
+	scores := geoData.GetScoreMap()
 	if len(scores) != 0 {
 		t.Fatalf("expected empty score map, got %d entries", len(scores))
 	}
 	for i := uint32(0); uint64(i) < numDocs; i++ {
 		scores[i] = uint64(i) + 1
 	}
-	geoData.PutScoreArray(scores)
-	scores = geoData.GetScoreArray()
+	geoData.PutScoreMap(scores)
+	scores = geoData.GetScoreMap()
 	if len(scores) != 0 {
 		t.Fatalf("expected empty score map after reuse, got %d entries", len(scores))
 	}
-	geoData.PutScoreArray(scores)
+	geoData.PutScoreMap(scores)
 }
 
 func equalUint64Slices[T comparable](got, want []T) bool {

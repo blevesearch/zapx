@@ -55,18 +55,30 @@ type faissIndexParams struct {
 	// some construction-time decisions (e.g. whether to clone to GPU)
 	// depend on the eventual vector count.
 	numVecs int
+	// nlist is the number of centroids the index is being built with.
+	// zero during query time.
+	nlist int
 	// ioFlags used to read the index from bytes
 	ioFlags int
 }
 
 // newFaissIndexParams constructs a faissIndexParams with the given optimization
-// type and expected vector count.
-func newFaissIndexParams(optimization string, numVecs, ioFlags int) *faissIndexParams {
+// type, expected vector count and centroid count.
+func newFaissIndexParams(optimization string, numVecs, nlist, ioFlags int) *faissIndexParams {
 	return &faissIndexParams{
 		optimization: optimization,
 		numVecs:      numVecs,
+		nlist:        nlist,
 		ioFlags:      ioFlags,
 	}
+}
+
+// numTrainingVecs returns how many of the availableVecs vectors to train on.
+func (p *faissIndexParams) numTrainingVecs(availableVecs int) int {
+	if p.nlist <= 0 {
+		return availableVecs
+	}
+	return min(p.nlist*trainingPointsPerCentroid, availableVecs)
 }
 
 func (p *faissIndexParams) size() uint64 {

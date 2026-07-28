@@ -52,6 +52,11 @@ const (
 	// The threshold for number of vectors at or beyond which we start building
 	// the IVF class of indexes with SQ8 quantization for memory efficiency.
 	ivfSq8Threshold = 10000
+	// Number of training vectors per centroid used while training an IVF index.
+	// faiss warns below 39 points per centroid, so this is the smallest value
+	// that keeps every cluster well fed while training on as little data as
+	// possible.
+	trainingPointsPerCentroid = 40
 )
 
 // Vector index types supported.
@@ -491,7 +496,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 		if trainedIndex == nil {
 			ioFlags = faissIOFlagsReadOnly
 		}
-		reconsParams := newFaissIndexParams(currVecIndex.indexOptimizedFor, currVecIndex.nvecs, ioFlags)
+		reconsParams := newFaissIndexParams(currVecIndex.indexOptimizedFor, currVecIndex.nvecs, 0, ioFlags)
 
 		// load binary index from disk if present
 		if currVecIndex.indexType == faissBIVFIndex {
@@ -1003,7 +1008,7 @@ func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimens
 
 // Factory function to create a faissIndex for the given index config.
 func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
-	params := newFaissIndexParams(cfg.optimizationType, cfg.numVecs, faissIOFlags)
+	params := newFaissIndexParams(cfg.optimizationType, cfg.numVecs, cfg.nlist, faissIOFlags)
 	switch cfg.indexType {
 	case faissFP32Index:
 		description := determineFloat32IndexToUse(cfg.numVecs, cfg.nlist, cfg.optimizationType)

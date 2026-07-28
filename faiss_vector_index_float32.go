@@ -179,9 +179,8 @@ func (f *faissFloat32Index) setNProbe(nprobe int32) {
 }
 
 func (f *faissFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
-	nlist := determineCentroids(trainingData.nvecs)
-	nvecsToTrain := nlist * 40 * f.dim()
-	err := f.idx.Train(trainingData.floatData[:nvecsToTrain])
+	nvecsToTrain := f.params.numTrainingVecs(trainingData.nvecs)
+	err := f.idx.Train(trainingData.floatData[:nvecsToTrain*f.dim()])
 	if err != nil {
 		return err
 	}

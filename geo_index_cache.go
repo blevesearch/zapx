@@ -409,8 +409,8 @@ func (gce *geoCacheEntry) CrossDocIDs() []uint32 {
 	return gce.crossDocIDs
 }
 
-func (gce *geoCacheEntry) BoundingBox(geoDocID uint64) ([]byte, error) {
-	if geoDocID >= gce.numDocs {
+func (gce *geoCacheEntry) BoundingBox(geoDocID uint32) ([]byte, error) {
+	if uint64(geoDocID) >= gce.numDocs {
 		return nil, fmt.Errorf("geo docID out of range")
 	}
 
@@ -431,8 +431,8 @@ func (gce *geoCacheEntry) BoundingBox(geoDocID uint64) ([]byte, error) {
 	return buf, nil
 }
 
-func (gce *geoCacheEntry) Shape(geoDocID uint64) ([]byte, error) {
-	if geoDocID >= gce.numDocs {
+func (gce *geoCacheEntry) Shape(geoDocID uint32) ([]byte, error) {
+	if uint64(geoDocID) >= gce.numDocs {
 		return nil, fmt.Errorf("geo docID out of range")
 	}
 

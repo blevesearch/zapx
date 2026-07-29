@@ -228,8 +228,8 @@ func verifyGeoShapeV2Data(t *testing.T, geoData seg.GeoShapeV2Data,
 		t.Fatal("expected geo data, got nil")
 	}
 
-	numDocs := uint64(len(geoDocs))
-	if geoData.NumDocs() != numDocs {
+	numDocs := uint32(len(geoDocs))
+	if geoData.NumDocs() != uint64(numDocs) {
 		t.Fatalf("expected %d geo docs, got %d", numDocs, geoData.NumDocs())
 	}
 
@@ -270,7 +270,7 @@ func verifyGeoShapeV2Data(t *testing.T, geoData seg.GeoShapeV2Data,
 	}
 
 	for geoDocID, d := range geoDocs {
-		bbox, err := geoData.BoundingBox(uint64(geoDocID))
+		bbox, err := geoData.BoundingBox(uint32(geoDocID))
 		if err != nil {
 			t.Fatalf("bounding box for geo docID %d: %v", geoDocID, err)
 		}
@@ -279,7 +279,7 @@ func verifyGeoShapeV2Data(t *testing.T, geoData seg.GeoShapeV2Data,
 				d.bbox, geoDocID, bbox)
 		}
 
-		shape, err := geoData.Shape(uint64(geoDocID))
+		shape, err := geoData.Shape(uint32(geoDocID))
 		if err != nil {
 			t.Fatalf("shape for geo docID %d: %v", geoDocID, err)
 		}
@@ -302,7 +302,7 @@ func verifyGeoShapeV2Data(t *testing.T, geoData seg.GeoShapeV2Data,
 	if len(scores) != 0 {
 		t.Fatalf("expected empty score map, got %d entries", len(scores))
 	}
-	for i := uint32(0); uint64(i) < numDocs; i++ {
+	for i := uint32(0); i < numDocs; i++ {
 		scores[i] = uint64(i) + 1
 	}
 	geoData.PutScoreMap(scores)

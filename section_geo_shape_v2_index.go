@@ -72,7 +72,6 @@ type geoIndexInfo struct {
 func (g *geoShapeV2IndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
 	drops []*roaring.Bitmap, fieldsInv []string, newDocNumsIn [][]uint64, w *FileWriter,
 	closeCh chan struct{}) error {
-
 	gs := g.getGeoShapeV2IndexOpaque(opaque)
 	indexInfos := make([]*geoIndexInfo, 0, len(segments))
 
@@ -288,19 +287,19 @@ func (g *geoIndexContent) process(f index.GeoShapeV2Field, docNum uint32) {
 	innerCells := f.InnerCells()
 	crossCells := f.CrossCells()
 
-	docID := uint32(len(g.docNums))
+	geoDocID := uint32(len(g.docNums))
 	g.docNums = append(g.docNums, docNum)
 
 	// Append inner cells along with their corresponding doc IDs
 	g.innerCells = append(g.innerCells, innerCells...)
 	for _ = range innerCells {
-		g.innerDocIDs = append(g.innerDocIDs, docID)
+		g.innerDocIDs = append(g.innerDocIDs, geoDocID)
 	}
 
 	// Append cross cells along with their corresponding doc IDs
 	g.crossCells = append(g.crossCells, crossCells...)
 	for _ = range crossCells {
-		g.crossDocIDs = append(g.crossDocIDs, docID)
+		g.crossDocIDs = append(g.crossDocIDs, geoDocID)
 	}
 
 	// Append bounding box bytes, shape bytes and the document score
@@ -312,7 +311,6 @@ func (g *geoIndexContent) process(f index.GeoShapeV2Field, docNum uint32) {
 }
 
 func (g *geoShapeV2IndexSectionOpaque) persist(w *FileWriter) error {
-
 	tempBuf := g.grabBuf(binary.MaxVarintLen64)
 	for fieldID, content := range g.indexContent {
 		// Record the starting position of this field's index content
@@ -525,9 +523,8 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 
 	// Assign merged geo docIDs and build, per segment, a direct
 	// oldGeoDocID -> mergedGeoDocID slice
-	segRemaps, numDocs := buildGeoDocRemaps(indexInfos, mergedContent)
-
-	if numDocs == 0 {
+	segRemaps, numGeoDocs := buildGeoDocRemaps(indexInfos, mergedContent)
+	if numGeoDocs == 0 {
 		return nil, nil
 	}
 
@@ -592,8 +589,7 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 // each input segment, a slice mapping that segment's old geo docID to its
 // merged geo docID.
 func buildGeoDocRemaps(indexInfos []*geoIndexInfo,
-	mergedContent *geoIndexContent) (segRemaps [][]uint32, numDocs uint64) {
-
+	mergedContent *geoIndexContent) (segRemaps [][]uint32, numGeoDocs uint64) {
 	segRemaps = make([][]uint32, len(indexInfos))
 	for s, indexInfo := range indexInfos {
 		remap := make([]uint32, len(indexInfo.content.docNums))
@@ -603,13 +599,13 @@ func buildGeoDocRemaps(indexInfos []*geoIndexInfo,
 				remap[geoDocID] = uint32(math.MaxUint32)
 				continue
 			}
-			remap[geoDocID] = uint32(numDocs)
-			numDocs++
+			remap[geoDocID] = uint32(numGeoDocs)
+			numGeoDocs++
 			mergedContent.docNums = append(mergedContent.docNums, uint32(newDocNum))
 		}
 		segRemaps[s] = remap
 	}
-	return segRemaps, numDocs
+	return segRemaps, numGeoDocs
 }
 
 // geoCellCursor iterates one segment's sorted (cell, docID) pairs during a

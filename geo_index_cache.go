@@ -88,7 +88,6 @@ func (gc *geoIndexCache) loadOrCreate(field uint16, mem []byte, except *roaring.
 
 func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 	except *roaring.Bitmap, r *FileReader) (*geoData, error) {
-
 	var pos uint64
 	// Load Num Docs
 	numDocs, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])

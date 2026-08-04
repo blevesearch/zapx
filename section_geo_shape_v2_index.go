@@ -178,8 +178,6 @@ func (g *geoShapeV2IndexSection) getGeoShapeV2IndexOpaque(
 }
 
 type geoShapeV2IndexSectionOpaque struct {
-	results []index.Document
-
 	// indexContent holds the geo index content for each field ID
 	indexContent map[uint16]*geoIndexContent
 	// fieldAddrs holds the starting address of each field's index content in the file
@@ -196,7 +194,6 @@ type geoShapeV2IndexSectionOpaque struct {
 }
 
 func (g *geoShapeV2IndexSectionOpaque) Reset() error {
-	g.results = nil
 	g.tmp = g.tmp[:0]
 	g.init = false
 	clear(g.indexContent)
@@ -216,8 +213,6 @@ func (g *geoShapeV2IndexSectionOpaque) grabBuf(size int) []byte {
 
 func (g *geoShapeV2IndexSectionOpaque) Set(key string, value interface{}) {
 	switch key {
-	case "results":
-		g.results = value.([]index.Document)
 	case "fieldsOptions":
 		g.fieldsOptions = value.(map[string]index.FieldIndexingOptions)
 	}
@@ -292,13 +287,13 @@ func (g *geoIndexContent) process(f index.GeoShapeV2Field, docNum uint32) {
 
 	// Append inner cells along with their corresponding doc IDs
 	g.innerCells = append(g.innerCells, innerCells...)
-	for _ = range innerCells {
+	for range innerCells {
 		g.innerDocIDs = append(g.innerDocIDs, geoDocID)
 	}
 
 	// Append cross cells along with their corresponding doc IDs
 	g.crossCells = append(g.crossCells, crossCells...)
-	for _ = range crossCells {
+	for range crossCells {
 		g.crossDocIDs = append(g.crossDocIDs, geoDocID)
 	}
 

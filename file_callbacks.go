@@ -130,7 +130,7 @@ func (w *FileWriter) grabPayloadBuf(size int) []byte {
 
 // WriteUint64Array writes arr as a length-prefixed array of little-endian
 // uint64 values, padded so the payload begins on an 8-byte boundary in the
-// file. Padding is required for zero-copy reads becaus of go's
+// file. Padding is required for zero-copy reads because of go's
 // unsafe.Pointer conversion rules.
 func (w *FileWriter) WriteUint64Array(arr []uint64) (int, error) {
 	// encode the array as a contiguous slice of bytes, little-endian.
@@ -299,7 +299,6 @@ func (r *FileReader) process(data []byte) ([]byte, error) {
 // Callers must treat both vals and mem as read-only.
 func (r *FileReader) ReadUint64Array(data []byte) (vals []uint64, mem []byte, shift uint64, err error) {
 	var pos uint64
-
 	// read the length of the array as a varint
 	bufLen, n := binary.Uvarint(data[pos : pos+binary.MaxVarintLen64])
 	pos += uint64(n)

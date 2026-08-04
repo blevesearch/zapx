@@ -17,6 +17,7 @@ package zap
 import (
 	"encoding/binary"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -234,13 +235,31 @@ func (gc *geoIndexCache) createAndCacheLocked(field uint16, mem []byte,
 // createNewExcludeBitmap translates an exclusion bitmap from segment doc
 // number space into geo docID space
 func createNewExcludeBitmap(except *roaring.Bitmap, docNums []uint32) *roaring.Bitmap {
-	if except == nil || except.IsEmpty() {
+	if except == nil || except.IsEmpty() || len(docNums) == 0 {
 		return nil
 	}
 
-	newExcept := roaring.New()
-	for i, docNum := range docNums {
-		if except.Contains(docNum) {
+	// docNums is sorted ascending, so a disjoint range means nothing to exclude
+	lo, hi := docNums[0], docNums[len(docNums)-1]
+	if except.Maximum() < lo || except.Minimum() > hi {
+		return nil
+	}
+
+	var newExcept *roaring.Bitmap
+	it := except.Iterator()
+	it.AdvanceIfNeeded(lo)
+	for i := 0; it.HasNext() && i < len(docNums); {
+		docNum := it.Next()
+		if docNum > hi {
+			break
+		}
+		// search only the unscanned suffix - i advances monotonically
+		i += sort.Search(len(docNums)-i, func(k int) bool { return docNums[i+k] >= docNum })
+		// a doc with a multi-valued geo field owns a run of geo docIDs
+		for ; i < len(docNums) && docNums[i] == docNum; i++ {
+			if newExcept == nil {
+				newExcept = roaring.New()
+			}
 			newExcept.Add(uint32(i))
 		}
 	}

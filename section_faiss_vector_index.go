@@ -534,9 +534,9 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 				return err
 			}
 
-			vecIndexes[segI].index, err = newFaissBinaryIndexFromBytes(bIndexBytes, fIndexBytes, params)
+			vecIndexes[segI].index, err = newFaissBinaryIndexFromBytes(bIndexBytes, fIndexBytes, reconsParams)
 		} else {
-			vecIndexes[segI].index, err = newFaissFloat32IndexFromBytes(fIndexBytes, params)
+			vecIndexes[segI].index, err = newFaissFloat32IndexFromBytes(fIndexBytes, reconsParams)
 		}
 		if err != nil {
 			freeReconstructedIndexes(vecIndexes)
@@ -577,7 +577,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 	// We perform fast merge whenever a compatible trained index is available,
 	// regardless of whether the GPU is enabled for this field.
 	if canFastMerge(trainedIndex, indexOptimizedFor, nvecs) {
-		config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, nlist, false)
+		config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, nlist, false, v.stats)
 		err := v.fastMergeIndexes(trainedIndex, config, drops, vecIndexes, w, closeCh)
 		if err != nil {
 			atomic.AddUint64(&v.stats.TotVecSectionFastMergeErrs, 1)
@@ -589,7 +589,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 	}
 
 	// Reconstruct Merge Path:
-	config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, nlist, useGPU)
+	config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, nlist, useGPU, v.stats)
 	// merging of indexes with reconstruction method.
 	atomic.AddUint64(&v.stats.TotVecSectionNaiveMerges, 1)
 	// the vecIds in each index contain only the valid vectors,

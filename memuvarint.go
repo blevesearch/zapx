@@ -49,6 +49,13 @@ func (r *memUvarintReader) ReadUvarint() (uint64, error) {
 	var C = r.C
 	var S = r.S
 
+	// Fast path: freqs, norms and positions are overwhelmingly small enough to
+	// encode in a single byte, and this is the hottest loop in the reader.
+	if b := S[C]; b < 0x80 {
+		r.C = C + 1
+		return uint64(b), nil
+	}
+
 	for {
 		b := S[C]
 		C++

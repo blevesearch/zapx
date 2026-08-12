@@ -21,6 +21,7 @@ import (
 	"reflect"
 
 	"github.com/RoaringBitmap/roaring/v2"
+	index "github.com/blevesearch/bleve_index_api"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 
@@ -336,6 +337,12 @@ type PostingsIterator struct {
 	freqNormReader *chunkedIntDecoder
 	locReader      *chunkedIntDecoder
 
+	// cached result of the last doc-number-to-chunk division, valid for doc
+	// numbers in [chunkLo, chunkHi). See chunkOf.
+	chunkCached uint32
+	chunkLo     uint64
+	chunkHi     uint64
+
 	next            Posting            // reused across Next() calls
 	nextLocs        []Location         // reused across Next() calls
 	nextSegmentLocs []segment.Location // reused across Next() calls
@@ -383,6 +390,28 @@ func (i *PostingsIterator) incrementBytesRead(val uint64) {
 
 func (i *PostingsIterator) BytesWritten() uint64 {
 	return 0
+}
+
+// chunkOf maps a doc number to the freq/norm chunk holding it.
+//
+// This is otherwise a hardware integer division on every document of every
+// scan — chunkSize is maxDocs/numChunks, so it is not a power of two and the
+// compiler cannot strength-reduce it. The bounds of the last chunk computed
+// are cached, and since a scan walks doc numbers in order it crosses a chunk
+// boundary only once every chunkSize documents.
+//
+// Callers must have already rejected a zero chunkSize.
+func (i *PostingsIterator) chunkOf(n uint32) uint32 {
+	nn := uint64(n)
+	if nn >= i.chunkLo && nn < i.chunkHi {
+		return i.chunkCached
+	}
+	cs := i.postings.chunkSize
+	c := nn / cs
+	i.chunkCached = uint32(c)
+	i.chunkLo = c * cs
+	i.chunkHi = i.chunkLo + cs
+	return i.chunkCached
 }
 
 func (i *PostingsIterator) loadChunk(chunk int) error {
@@ -521,6 +550,80 @@ func (i *PostingsIterator) readLocation(l *Location) error {
 	return nil
 }
 
+// FillTermFieldDoc advances the iterator to the first document at or after
+// atOrAfter and writes that posting directly into rv, reporting false once the
+// postings list is exhausted. Pass 0 for a plain forward step.
+//
+// This is a fast path for the very common case where term vectors are not
+// required. The generic Next() route boxes a *Posting into an interface and
+// then costs four virtual calls (Number/Frequency/Norm/Locations) plus a struct
+// clear for every document; profiling a term scan put that glue at roughly a
+// quarter of the whole inner loop. Locations are deliberately not decoded here,
+// so callers that need them must stay on the generic path.
+func (i *PostingsIterator) FillTermFieldDoc(rv *index.TermFieldDoc,
+	globalOffset, atOrAfter uint64, includeFreq, includeNorm bool) (bool, error) {
+	docNum, exists, err := i.nextDocNumAtOrAfter(atOrAfter)
+	if err != nil || !exists {
+		return false, err
+	}
+
+	rv.ID = index.NewIndexInternalID(rv.ID, docNum+globalOffset)
+
+	if !i.includeFreqNorm {
+		return true, nil
+	}
+
+	freq, normBits, _, err := i.readFreqNormHasLocs()
+	if err != nil {
+		return false, err
+	}
+	if includeFreq {
+		rv.Freq = freq
+	}
+	if includeNorm {
+		rv.Norm = normFromFieldLen(uint32(normBits))
+	}
+
+	return true, nil
+}
+
+// NextBlock fills the caller's arrays with up to len(docNums) postings and
+// returns how many were written; a return of 0 means the list is exhausted.
+//
+// This is the bulk counterpart to FillTermFieldDoc. Handing back flat arrays
+// lets the caller score a whole block without materialising a per-document
+// object, and amortises the call across the block instead of paying it per
+// document. Locations are not decoded, so callers needing term vectors must
+// stay on the generic path.
+func (i *PostingsIterator) NextBlock(docNums []uint64, freqs []uint64, norms []float64,
+	globalOffset uint64) (int, error) {
+	n := 0
+	for n < len(docNums) {
+		docNum, exists, err := i.nextDocNumAtOrAfter(0)
+		if err != nil {
+			return n, err
+		}
+		if !exists {
+			break
+		}
+		docNums[n] = docNum + globalOffset
+
+		if i.includeFreqNorm {
+			freq, normBits, _, err := i.readFreqNormHasLocs()
+			if err != nil {
+				return n, err
+			}
+			freqs[n] = freq
+			norms[n] = normFromFieldLen(uint32(normBits))
+		} else {
+			freqs[n] = 1
+			norms[n] = 1
+		}
+		n++
+	}
+	return n, nil
+}
+
 // Next returns the next posting on the postings list, or nil at the end
 func (i *PostingsIterator) Next() (segment.Posting, error) {
 	return i.nextAtOrAfter(0)
@@ -645,7 +748,7 @@ func (i *PostingsIterator) nextDocNumAtOrAfter(atOrAfter uint64) (uint64, bool, 
 
 	n := i.Actual.Next()
 	allN := i.all.Next()
-	nChunk := n / uint32(i.postings.chunkSize)
+	nChunk := i.chunkOf(n)
 
 	// when allN becomes >= to here, then allN is in the same chunk as nChunk.
 	allNReachesNChunk := nChunk * uint32(i.postings.chunkSize)
@@ -752,13 +855,13 @@ func (i *PostingsIterator) nextDocNumAtOrAfterClean(
 	// freq-norm's needed, so maintain freq-norm chunk reader
 	sameChunkNexts := 0 // # of times we called Next() in the same chunk
 	n := i.Actual.Next()
-	nChunk := n / uint32(i.postings.chunkSize)
+	nChunk := i.chunkOf(n)
 
 	for uint64(n) < atOrAfter && i.Actual.HasNext() {
 		n = i.Actual.Next()
 
 		nChunkPrev := nChunk
-		nChunk = n / uint32(i.postings.chunkSize)
+		nChunk = i.chunkOf(n)
 
 		if nChunk != nChunkPrev {
 			sameChunkNexts = 0
@@ -890,9 +993,34 @@ func (p *Posting) Frequency() uint64 {
 	return p.freq
 }
 
+// maxNormCache bounds normCache; field lengths beyond it fall through to the
+// direct computation.
+const maxNormCache = 4096
+
+// normCache maps a field length to 1/sqrt(fieldLength). The value stored in a
+// posting's norm is the field length reinterpreted as float32 bits (see the
+// writer's use of math.Float32frombits on the field length), so the norm is a
+// pure function of a small integer. Norm() is called once per posting on every
+// scored query, and this keeps a sqrt and a division out of that inner loop.
+var normCache [maxNormCache]float32
+
+func init() {
+	for i := 0; i < maxNormCache; i++ {
+		normCache[i] = float32(1.0 / math.Sqrt(float64(i)))
+	}
+}
+
 // Norm returns the normalization factor for this posting
 func (p *Posting) Norm() float64 {
-	return float64(float32(1.0 / math.Sqrt(float64(math.Float32bits(p.norm)))))
+	return normFromFieldLen(math.Float32bits(p.norm))
+}
+
+// normFromFieldLen maps a stored field length to its normalization factor.
+func normFromFieldLen(fieldLen uint32) float64 {
+	if fieldLen < maxNormCache {
+		return float64(normCache[fieldLen])
+	}
+	return float64(float32(1.0 / math.Sqrt(float64(fieldLen))))
 }
 
 // Locations returns the location information for each occurrence

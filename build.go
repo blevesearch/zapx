@@ -195,7 +195,7 @@ func persistStoredFieldValues(fieldID int,
 
 func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64,
 	storedIndexOffset uint64, sectionsIndexOffset uint64,
-	config map[string]interface{}) (*SegmentBase, error) {
+	config map[string]interface{}, stats *Stats) (*SegmentBase, error) {
 	sb := &SegmentBase{
 		mem:                 mem,
 		memCRC:              memCRC,
@@ -216,11 +216,9 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		fieldsOptions: make(map[string]index.FieldIndexingOptions),
 		fieldsInv:     make([]string, 0),
 		config:        config,
+		stats:         stats,
 	}
-	// allocate a throwaway stats instance so all increment sites remain
-	// nil-check-free; callers that track flush stats (see newWithChunkMode)
-	// overwrite sb.stats with the plugin-level handler afterwards.
-	sb.stats = new(Stats)
+
 	sb.updateSize()
 
 	// initialize the file reader with an empty callback

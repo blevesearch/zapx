@@ -82,11 +82,7 @@ func (z *ZapPlugin) newWithChunkMode(results []index.Document,
 	}
 
 	sb, err := InitSegmentBase(br.Bytes(), s.w.Sum32(), chunkMode,
-		uint64(len(s.results)), storedIndexOffset, sectionsIndexOffset, config)
-	if err == nil {
-		// propagate stats to the SegmentBase so that Persist() can track flush stats
-		sb.stats = s.stats
-	}
+		uint64(len(s.results)), storedIndexOffset, sectionsIndexOffset, config, &z.stats)
 
 	// get the bytes written before the interim's reset() call
 	// write it to the newly formed segment base.

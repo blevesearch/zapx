@@ -64,8 +64,6 @@ func (z *ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path 
 		}
 	}
 
-	config[statsKey] = &z.stats
-
 	atomic.AddUint64(&z.stats.TotMergesBeg, 1)
 	atomic.AddUint64(&z.stats.TotMergeInputSegments, uint64(len(segments)))
 	var totalInputDocs, droppedDocs uint64
@@ -78,7 +76,7 @@ func (z *ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path 
 	atomic.AddUint64(&z.stats.TotMergeDroppedDocs, droppedDocs)
 	atomic.AddUint64(&z.stats.TotMergeOutputDocs, totalInputDocs-droppedDocs)
 
-	newDocNums, size, err := mergeSegmentBases(segmentBases, drops, path, DefaultChunkMode, closeCh, s, config)
+	newDocNums, size, err := mergeSegmentBases(segmentBases, drops, path, DefaultChunkMode, closeCh, s, config, &z.stats)
 	if err != nil {
 		atomic.AddUint64(&z.stats.TotMergesErrors, 1)
 		return nil, 0, err
@@ -88,7 +86,8 @@ func (z *ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path 
 }
 
 func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, path string,
-	chunkMode uint32, closeCh chan struct{}, s seg.StatsReporter, config map[string]interface{}) (
+	chunkMode uint32, closeCh chan struct{}, s seg.StatsReporter, config map[string]interface{},
+	stats *Stats) (
 	[][]uint64, uint64, error) {
 	flag := os.O_RDWR | os.O_CREATE
 
@@ -114,7 +113,7 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 	}
 
 	newDocNums, numDocs, storedIndexOffset, _, _, sectionsIndexOffset, err :=
-		mergeToWriter(segmentBases, drops, chunkMode, w, closeCh, config)
+		mergeToWriter(segmentBases, drops, chunkMode, w, closeCh, config, stats)
 	if err != nil {
 		cleanup()
 		return nil, 0, err
@@ -193,7 +192,8 @@ func finalizeFieldOptions(fieldOptions map[string]index.FieldIndexingOptions,
 }
 
 func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
-	chunkMode uint32, w *FileWriter, closeCh chan struct{}, config map[string]interface{}) (
+	chunkMode uint32, w *FileWriter, closeCh chan struct{}, config map[string]interface{},
+	stats *Stats) (
 	newDocNums [][]uint64, numDocs, storedIndexOffset uint64,
 	fieldsInv []string, fieldsMap map[string]uint16, sectionsIndexOffset uint64,
 	err error) {
@@ -227,7 +227,7 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		"fieldsMap":     fieldsMap,
 		"numDocs":       numDocs,
 		"fieldsOptions": fieldsOptions,
-		"stats":         config[statsKey].(*Stats),
+		"stats":         stats,
 	}
 	if config != nil {
 		args["config"] = config

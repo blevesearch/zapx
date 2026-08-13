@@ -20,8 +20,6 @@ import (
 	"unsafe"
 )
 
-const statsKey = "_zap_stats"
-
 // all the stats we want to track for a segment during its lifetime, these are
 // all uint64 to allow us to use light atomic operations
 type Stats struct {

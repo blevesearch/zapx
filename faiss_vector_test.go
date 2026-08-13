@@ -481,6 +481,13 @@ func TestVectorSegment(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	defer func() {
+		cerr := segOnDisk.Close()
+		if cerr != nil {
+			t.Fatalf("error closing segment on disk: %v", cerr)
+		}
+	}()
+
 	fieldsSectionsMap := vecSegBase.fieldsSectionsMap
 	stubVecFieldStartAddr := fieldsSectionsMap[vecSegBase.fieldsMap["stubVec"]-1][SectionFaissVectorIndex]
 	docValueStart, docValueEnd, indexBytesLen, _,

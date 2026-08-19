@@ -961,7 +961,7 @@ func (v *faissVectorIndexSection) InitOpaque(args map[string]interface{}) reseta
 		rv.Set(k, v)
 	}
 	if rv.stats == nil {
-		rv.stats = new(Stats)
+		rv.stats = new(seg.Stats)
 	}
 
 	return rv
@@ -990,7 +990,7 @@ type vectorIndexOpaque struct {
 	// number of bytes written out for the vector index section, used for metrics and tracking
 	bytesWritten uint64
 	// stats holds the statistics for the vector index processing
-	stats *Stats
+	stats *seg.Stats
 	// fieldAddrs maps fieldID to the address of its vector section
 	fieldAddrs map[uint16]int
 	// fieldVectorIndex maps fieldID to its vector index content
@@ -1046,7 +1046,7 @@ func (v *vectorIndexOpaque) Set(key string, val interface{}) {
 	case "results":
 		v.numDocs = len(val.([]index.Document))
 	case "stats":
-		v.stats = val.(*Stats)
+		v.stats = val.(*seg.Stats)
 	}
 }
 
@@ -1061,11 +1061,11 @@ type faissIndexConfig struct {
 	optimizationType string
 	nlist            int
 	useGPU           bool
-	stats            *Stats
+	stats            *seg.Stats
 }
 
 func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimension,
-	metricType, numVecs, nlist int, useGPU bool, stats *Stats) *faissIndexConfig {
+	metricType, numVecs, nlist int, useGPU bool, stats *seg.Stats) *faissIndexConfig {
 	return &faissIndexConfig{
 		indexType:        idxType,
 		dimension:        dimension,

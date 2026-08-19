@@ -27,6 +27,7 @@ import (
 	"github.com/RoaringBitmap/roaring/v2"
 	index "github.com/blevesearch/bleve_index_api"
 	mmap "github.com/blevesearch/mmap-go"
+	seg "github.com/blevesearch/scorch_segment_api/v2"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 	"github.com/golang/snappy"
 )
@@ -50,17 +51,22 @@ func (z *ZapPlugin) Open(path string) (segment.Segment, error) {
 }
 
 func (z *ZapPlugin) open(path string, config map[string]interface{}) (segment.Segment, error) {
-	atomic.AddUint64(&z.stats.TotOpenBeg, 1)
+	zapStats, ok := config[seg.StatsKey].(*seg.Stats)
+	if !ok {
+		zapStats = new(seg.Stats)
+	}
+
+	atomic.AddUint64(&zapStats.TotOpenBeg, 1)
 	f, err := os.Open(path)
 	if err != nil {
-		atomic.AddUint64(&z.stats.TotOpenErrors, 1)
+		atomic.AddUint64(&zapStats.TotOpenErrors, 1)
 		return nil, err
 	}
 	mm, err := mmap.Map(f, mmap.RDONLY, 0)
 	if err != nil {
 		// mmap failed, try to close the file
 		_ = f.Close()
-		atomic.AddUint64(&z.stats.TotOpenErrors, 1)
+		atomic.AddUint64(&zapStats.TotOpenErrors, 1)
 		return nil, err
 	}
 
@@ -76,7 +82,7 @@ func (z *ZapPlugin) open(path string, config map[string]interface{}) (segment.Se
 			trainedIndexCache: newTrainedIndexCache(),
 			fieldDvReaders:    make([][]*docValueReader, len(segmentSections)),
 			config:            config,
-			stats:             &z.stats,
+			stats:             zapStats,
 		},
 		f:    f,
 		mm:   mm,
@@ -88,21 +94,21 @@ func (z *ZapPlugin) open(path string, config map[string]interface{}) (segment.Se
 	err = rv.loadConfig()
 	if err != nil {
 		_ = rv.Close()
-		atomic.AddUint64(&z.stats.TotOpenErrors, 1)
+		atomic.AddUint64(&zapStats.TotOpenErrors, 1)
 		return nil, err
 	}
 
 	err = rv.loadFields()
 	if err != nil {
 		_ = rv.Close()
-		atomic.AddUint64(&z.stats.TotOpenErrors, 1)
+		atomic.AddUint64(&zapStats.TotOpenErrors, 1)
 		return nil, err
 	}
 
 	err = rv.loadDvReaders()
 	if err != nil {
 		_ = rv.Close()
-		atomic.AddUint64(&z.stats.TotOpenErrors, 1)
+		atomic.AddUint64(&zapStats.TotOpenErrors, 1)
 		return nil, err
 	}
 
@@ -110,11 +116,11 @@ func (z *ZapPlugin) open(path string, config map[string]interface{}) (segment.Se
 	err = rv.nstIndexCache.initialize(rv.numDocs, rv.getEdgeListOffset(), rv.mem)
 	if err != nil {
 		_ = rv.Close()
-		atomic.AddUint64(&z.stats.TotOpenErrors, 1)
+		atomic.AddUint64(&zapStats.TotOpenErrors, 1)
 		return nil, err
 	}
 
-	atomic.AddUint64(&z.stats.TotOpenEnd, 1)
+	atomic.AddUint64(&zapStats.TotOpenEnd, 1)
 	return rv, nil
 }
 
@@ -155,7 +161,7 @@ type SegmentBase struct {
 	nstIndexCache     *nestedIndexCache
 
 	// segment level stats that are tracked and reported as part of the segment's lifecycle
-	stats *Stats
+	stats *seg.Stats
 }
 
 func (sb *SegmentBase) Size() int {

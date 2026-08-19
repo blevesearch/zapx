@@ -24,6 +24,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2"
 	index "github.com/blevesearch/bleve_index_api"
+	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 
 const Version uint32 = 17
@@ -195,7 +196,7 @@ func persistStoredFieldValues(fieldID int,
 
 func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64,
 	storedIndexOffset uint64, sectionsIndexOffset uint64,
-	config map[string]interface{}, stats *Stats) (*SegmentBase, error) {
+	config map[string]interface{}, stats *segment.Stats) (*SegmentBase, error) {
 	sb := &SegmentBase{
 		mem:                 mem,
 		memCRC:              memCRC,

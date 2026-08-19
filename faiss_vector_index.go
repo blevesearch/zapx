@@ -23,6 +23,7 @@ import (
 	"reflect"
 
 	"github.com/blevesearch/go-faiss"
+	seg "github.com/blevesearch/scorch_segment_api/v2"
 )
 
 var (
@@ -60,7 +61,7 @@ type faissIndexParams struct {
 	nlist int
 	// ioFlags used to read the index from bytes
 	ioFlags int
-	stats   *Stats
+	stats   *seg.Stats
 }
 
 // newFaissIndexParams constructs a faissIndexParams with the given optimization

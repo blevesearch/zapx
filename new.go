@@ -17,6 +17,7 @@ package zap
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"math"
 	"sort"
 	"sync"
@@ -54,7 +55,13 @@ func (z *ZapPlugin) newWithChunkMode(results []index.Document,
 	chunkMode uint32, config map[string]interface{}) (segment.Segment, uint64, error) {
 	s := interimPool.Get().(*interim)
 
-	s.stats = &z.stats
+	zapStats, ok := config[segment.StatsKey].(*segment.Stats)
+	if !ok {
+		fmt.Println("zapStats not found in config, creating new instance")
+		zapStats = &segment.Stats{}
+	}
+
+	s.stats = zapStats
 	var br bytes.Buffer
 	if s.lastNumDocs > 0 {
 		// use previous results to initialize the buf with an estimate
@@ -82,7 +89,7 @@ func (z *ZapPlugin) newWithChunkMode(results []index.Document,
 	}
 
 	sb, err := InitSegmentBase(br.Bytes(), s.w.Sum32(), chunkMode,
-		uint64(len(s.results)), storedIndexOffset, sectionsIndexOffset, config, &z.stats)
+		uint64(len(s.results)), storedIndexOffset, sectionsIndexOffset, config, s.stats)
 
 	// get the bytes written before the interim's reset() call
 	// write it to the newly formed segment base.
@@ -137,7 +144,7 @@ type interim struct {
 
 	opaque map[int]resetable
 
-	stats *Stats
+	stats *segment.Stats
 }
 
 func (s *interim) reset() (err error) {

@@ -64,8 +64,13 @@ func (z *ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path 
 		}
 	}
 
-	atomic.AddUint64(&z.stats.TotMergesBeg, 1)
-	atomic.AddUint64(&z.stats.TotMergeInputSegments, uint64(len(segments)))
+	zapStats, ok := config[seg.StatsKey].(*seg.Stats)
+	if !ok {
+		return nil, 0, fmt.Errorf("missing stats in config")
+	}
+
+	atomic.AddUint64(&zapStats.TotMergesBeg, 1)
+	atomic.AddUint64(&zapStats.TotMergeInputSegments, uint64(len(segments)))
 	var totalInputDocs, droppedDocs uint64
 	for i, sb := range segmentBases {
 		totalInputDocs += sb.numDocs
@@ -73,21 +78,21 @@ func (z *ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path 
 			droppedDocs += drops[i].GetCardinality()
 		}
 	}
-	atomic.AddUint64(&z.stats.TotMergeDroppedDocs, droppedDocs)
-	atomic.AddUint64(&z.stats.TotMergeOutputDocs, totalInputDocs-droppedDocs)
+	atomic.AddUint64(&zapStats.TotMergeDroppedDocs, droppedDocs)
+	atomic.AddUint64(&zapStats.TotMergeOutputDocs, totalInputDocs-droppedDocs)
 
-	newDocNums, size, err := mergeSegmentBases(segmentBases, drops, path, DefaultChunkMode, closeCh, s, config, &z.stats)
+	newDocNums, size, err := mergeSegmentBases(segmentBases, drops, path, DefaultChunkMode, closeCh, s, config, zapStats)
 	if err != nil {
-		atomic.AddUint64(&z.stats.TotMergesErrors, 1)
+		atomic.AddUint64(&zapStats.TotMergesErrors, 1)
 		return nil, 0, err
 	}
-	atomic.AddUint64(&z.stats.TotMergesEnd, 1)
+	atomic.AddUint64(&zapStats.TotMergesEnd, 1)
 	return newDocNums, size, nil
 }
 
 func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, path string,
 	chunkMode uint32, closeCh chan struct{}, s seg.StatsReporter, config map[string]interface{},
-	stats *Stats) (
+	stats *seg.Stats) (
 	[][]uint64, uint64, error) {
 	flag := os.O_RDWR | os.O_CREATE
 
@@ -193,7 +198,7 @@ func finalizeFieldOptions(fieldOptions map[string]index.FieldIndexingOptions,
 
 func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 	chunkMode uint32, w *FileWriter, closeCh chan struct{}, config map[string]interface{},
-	stats *Stats) (
+	stats *seg.Stats) (
 	newDocNums [][]uint64, numDocs, storedIndexOffset uint64,
 	fieldsInv []string, fieldsMap map[string]uint16, sectionsIndexOffset uint64,
 	err error) {

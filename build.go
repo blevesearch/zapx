@@ -107,7 +107,6 @@ func PersistSegmentBase(sb *SegmentBase, path string) error {
 func rewriteSegmentBase(sb *SegmentBase, path string) error {
 	closeCh := make(chan struct{})
 	defer close(closeCh)
-
 	_, _, err := mergeSegmentBases([]*SegmentBase{sb}, []*roaring.Bitmap{nil},
 		path, DefaultChunkMode, closeCh, nil, nil, sb.stats)
 	if err != nil {
@@ -219,7 +218,6 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		config:        config,
 		stats:         stats,
 	}
-
 	sb.updateSize()
 
 	// initialize the file reader with an empty callback

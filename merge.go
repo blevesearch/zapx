@@ -66,7 +66,7 @@ func (z *ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path 
 
 	zapStats, ok := config[seg.StatsKey].(*seg.Stats)
 	if !ok {
-		return nil, 0, fmt.Errorf("missing stats in config")
+		zapStats = new(seg.Stats)
 	}
 
 	atomic.AddUint64(&zapStats.TotMergesBeg, 1)

@@ -17,7 +17,6 @@ package zap
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"math"
 	"sort"
 	"sync"
@@ -57,8 +56,7 @@ func (z *ZapPlugin) newWithChunkMode(results []index.Document,
 
 	zapStats, ok := config[segment.StatsKey].(*segment.Stats)
 	if !ok {
-		fmt.Println("zapStats not found in config, creating new instance")
-		zapStats = &segment.Stats{}
+		zapStats = new(segment.Stats)
 	}
 
 	s.stats = zapStats

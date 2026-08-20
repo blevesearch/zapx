@@ -1097,7 +1097,6 @@ func (io *invertedIndexOpaque) Reset() (err error) {
 	io.fieldsSame = false
 	io.numDocs = 0
 
-	io.stats = nil
 	clear(io.fieldAddrs)
 
 	return err

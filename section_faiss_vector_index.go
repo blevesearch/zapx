@@ -898,9 +898,10 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 func (vo *vectorIndexOpaque) process(field index.VectorField, fieldID uint16, docNum uint32) {
 	start := time.Now()
 	defer func() {
-		atomic.AddUint64(&vo.stats.TotVecSectionVecsProcessedTime, uint64(time.Since(start)))
+		elapsed := uint64(time.Since(start))
+		atomic.AddUint64(&vo.stats.TotVecSectionVecsProcessedTime, elapsed)
 		if vo.trainingPhase {
-			atomic.AddUint64(&vo.stats.TotVecSectionTrainingPhaseVecsProcessedTime, uint64(time.Since(start)))
+			atomic.AddUint64(&vo.stats.TotVecSectionTrainingPhaseVecsProcessedTime, elapsed)
 		}
 	}()
 

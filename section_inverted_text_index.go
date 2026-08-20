@@ -1045,8 +1045,6 @@ type invertedIndexOpaque struct {
 
 	fieldsSame bool
 	numDocs    uint64
-
-	stats *seg.Stats
 }
 
 func (io *invertedIndexOpaque) Reset() (err error) {

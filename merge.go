@@ -49,7 +49,7 @@ func (z *ZapPlugin) MergeUsing(segments []seg.Segment, drops []*roaring.Bitmap, 
 	return z.merge(segments, drops, path, closeCh, s, config)
 }
 
-func (z *ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path string,
+func (*ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path string,
 	closeCh chan struct{}, s seg.StatsReporter, config map[string]interface{}) (
 	[][]uint64, uint64, error) {
 	segmentBases := make([]*SegmentBase, len(segments))
@@ -65,7 +65,7 @@ func (z *ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path 
 	}
 
 	zapStats, ok := config[seg.StatsKey].(*seg.Stats)
-	if !ok {
+	if !ok || zapStats == nil {
 		zapStats = new(seg.Stats)
 	}
 

@@ -27,7 +27,6 @@ import (
 	"github.com/RoaringBitmap/roaring/v2"
 	index "github.com/blevesearch/bleve_index_api"
 	mmap "github.com/blevesearch/mmap-go"
-	seg "github.com/blevesearch/scorch_segment_api/v2"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 	"github.com/golang/snappy"
 )
@@ -51,9 +50,9 @@ func (z *ZapPlugin) Open(path string) (segment.Segment, error) {
 }
 
 func (z *ZapPlugin) open(path string, config map[string]interface{}) (segment.Segment, error) {
-	zapStats, ok := config[seg.StatsKey].(*seg.Stats)
-	if !ok {
-		zapStats = new(seg.Stats)
+	zapStats, ok := config[segment.StatsKey].(*segment.Stats)
+	if !ok || zapStats == nil {
+		zapStats = new(segment.Stats)
 	}
 
 	atomic.AddUint64(&zapStats.TotOpenBeg, 1)
@@ -161,7 +160,7 @@ type SegmentBase struct {
 	nstIndexCache     *nestedIndexCache
 
 	// segment level stats that are tracked and reported as part of the segment's lifecycle
-	stats *seg.Stats
+	stats *segment.Stats
 }
 
 func (sb *SegmentBase) Size() int {

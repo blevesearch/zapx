@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring/v2"
+	seg "github.com/blevesearch/scorch_segment_api/v2"
 )
 
 // -----------------------------------------------------------------------------
@@ -72,6 +73,7 @@ type vectorCacheOptions struct {
 	optStr  string
 
 	skipMapping bool // if true, skip building the idMapping
+	stats       *seg.Stats
 }
 
 func newVectorCacheOptions(mem []byte, numDocs uint32, except *roaring.Bitmap,

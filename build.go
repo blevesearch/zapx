@@ -20,9 +20,11 @@ import (
 	"io"
 	"math"
 	"os"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/v2"
 	index "github.com/blevesearch/bleve_index_api"
+	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 
 const Version uint32 = 17
@@ -32,7 +34,14 @@ const Type string = "zap"
 const fieldNotUninverted uint64 = math.MaxUint64
 
 func (sb *SegmentBase) Persist(path string) error {
-	return PersistSegmentBase(sb, path)
+	atomic.AddUint64(&sb.stats.TotPersistBeg, 1)
+	err := PersistSegmentBase(sb, path)
+	if err != nil {
+		atomic.AddUint64(&sb.stats.TotPersistErrors, 1)
+		return err
+	}
+	atomic.AddUint64(&sb.stats.TotPersistEnd, 1)
+	return nil
 }
 
 // WriteTo is an implementation of io.WriterTo interface.
@@ -99,7 +108,7 @@ func rewriteSegmentBase(sb *SegmentBase, path string) error {
 	closeCh := make(chan struct{})
 	defer close(closeCh)
 	_, _, err := mergeSegmentBases([]*SegmentBase{sb}, []*roaring.Bitmap{nil},
-		path, DefaultChunkMode, closeCh, nil, nil)
+		path, DefaultChunkMode, closeCh, nil, nil, sb.stats)
 	if err != nil {
 		return err
 	}
@@ -186,7 +195,7 @@ func persistStoredFieldValues(fieldID int,
 
 func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64,
 	storedIndexOffset uint64, sectionsIndexOffset uint64,
-	config map[string]interface{}) (*SegmentBase, error) {
+	config map[string]interface{}, stats *segment.Stats) (*SegmentBase, error) {
 	sb := &SegmentBase{
 		mem:                 mem,
 		memCRC:              memCRC,
@@ -201,11 +210,13 @@ func InitSegmentBase(mem []byte, memCRC uint32, chunkMode uint32, numDocs uint64
 		synIndexCache:       newSynonymIndexCache(),
 		geoIndexCache:       newGeoIndexCache(),
 		nstIndexCache:       newNestedIndexCache(),
+		trainedIndexCache:   newTrainedIndexCache(),
 		// following fields gets populated by loadFields
 		fieldsMap:     make(map[string]uint16),
 		fieldsOptions: make(map[string]index.FieldIndexingOptions),
 		fieldsInv:     make([]string, 0),
 		config:        config,
+		stats:         stats,
 	}
 	sb.updateSize()
 

@@ -8,8 +8,8 @@ github.com/blevesearch/go-faiss v1.1.5 h1:/IU5lkOahH9Ghfk9n3F6N0XD7PYVXZJWmNDc9T
 github.com/blevesearch/go-faiss v1.1.5/go.mod h1:w3W9AiWsFRGVaMG+/cmJi7iHEAuGyC6blsgO1EzCK/M=
 github.com/blevesearch/mmap-go v1.2.0 h1:l33nNKPFcBjJUMwem6sAYJPUzhUCABoK9FxZDGiFNBI=
 github.com/blevesearch/mmap-go v1.2.0/go.mod h1:Vd6+20GBhEdwJnU1Xohgt88XCD/CTWcqbCNxkZpyBo0=
-github.com/blevesearch/scorch_segment_api/v2 v2.4.9-0.20260729090843-4313bda09bee h1:RmX8uCxp4RDbsW0PRFsFED5f7X5xUvz6/9cYb9HrNTU=
-github.com/blevesearch/scorch_segment_api/v2 v2.4.9-0.20260729090843-4313bda09bee/go.mod h1:WUUkAocbkDlNK/kgAE13NvS9oxe+u618mYZ8sOvcCc4=
+github.com/blevesearch/scorch_segment_api/v2 v2.4.9 h1:q1shQvpwVGp0IISmX08Ead5XFOPNmZrB761Snpru3vk=
+github.com/blevesearch/scorch_segment_api/v2 v2.4.9/go.mod h1:WUUkAocbkDlNK/kgAE13NvS9oxe+u618mYZ8sOvcCc4=
 github.com/blevesearch/vellum v1.2.0 h1:xkDiOEsHc2t3Cp0NsNZZ36pvc130sCzcGKOPMzXe+e0=
 github.com/blevesearch/vellum v1.2.0/go.mod h1:uEcfBJz7mAOf0Kvq6qoEKQQkLODBF46SINYNkZNae4k=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=

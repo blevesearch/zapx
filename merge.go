@@ -22,6 +22,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/v2"
 	index "github.com/blevesearch/bleve_index_api"
@@ -62,11 +63,36 @@ func (*ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path st
 			panic(fmt.Sprintf("oops, unexpected segment type: %T", segment))
 		}
 	}
-	return mergeSegmentBases(segmentBases, drops, path, DefaultChunkMode, closeCh, s, config)
+
+	zapStats, ok := config[seg.StatsKey].(*seg.Stats)
+	if !ok || zapStats == nil {
+		zapStats = new(seg.Stats)
+	}
+
+	atomic.AddUint64(&zapStats.TotMergesBeg, 1)
+	atomic.AddUint64(&zapStats.TotMergeInputSegments, uint64(len(segments)))
+	var totalInputDocs, droppedDocs uint64
+	for i, sb := range segmentBases {
+		totalInputDocs += sb.numDocs
+		if drops[i] != nil {
+			droppedDocs += drops[i].GetCardinality()
+		}
+	}
+	atomic.AddUint64(&zapStats.TotMergeDroppedDocs, droppedDocs)
+	atomic.AddUint64(&zapStats.TotMergeOutputDocs, totalInputDocs-droppedDocs)
+
+	newDocNums, size, err := mergeSegmentBases(segmentBases, drops, path, DefaultChunkMode, closeCh, s, config, zapStats)
+	if err != nil {
+		atomic.AddUint64(&zapStats.TotMergesErrors, 1)
+		return nil, 0, err
+	}
+	atomic.AddUint64(&zapStats.TotMergesEnd, 1)
+	return newDocNums, size, nil
 }
 
 func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, path string,
-	chunkMode uint32, closeCh chan struct{}, s seg.StatsReporter, config map[string]interface{}) (
+	chunkMode uint32, closeCh chan struct{}, s seg.StatsReporter, config map[string]interface{},
+	stats *seg.Stats) (
 	[][]uint64, uint64, error) {
 	flag := os.O_RDWR | os.O_CREATE
 
@@ -92,7 +118,7 @@ func mergeSegmentBases(segmentBases []*SegmentBase, drops []*roaring.Bitmap, pat
 	}
 
 	newDocNums, numDocs, storedIndexOffset, _, _, sectionsIndexOffset, err :=
-		mergeToWriter(segmentBases, drops, chunkMode, w, closeCh, config)
+		mergeToWriter(segmentBases, drops, chunkMode, w, closeCh, config, stats)
 	if err != nil {
 		cleanup()
 		return nil, 0, err
@@ -171,7 +197,8 @@ func finalizeFieldOptions(fieldOptions map[string]index.FieldIndexingOptions,
 }
 
 func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
-	chunkMode uint32, w *FileWriter, closeCh chan struct{}, config map[string]interface{}) (
+	chunkMode uint32, w *FileWriter, closeCh chan struct{}, config map[string]interface{},
+	stats *seg.Stats) (
 	newDocNums [][]uint64, numDocs, storedIndexOffset uint64,
 	fieldsInv []string, fieldsMap map[string]uint16, sectionsIndexOffset uint64,
 	err error) {
@@ -205,6 +232,7 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		"fieldsMap":     fieldsMap,
 		"numDocs":       numDocs,
 		"fieldsOptions": fieldsOptions,
+		"stats":         stats,
 	}
 	if config != nil {
 		args["config"] = config

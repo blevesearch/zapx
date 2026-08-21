@@ -55,7 +55,7 @@ func (z *ZapPlugin) newWithChunkMode(results []index.Document,
 	s := interimPool.Get().(*interim)
 
 	zapStats, ok := config[segment.StatsKey].(*segment.Stats)
-	if !ok {
+	if !ok || zapStats == nil {
 		zapStats = new(segment.Stats)
 	}
 

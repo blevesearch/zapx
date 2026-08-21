@@ -265,13 +265,13 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 	return nil
 }
 
-func casSetIfGreaterUint64(addr *uint64, new uint64) bool {
+func casSetIfGreaterUint64(addr *uint64, newVal uint64) bool {
 	for {
-		old := atomic.LoadUint64(addr)
-		if new <= old {
+		oldVal := atomic.LoadUint64(addr)
+		if newVal <= oldVal {
 			return false
 		}
-		if atomic.CompareAndSwapUint64(addr, old, new) {
+		if atomic.CompareAndSwapUint64(addr, oldVal, newVal) {
 			return true
 		}
 	}

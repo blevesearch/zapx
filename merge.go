@@ -83,7 +83,7 @@ func (*ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path st
 		}
 	}
 	atomic.AddUint64(&zapStats.TotMergeInputSegments, uint64(len(segments)))
-	totalDocs = computeNewDocCount(segmentBases, drops)
+	totalDocs, droppedDocs = computeNewDocCount(segmentBases, drops)
 
 	newDocNums, size, err := mergeSegmentBases(segmentBases, drops, path, DefaultChunkMode, closeCh, s, config, zapStats)
 	if err != nil {
@@ -218,7 +218,7 @@ func mergeToWriter(segments []*SegmentBase, drops []*roaring.Bitmap,
 		fieldsSame = false
 	}
 
-	numDocs = computeNewDocCount(segments, drops)
+	numDocs, _ = computeNewDocCount(segments, drops)
 
 	if isClosed(closeCh) {
 		return nil, 0, 0, nil, nil, 0, seg.ErrClosed
@@ -279,15 +279,17 @@ func mapFields(fields []string) map[string]uint16 {
 
 // computeNewDocCount determines how many documents will be in the newly
 // merged segment when obsoleted docs are dropped
-func computeNewDocCount(segments []*SegmentBase, drops []*roaring.Bitmap) uint64 {
+func computeNewDocCount(segments []*SegmentBase, drops []*roaring.Bitmap) (uint64, uint64) {
 	var newDocCount uint64
+	var droppedCount uint64
 	for segI, segment := range segments {
 		newDocCount += segment.numDocs
 		if drops[segI] != nil {
 			newDocCount -= drops[segI].GetCardinality()
+			droppedCount += drops[segI].GetCardinality()
 		}
 	}
-	return newDocCount
+	return newDocCount, droppedCount
 }
 
 func mergeTermFreqNormLocsByCopying(term []byte, postItr *PostingsIterator,

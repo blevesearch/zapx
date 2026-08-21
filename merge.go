@@ -52,6 +52,25 @@ func (z *ZapPlugin) MergeUsing(segments []seg.Segment, drops []*roaring.Bitmap, 
 func (*ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path string,
 	closeCh chan struct{}, s seg.StatsReporter, config map[string]interface{}) (
 	[][]uint64, uint64, error) {
+	var totalDocs, droppedDocs uint64
+	var err error
+
+	zapStats, ok := config[seg.StatsKey].(*seg.Stats)
+	if !ok || zapStats == nil {
+		zapStats = new(seg.Stats)
+	}
+
+	atomic.AddUint64(&zapStats.TotMergesBeg, 1)
+	defer func() {
+		if err == nil {
+			atomic.AddUint64(&zapStats.TotMergeDroppedDocs, droppedDocs)
+			atomic.AddUint64(&zapStats.TotMergeOutputDocs, totalDocs)
+		} else {
+			atomic.AddUint64(&zapStats.TotMergesErrors, 1)
+		}
+		atomic.AddUint64(&zapStats.TotMergesEnd, 1)
+	}()
+
 	segmentBases := make([]*SegmentBase, len(segments))
 	for segmenti, segment := range segments {
 		switch segmentx := segment.(type) {
@@ -63,30 +82,13 @@ func (*ZapPlugin) merge(segments []seg.Segment, drops []*roaring.Bitmap, path st
 			panic(fmt.Sprintf("oops, unexpected segment type: %T", segment))
 		}
 	}
-
-	zapStats, ok := config[seg.StatsKey].(*seg.Stats)
-	if !ok || zapStats == nil {
-		zapStats = new(seg.Stats)
-	}
-
-	atomic.AddUint64(&zapStats.TotMergesBeg, 1)
 	atomic.AddUint64(&zapStats.TotMergeInputSegments, uint64(len(segments)))
-	var totalInputDocs, droppedDocs uint64
-	for i, sb := range segmentBases {
-		totalInputDocs += sb.numDocs
-		if drops[i] != nil {
-			droppedDocs += drops[i].GetCardinality()
-		}
-	}
-	atomic.AddUint64(&zapStats.TotMergeDroppedDocs, droppedDocs)
-	atomic.AddUint64(&zapStats.TotMergeOutputDocs, totalInputDocs-droppedDocs)
+	totalDocs = computeNewDocCount(segmentBases, drops)
 
 	newDocNums, size, err := mergeSegmentBases(segmentBases, drops, path, DefaultChunkMode, closeCh, s, config, zapStats)
 	if err != nil {
-		atomic.AddUint64(&zapStats.TotMergesErrors, 1)
 		return nil, 0, err
 	}
-	atomic.AddUint64(&zapStats.TotMergesEnd, 1)
 	return newDocNums, size, nil
 }
 

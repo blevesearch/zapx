@@ -210,12 +210,11 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 				}
 			}
 
+			atomic.AddUint64(&vo.stats.TotVecSectionVecsDeleted, uint64(newIndexInfo.nvecs-len(newIndexInfo.vecIds)))
 			if len(newIndexInfo.vecIds) == 0 {
 				// no valid vectors to be merged from this segment
 				continue
 			}
-
-			atomic.AddUint64(&vo.stats.TotVecSectionVecsDeleted, uint64(newIndexInfo.nvecs-len(newIndexInfo.vecIds)))
 
 			// read the type of vector index
 			indexType, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
@@ -260,10 +259,22 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		}
 	}
 
-	if totalVecFields > int(atomic.LoadUint64(&vo.stats.TotVecSectionFieldsIndexed)) {
-		atomic.StoreUint64(&vo.stats.TotVecSectionFieldsIndexed, uint64(totalVecFields))
-	}
+	// the merge thread that saw the highest number of total vector fields across all segments being merged,
+	// updates the stat value
+	casSetIfGreaterUint64(&vo.stats.TotVecSectionFieldsIndexed, uint64(totalVecFields))
 	return nil
+}
+
+func casSetIfGreaterUint64(addr *uint64, new uint64) bool {
+	for {
+		old := atomic.LoadUint64(addr)
+		if new <= old {
+			return false
+		}
+		if atomic.CompareAndSwapUint64(addr, old, new) {
+			return true
+		}
+	}
 }
 
 func trainedIndexFromConfig(config map[string]interface{}, fieldName string) (faissIndexIVF, error) {
@@ -484,12 +495,17 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 	var indexOptimizedFor string
 	var indexType faissIndexType
 	var validMerge bool
+	var err error
 
 	atomic.AddUint64(&v.stats.TotVecSectionMergesBegin, 1)
 	start := time.Now()
 
 	defer func() {
-		atomic.AddUint64(&v.stats.TotVecSectionMergeTime, uint64(time.Since(start)))
+		if err == nil {
+			atomic.AddUint64(&v.stats.TotVecSectionMergeTime, uint64(time.Since(start)))
+		} else {
+			atomic.AddUint64(&v.stats.TotVecSectionMergeErr, 1)
+		}
 		atomic.AddUint64(&v.stats.TotVecSectionMergesEnd, 1)
 	}()
 
@@ -1028,6 +1044,7 @@ func (vo *vectorIndexOpaque) Reset() error {
 	vo.tmp0 = vo.tmp0[:0]
 	vo.fieldsOptions = nil
 	vo.config = nil
+	vo.trainingPhase = false
 	atomic.StoreUint64(&vo.bytesWritten, 0)
 	return nil
 }

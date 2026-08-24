@@ -17,9 +17,24 @@ package zap
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"io"
 	"math"
 	"testing"
 )
+
+func TestMemUvarintReaderReturnsUnexpectedEOFForTruncatedValue(t *testing.T) {
+	for _, input := range [][]byte{{0x80}, {0x80, 0x80}, {0xff, 0xff, 0xff}} {
+		reader := newMemUvarintReader(input)
+		_, err := reader.ReadUvarint()
+		if !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Fatalf("ReadUvarint(%x) error = %v, want %v", input, err, io.ErrUnexpectedEOF)
+		}
+		if reader.C != len(input) {
+			t.Fatalf("ReadUvarint(%x) consumed %d bytes, want %d", input, reader.C, len(input))
+		}
+	}
+}
 
 func BenchmarkUvarint(b *testing.B) {
 	n, buf := generateCommonUvarints(64, 512)

@@ -16,6 +16,7 @@ package zap
 
 import (
 	"fmt"
+	"io"
 )
 
 type memUvarintReader struct {
@@ -50,6 +51,10 @@ func (r *memUvarintReader) ReadUvarint() (uint64, error) {
 	var S = r.S
 
 	for {
+		if C >= len(S) {
+			r.C = C
+			return 0, io.ErrUnexpectedEOF
+		}
 		b := S[C]
 		C++
 

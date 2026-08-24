@@ -35,12 +35,17 @@ const fieldNotUninverted uint64 = math.MaxUint64
 
 func (sb *SegmentBase) Persist(path string) error {
 	atomic.AddUint64(&sb.stats.TotPersistBeg, 1)
-	err := PersistSegmentBase(sb, path)
+	var err error
+	defer func() {
+		atomic.AddUint64(&sb.stats.TotPersistEnd, 1)
+		if err != nil {
+			atomic.AddUint64(&sb.stats.TotPersistErr, 1)
+		}
+	}()
+	err = PersistSegmentBase(sb, path)
 	if err != nil {
-		atomic.AddUint64(&sb.stats.TotPersistErrors, 1)
 		return err
 	}
-	atomic.AddUint64(&sb.stats.TotPersistEnd, 1)
 	return nil
 }
 

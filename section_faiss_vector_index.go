@@ -588,6 +588,16 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 		return nil
 	}
 
+	// a lone index that holds no vectors despite the section recording some is a
+	// trained index produced by single-shot training - it carries just the
+	// trained centroids. There is nothing to reconstruct out of it, so carry it
+	// over as is instead of rebuilding it.
+	if len(vecIndexes) == 1 && vecIndexes[0].index.ntotal() == 0 {
+		err = v.writeTrainedTemplateIndex(sbs[0], vecIndexes[0], w)
+		freeReconstructedIndexes(vecIndexes)
+		return err
+	}
+
 	// create the faiss index config to hold the merged data, either via fast merge or reconstruction
 	nlist := v.numCentroids(nvecs)
 	// We perform fast merge whenever a compatible trained index is available,
@@ -649,6 +659,58 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 	return v.writeFaissIndex(vecSet, config, w)
 }
 
+// writeTrainedTemplateIndex re-emits an already serialized vector index into w
+// without decoding it, preserving the trained centroids it carries.
+//
+// A trained index built by single-shot training holds only those centroids, the
+// training corpus having never been added to it, so it cannot be rebuilt by
+// reconstructing vectors out of it. Copying the bytes over is also exactly what
+// the one path that merges such an index needs: the rewrite that rotates the
+// file writer (encryption key) backing the trained index.
+func (v *vectorIndexOpaque) writeTrainedTemplateIndex(sb *SegmentBase, vi *vecIndexInfo, w *FileWriter) error {
+	tempBuf := v.grabBuf(binary.MaxVarintLen64)
+	n := binary.PutUvarint(tempBuf, uint64(vi.indexType))
+	_, err := w.Write(tempBuf[:n])
+	if err != nil {
+		return err
+	}
+
+	// copy over the float32 index blob, followed by the binary index blob for
+	// BIVF indexes. Every blob is length prefixed within the section.
+	numBlobs := 1
+	if vi.indexType == faissBIVFIndex {
+		numBlobs = 2
+	}
+	pos, size := vi.startOffset, int(vi.indexSize)
+	for blob := 0; blob < numBlobs; blob++ {
+		if blob > 0 {
+			// unlike the first blob, whose size the caller already read, the
+			// ones that follow carry their length prefix inline.
+			blobSize, sn := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			pos += sn
+			size = int(blobSize)
+		}
+		buf, err := sb.fileReader.process(sb.mem[pos : pos+size])
+		if err != nil {
+			return err
+		}
+		pos += size
+		// hand the bytes to the writer of the new file, which is what re-encodes
+		// them under its own file writer callback.
+		buf = w.process(buf)
+		n = binary.PutUvarint(tempBuf, uint64(len(buf)))
+		_, err = w.Write(tempBuf[:n])
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(buf)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // constructs a faiss on the vectors according to the provided config and writes it out
 // the given writer
 func (v *vectorIndexOpaque) writeFaissIndex(vecs *vectorSet, config *faissIndexConfig, w *FileWriter) error {
@@ -673,7 +735,17 @@ func (v *vectorIndexOpaque) writeFaissIndex(vecs *vectorSet, config *faissIndexC
 		// performs k-means clustering to partition the data space such that during
 		// search time we probe only a subset of vectors (non-exhaustive search).
 		start := time.Now()
-		err = ivfIndex.trainAndAdd(vecs, vecs)
+		if v.trainingPhase && v.singleShotTraining {
+			// the whole training corpus arrived in one shot, so this index is
+			// the trained index itself and will never be merged with another
+			// training sample. Only its centroids are ever consumed - as the
+			// quantizer template handed to the fast merge path - so the training
+			// vectors are not added to it, saving both the add and the space
+			// they would occupy in the trained index file.
+			err = ivfIndex.train(vecs)
+		} else {
+			err = ivfIndex.trainAndAdd(vecs, vecs)
+		}
 		if err != nil {
 			return err
 		}
@@ -784,7 +856,7 @@ func (vo *vectorIndexOpaque) numCentroids(nvecs int) int {
 	if vo.config != nil {
 		// training key is associated with some additional parameters such as num centroids
 		// that might be specific to the fast merge path
-		if tp, ok := vo.config[index.TrainingKey].(*index.TrainingParams); ok {
+		if tp, ok := vo.config[index.TrainingKey].(*index.TrainingParams); ok && tp.NumCentroids > 0 {
 			nlist = tp.NumCentroids
 		}
 	}
@@ -1018,8 +1090,15 @@ type vectorIndexOpaque struct {
 	tmp0 []byte
 	// numDocs tracks the total number of documents processed during introduction, helpful while
 	// preallocating buffers for faster copy operations
-	numDocs       int
+	numDocs int
+	// trainingPhase is set when this segment is being built as (part of) the
+	// trained index rather than as a regular data segment.
 	trainingPhase bool
+	// singleShotTraining is set when the trained index is being built out of a
+	// single training corpus, which means it is never merged with a further
+	// training sample. Its vector indexes then only need the trained centroids,
+	// so the training vectors are not added to them.
+	singleShotTraining bool
 }
 
 func (vo *vectorIndexOpaque) incrementBytesWritten(val uint64) {
@@ -1045,6 +1124,7 @@ func (vo *vectorIndexOpaque) Reset() error {
 	vo.fieldsOptions = nil
 	vo.config = nil
 	vo.trainingPhase = false
+	vo.singleShotTraining = false
 	atomic.StoreUint64(&vo.bytesWritten, 0)
 	return nil
 }
@@ -1058,6 +1138,7 @@ func (v *vectorIndexOpaque) Set(key string, val interface{}) {
 		if v.config != nil {
 			if tp, ok := v.config[index.TrainingKey].(*index.TrainingParams); ok && tp != nil {
 				v.trainingPhase = true
+				v.singleShotTraining = tp.SingleShotTraining
 			}
 		}
 
@@ -1150,5 +1231,8 @@ func canFastMerge(trainedIndex faissIndexIVF, opt string, totalVecs int) bool {
 	default:
 		minVecsForFastMerge = ivfSq8Threshold
 	}
-	return trainedIndex.ntotal() >= int64(minVecsForFastMerge) && totalVecs >= minVecsForFastMerge
+	// numVecs() rather than ntotal(): a trained index built by single-shot
+	// training carries only its centroids, so the size of the corpus it was
+	// trained on is known from the segment metadata and not from the index.
+	return trainedIndex.numVecs() >= minVecsForFastMerge && totalVecs >= minVecsForFastMerge
 }

@@ -99,6 +99,10 @@ func (f *faissFloat32Index) ntotal() int64 {
 	return f.idx.Ntotal()
 }
 
+func (f *faissFloat32Index) numVecs() int {
+	return f.params.numVecs
+}
+
 func (f *faissFloat32Index) reconstructBatch(vecIDs []int64, prealloc []float32) ([]float32, error) {
 	return f.idx.ReconstructBatch(vecIDs, prealloc)
 }
@@ -179,9 +183,13 @@ func (f *faissFloat32Index) setNProbe(nprobe int32) {
 	f.idx.SetNProbe(nprobe)
 }
 
-func (f *faissFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
+func (f *faissFloat32Index) train(trainingData *vectorSet) error {
 	nvecsToTrain := f.params.numTrainingVecs(trainingData.nvecs)
-	err := f.idx.Train(trainingData.floatData[:nvecsToTrain*f.dim()])
+	return f.idx.Train(trainingData.floatData[:nvecsToTrain*f.dim()])
+}
+
+func (f *faissFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
+	err := f.train(trainingData)
 	if err != nil {
 		return err
 	}

@@ -276,6 +276,12 @@ func (rv *PostingsList) read(postingsOffset uint64, d *Dictionary) error {
 		return rv.init1Hit(postingsOffset)
 	}
 
+	// This is not a 1-hit term. Clear any 1-hit state left behind by an earlier
+	// read on a reused PostingsList: Count(), Iterator() and OrInto() all test
+	// normBits1Hit before they look at the postings bitmap.
+	rv.docNum1Hit = 0
+	rv.normBits1Hit = 0
+
 	// read the location of the freq/norm details
 	var n uint64
 	var read int

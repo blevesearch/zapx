@@ -386,6 +386,14 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 // todo: need to detect and handle data drift in a more intelligent way
 func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *faissIndexConfig,
 	drops bool, vecIndexes []*vecIndexInfo, w *FileWriter, closeCh chan struct{}) error {
+	start := time.Now()
+	var err error
+	defer func() {
+		if err == nil {
+			atomic.AddUint64(&v.stats.TotVecSectionFastMergeTime, uint64(time.Since(start)))
+		}
+	}()
+
 	// create a faissIndex for the merged index using nlist and nprobe from the
 	// trained index's config. cfg is always a CPU config here, since setQuantizers
 	// and the native merge below are CPU-only operations.
@@ -459,8 +467,10 @@ func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *fa
 			if err != nil {
 				return err
 			}
+			atomic.AddUint64(&v.stats.TotVecSectionFastMergeFallbacks, 1)
 			atomic.AddUint64(&v.stats.TotVecSectionVecsReconstructed, uint64(len(vi.vecIds)))
 		} else {
+			startBlockMerge := time.Now()
 			if err = ivfMergedIdx.mergeFrom(childIdx, mergedIdx.ntotal()); err != nil {
 				// either the childIdx isn't compatible for fast merge or merge_from failed
 				// so, in either case we can fallback to reconstructing and adding the vectors
@@ -469,9 +479,12 @@ func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *fa
 				if err != nil {
 					return err
 				}
+				atomic.AddUint64(&v.stats.TotVecSectionFastMergeFallbacks, 1)
 				atomic.AddUint64(&v.stats.TotVecSectionVecsReconstructed, uint64(len(vi.vecIds)))
+				atomic.AddUint64(&v.stats.TotVecSectionFastMergeFallbackExecTime, uint64(time.Since(startBlockMerge)))
 			} else {
 				atomic.AddUint64(&v.stats.TotVecSectionFastMerges, 1)
+				atomic.AddUint64(&v.stats.TotVecSectionFaissMergeExecTime, uint64(time.Since(startBlockMerge)))
 			}
 		}
 	}

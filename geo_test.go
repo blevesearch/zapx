@@ -16,7 +16,6 @@ package zap
 
 import (
 	"bytes"
-	"math"
 	"os"
 	"reflect"
 	"sort"
@@ -573,10 +572,10 @@ func makeNewDocNums(size int, m map[int]uint64) []uint64 {
 
 // drainCursor repeatedly calls next() and collects the (cell, docID) pairs the
 // cursor yields until it is exhausted.
-func drainCursor(c *geoCellCursor) (cells []uint64, docIDs []uint32) {
+func drainCursor(c *sortedPairCursor) (cells []uint64, docIDs []uint32) {
 	for c.next() {
-		cells = append(cells, c.curCell)
-		docIDs = append(docIDs, c.curDocID)
+		cells = append(cells, c.curKey)
+		docIDs = append(docIDs, c.curPayload)
 	}
 	return cells, docIDs
 }
@@ -584,7 +583,7 @@ func drainCursor(c *geoCellCursor) (cells []uint64, docIDs []uint32) {
 // newIdentityCursor builds a cursor whose remap is the identity: curDocID
 // always equals the old geo docID at the current position and nothing is
 // dropped. This isolates kWayMergeCells from the remap contents.
-func newIdentityCursor(cells []uint64, docIDs []uint32) *geoCellCursor {
+func newIdentityCursor(cells []uint64, docIDs []uint32) *sortedPairCursor {
 	var n uint32
 	for _, d := range docIDs {
 		if d+1 > n {
@@ -595,7 +594,7 @@ func newIdentityCursor(cells []uint64, docIDs []uint32) *geoCellCursor {
 	for i := uint32(0); i < n; i++ {
 		remap[i] = i
 	}
-	return &geoCellCursor{cells: cells, docIDs: docIDs, remap: remap}
+	return &sortedPairCursor{keys: cells, payloads: docIDs, remap: remap}
 }
 
 // sortPairs sorts (cell, docID) pairs by cell then docID so that mergers whose
@@ -637,56 +636,56 @@ func newGeoIndexInfo(docNums []uint32, newDocNums []uint64) *geoIndexInfo {
 func TestGeoCellCursorNext(t *testing.T) {
 	tests := []struct {
 		name    string
-		cursor  *geoCellCursor
+		cursor  *sortedPairCursor
 		wantCel []uint64
 		wantDoc []uint32
 	}{
 		{
 			name: "no drops, remaps geo docIDs",
-			cursor: &geoCellCursor{
-				cells:  []uint64{10, 20, 30},
-				docIDs: []uint32{0, 0, 1},
-				remap:  []uint32{5, 7}, // old geoID 0 -> 5, 1 -> 7
+			cursor: &sortedPairCursor{
+				keys:     []uint64{10, 20, 30},
+				payloads: []uint32{0, 0, 1},
+				remap:    []uint32{5, 7}, // old geoID 0 -> 5, 1 -> 7
 			},
 			wantCel: []uint64{10, 20, 30},
 			wantDoc: []uint32{5, 5, 7},
 		},
 		{
 			name: "middle document dropped is skipped",
-			cursor: &geoCellCursor{
-				cells:  []uint64{10, 20, 25, 30},
-				docIDs: []uint32{0, 1, 1, 2},
-				remap:  []uint32{0, uint32(math.MaxUint32), 1},
+			cursor: &sortedPairCursor{
+				keys:     []uint64{10, 20, 25, 30},
+				payloads: []uint32{0, 1, 1, 2},
+				remap:    []uint32{0, pairDropped, 1},
 			},
 			wantCel: []uint64{10, 30},
 			wantDoc: []uint32{0, 1},
 		},
 		{
 			name: "leading and trailing documents dropped",
-			cursor: &geoCellCursor{
-				cells:  []uint64{10, 20, 30, 40},
-				docIDs: []uint32{0, 0, 1, 2},
-				remap:  []uint32{uint32(math.MaxUint32), 0, uint32(math.MaxUint32)},
+			cursor: &sortedPairCursor{
+				keys:     []uint64{10, 20, 30, 40},
+				payloads: []uint32{0, 0, 1, 2},
+				remap:    []uint32{pairDropped, 0, pairDropped},
 			},
 			wantCel: []uint64{30},
 			wantDoc: []uint32{0},
 		},
 		{
 			name: "all documents dropped yields nothing",
-			cursor: &geoCellCursor{
-				cells:  []uint64{10, 20},
-				docIDs: []uint32{0, 1},
-				remap:  []uint32{uint32(math.MaxUint32), uint32(math.MaxUint32)},
+			cursor: &sortedPairCursor{
+				keys:     []uint64{10, 20},
+				payloads: []uint32{0, 1},
+				remap:    []uint32{pairDropped, pairDropped},
 			},
 			wantCel: nil,
 			wantDoc: nil,
 		},
 		{
 			name: "empty run yields nothing",
-			cursor: &geoCellCursor{
-				cells:  nil,
-				docIDs: nil,
-				remap:  nil,
+			cursor: &sortedPairCursor{
+				keys:     nil,
+				payloads: nil,
+				remap:    nil,
 			},
 			wantCel: nil,
 			wantDoc: nil,
@@ -729,7 +728,7 @@ func TestBuildGeoDocRemaps(t *testing.T) {
 		}
 
 		wantRemaps := [][]uint32{
-			{0, uint32(math.MaxUint32)},
+			{0, pairDropped},
 			{1},
 			{2, 3},
 		}
@@ -754,7 +753,7 @@ func TestBuildGeoDocRemaps(t *testing.T) {
 		if numDocs != 0 {
 			t.Fatalf("numDocs: got %d, want 0", numDocs)
 		}
-		if !reflect.DeepEqual(segRemaps, [][]uint32{{uint32(math.MaxUint32), uint32(math.MaxUint32)}}) {
+		if !reflect.DeepEqual(segRemaps, [][]uint32{{pairDropped, pairDropped}}) {
 			t.Fatalf("segRemaps: got %v", segRemaps)
 		}
 		if len(merged.docNums) != 0 {
@@ -765,12 +764,12 @@ func TestBuildGeoDocRemaps(t *testing.T) {
 
 func TestKWayMergeCells(t *testing.T) {
 	t.Run("interleaved runs merge into sorted order", func(t *testing.T) {
-		cursors := []*geoCellCursor{
+		cursors := []*sortedPairCursor{
 			newIdentityCursor([]uint64{10, 40}, []uint32{0, 0}),
 			newIdentityCursor([]uint64{5, 50}, []uint32{1, 1}),
 			newIdentityCursor([]uint64{20, 30}, []uint32{2, 2}),
 		}
-		gotCel, gotDoc := kWayMergeCells(cursors, nil, nil)
+		gotCel, gotDoc := kWayMergePairs(cursors, nil, nil)
 
 		wantCel := []uint64{5, 10, 20, 30, 40, 50}
 		wantDoc := []uint32{1, 0, 2, 2, 0, 1}
@@ -783,12 +782,12 @@ func TestKWayMergeCells(t *testing.T) {
 	})
 
 	t.Run("empty cursors are skipped", func(t *testing.T) {
-		cursors := []*geoCellCursor{
+		cursors := []*sortedPairCursor{
 			newIdentityCursor(nil, nil),
 			newIdentityCursor([]uint64{7, 9}, []uint32{0, 1}),
 			newIdentityCursor(nil, nil),
 		}
-		gotCel, gotDoc := kWayMergeCells(cursors, nil, nil)
+		gotCel, gotDoc := kWayMergePairs(cursors, nil, nil)
 		if !reflect.DeepEqual(gotCel, []uint64{7, 9}) {
 			t.Fatalf("cells: got %v, want [7 9]", gotCel)
 		}
@@ -798,19 +797,19 @@ func TestKWayMergeCells(t *testing.T) {
 	})
 
 	t.Run("no cursors yields empty output", func(t *testing.T) {
-		gotCel, gotDoc := kWayMergeCells(nil, nil, nil)
+		gotCel, gotDoc := kWayMergePairs(nil, nil, nil)
 		if len(gotCel) != 0 || len(gotDoc) != 0 {
 			t.Fatalf("expected empty output, got cells %v docIDs %v", gotCel, gotDoc)
 		}
 	})
 
 	t.Run("duplicate cells across runs are all preserved", func(t *testing.T) {
-		cursors := []*geoCellCursor{
+		cursors := []*sortedPairCursor{
 			newIdentityCursor([]uint64{10, 20}, []uint32{0, 0}),
 			newIdentityCursor([]uint64{10, 30}, []uint32{1, 1}),
 			newIdentityCursor([]uint64{20}, []uint32{2}),
 		}
-		gotCel, gotDoc := kWayMergeCells(cursors, nil, nil)
+		gotCel, gotDoc := kWayMergePairs(cursors, nil, nil)
 
 		// output must be non-decreasing by cell
 		for i := 1; i < len(gotCel); i++ {
@@ -831,10 +830,10 @@ func TestKWayMergeCells(t *testing.T) {
 	})
 
 	t.Run("appends to existing output slices", func(t *testing.T) {
-		cursors := []*geoCellCursor{
+		cursors := []*sortedPairCursor{
 			newIdentityCursor([]uint64{2, 4}, []uint32{0, 0}),
 		}
-		gotCel, gotDoc := kWayMergeCells(cursors, []uint64{99}, []uint32{88})
+		gotCel, gotDoc := kWayMergePairs(cursors, []uint64{99}, []uint32{88})
 		if !reflect.DeepEqual(gotCel, []uint64{99, 2, 4}) {
 			t.Fatalf("cells: got %v, want [99 2 4]", gotCel)
 		}
@@ -845,18 +844,18 @@ func TestKWayMergeCells(t *testing.T) {
 
 	t.Run("merge skips dropped documents while remapping", func(t *testing.T) {
 		// segment 0: cell 10 (geoID 0 -> merged 0), cell 20 (geoID 1 dropped)
-		seg0 := &geoCellCursor{
-			cells:  []uint64{10, 20},
-			docIDs: []uint32{0, 1},
-			remap:  []uint32{0, uint32(math.MaxUint32)},
+		seg0 := &sortedPairCursor{
+			keys:     []uint64{10, 20},
+			payloads: []uint32{0, 1},
+			remap:    []uint32{0, pairDropped},
 		}
 		// segment 1: cell 15 (geoID 0 -> merged 1)
-		seg1 := &geoCellCursor{
-			cells:  []uint64{15},
-			docIDs: []uint32{0},
-			remap:  []uint32{1},
+		seg1 := &sortedPairCursor{
+			keys:     []uint64{15},
+			payloads: []uint32{0},
+			remap:    []uint32{1},
 		}
-		gotCel, gotDoc := kWayMergeCells([]*geoCellCursor{seg0, seg1}, nil, nil)
+		gotCel, gotDoc := kWayMergePairs([]*sortedPairCursor{seg0, seg1}, nil, nil)
 		if !reflect.DeepEqual(gotCel, []uint64{10, 15}) {
 			t.Fatalf("cells: got %v, want [10 15]", gotCel)
 		}

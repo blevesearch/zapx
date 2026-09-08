@@ -15,11 +15,9 @@
 package zap
 
 import (
-	"container/heap"
 	"encoding/binary"
 	"fmt"
 	"math"
-	"sort"
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/v2"
@@ -525,26 +523,26 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 
 	// Each segment's inner and cross cells are already stored sorted
 	// So instead of concatenating every segment's cells and sorting the whole
-	// set, we k-way merge the pre-sorted per-segment runs while.
-	innerCursors := make([]*geoCellCursor, 0, len(indexInfos))
-	crossCursors := make([]*geoCellCursor, 0, len(indexInfos))
+	// set, we k-way merge the pre-sorted per-segment runs.
+	innerCursors := make([]*sortedPairCursor, 0, len(indexInfos))
+	crossCursors := make([]*sortedPairCursor, 0, len(indexInfos))
 	for s, indexInfo := range indexInfos {
-		innerCursors = append(innerCursors, &geoCellCursor{
-			cells:  indexInfo.content.innerCells,
-			docIDs: indexInfo.content.innerDocIDs,
-			remap:  segRemaps[s],
+		innerCursors = append(innerCursors, &sortedPairCursor{
+			keys:     indexInfo.content.innerCells,
+			payloads: indexInfo.content.innerDocIDs,
+			remap:    segRemaps[s],
 		})
-		crossCursors = append(crossCursors, &geoCellCursor{
-			cells:  indexInfo.content.crossCells,
-			docIDs: indexInfo.content.crossDocIDs,
-			remap:  segRemaps[s],
+		crossCursors = append(crossCursors, &sortedPairCursor{
+			keys:     indexInfo.content.crossCells,
+			payloads: indexInfo.content.crossDocIDs,
+			remap:    segRemaps[s],
 		})
 	}
 
 	mergedContent.innerCells, mergedContent.innerDocIDs =
-		kWayMergeCells(innerCursors, mergedContent.innerCells, mergedContent.innerDocIDs)
+		kWayMergePairs(innerCursors, mergedContent.innerCells, mergedContent.innerDocIDs)
 	mergedContent.crossCells, mergedContent.crossDocIDs =
-		kWayMergeCells(crossCursors, mergedContent.crossCells, mergedContent.crossDocIDs)
+		kWayMergePairs(crossCursors, mergedContent.crossCells, mergedContent.crossDocIDs)
 
 	// Bounding boxes, shapes and document scores are stored per document in geo
 	// docID order, so they only need to be filtered for dropped documents and
@@ -552,25 +550,25 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 	for s, indexInfo := range indexInfos {
 		remap := segRemaps[s]
 		for i, bbox := range indexInfo.content.boundingBoxes {
-			if remap[i] == uint32(math.MaxUint32) {
+			if remap[i] == pairDropped {
 				continue
 			}
 			mergedContent.boundingBoxes = append(mergedContent.boundingBoxes, bbox)
 		}
 		for i, shape := range indexInfo.content.shapes {
-			if remap[i] == uint32(math.MaxUint32) {
+			if remap[i] == pairDropped {
 				continue
 			}
 			mergedContent.shapes = append(mergedContent.shapes, shape)
 		}
 		for i, score := range indexInfo.content.docScoresInner {
-			if remap[i] == uint32(math.MaxUint32) {
+			if remap[i] == pairDropped {
 				continue
 			}
 			mergedContent.docScoresInner = append(mergedContent.docScoresInner, score)
 		}
 		for i, score := range indexInfo.content.docScoresCross {
-			if remap[i] == uint32(math.MaxUint32) {
+			if remap[i] == pairDropped {
 				continue
 			}
 			mergedContent.docScoresCross = append(mergedContent.docScoresCross, score)
@@ -591,7 +589,7 @@ func buildGeoDocRemaps(indexInfos []*geoIndexInfo,
 		for geoDocID, oldDocNum := range indexInfo.content.docNums {
 			newDocNum := indexInfo.newDocNums[oldDocNum]
 			if newDocNum == docDropped {
-				remap[geoDocID] = uint32(math.MaxUint32)
+				remap[geoDocID] = pairDropped
 				continue
 			}
 			remap[geoDocID] = uint32(numGeoDocs)
@@ -603,126 +601,10 @@ func buildGeoDocRemaps(indexInfos []*geoIndexInfo,
 	return segRemaps, numGeoDocs
 }
 
-// geoCellCursor iterates one segment's sorted (cell, docID) pairs during a
-// k-way merge. It skips cells whose document was dropped and translates each
-// surviving cell's geo docID into the merged segment's geo docID space.
-type geoCellCursor struct {
-	cells  []uint64
-	docIDs []uint32 // parallel to cells: the old geo docID of each cell
-
-	// remap maps an old geo docID to its merged geo docID, or math.MaxUint32 if
-	// the document was deleted during the merge.
-	remap []uint32
-
-	pos      int
-	curCell  uint64
-	curDocID uint32
-}
-
-// next advances to the next non-dropped cell, populating curCell and curDocID
-// with the cell value and its merged geo docID. It returns false once the
-// cursor is exhausted.
-func (c *geoCellCursor) next() bool {
-	for c.pos < len(c.cells) {
-		cell := c.cells[c.pos]
-		newGeoDocID := c.remap[c.docIDs[c.pos]]
-		c.pos++
-
-		if newGeoDocID == uint32(math.MaxUint32) {
-			continue
-		}
-		c.curCell = cell
-		c.curDocID = newGeoDocID
-		return true
-	}
-	return false
-}
-
-// geoCursorHeap is a min-heap of cursors ordered by their current cell value,
-// used to drive the k-way merge of the pre-sorted per-segment cell runs.
-type geoCursorHeap []*geoCellCursor
-
-func (h geoCursorHeap) Len() int           { return len(h) }
-func (h geoCursorHeap) Less(i, j int) bool { return h[i].curCell < h[j].curCell }
-func (h geoCursorHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-
-func (h *geoCursorHeap) Push(x interface{}) {
-	*h = append(*h, x.(*geoCellCursor))
-}
-
-func (h *geoCursorHeap) Pop() interface{} {
-	old := *h
-	n := len(old)
-	it := old[n-1]
-	old[n-1] = nil
-	*h = old[:n-1]
-	return it
-}
-
-// kWayMergeCells merges the pre-sorted cell runs held by the given cursors into
-// ascending order, appending the merged cells and their parallel merged geo
-// docIDs to outCells and outDocIDs respectively and returning the extended
-// slices.
-func kWayMergeCells(cursors []*geoCellCursor, outCells []uint64, outDocIDs []uint32) ([]uint64, []uint32) {
-	h := make(geoCursorHeap, 0, len(cursors))
-	for _, c := range cursors {
-		if c.next() {
-			h = append(h, c)
-		}
-	}
-	heap.Init(&h)
-
-	for h.Len() > 0 {
-		c := h[0]
-		outCells = append(outCells, c.curCell)
-		outDocIDs = append(outDocIDs, c.curDocID)
-		if c.next() {
-			// current cursor still has cells; restore heap order in place
-			heap.Fix(&h, 0)
-		} else {
-			// cursor exhausted; drop it from the heap
-			heap.Pop(&h)
-		}
-	}
-
-	return outCells, outDocIDs
-}
-
 func (g *geoShapeV2IndexSectionOpaque) incrementBytesWritten(val uint64) {
 	atomic.AddUint64(&g.bytesWritten, val)
 }
 
 func (g *geoShapeV2IndexSectionOpaque) BytesWritten() uint64 {
 	return atomic.LoadUint64(&g.bytesWritten)
-}
-
-// arrayPair holds references to both slices to swap and sort them in tandem.
-// primary holds the sort keys (cell IDs, uint64); secondary holds the parallel
-// geo docIDs (uint32) that must move with them.
-type arrayPair struct {
-	primary   []uint64
-	secondary []uint32
-}
-
-func (a arrayPair) Len() int {
-	return len(a.primary)
-}
-
-func (a arrayPair) Less(i, j int) bool {
-	return a.primary[i] < a.primary[j]
-}
-
-func (a arrayPair) Swap(i, j int) {
-	a.primary[i], a.primary[j] = a.primary[j], a.primary[i]
-	a.secondary[i], a.secondary[j] = a.secondary[j], a.secondary[i]
-}
-
-func sortArrayPair(primary []uint64, secondary []uint32) ([]uint64, []uint32) {
-	// Protect against mismatched slice lengths
-	if len(primary) != len(secondary) {
-		panic("slices must be of equal length")
-	}
-
-	sort.Sort(arrayPair{primary: primary, secondary: secondary})
-	return primary, secondary
 }

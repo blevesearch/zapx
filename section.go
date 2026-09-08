@@ -60,6 +60,7 @@ const (
 	SectionFaissVectorIndex
 	SectionSynonymIndex
 	SectionGeoShapeV2Index
+	SectionNumericV2Index
 
 	// Add new sections above this line.
 	// NumSections automatically reflects the total number of sections

@@ -77,9 +77,10 @@ func (z *ZapPlugin) open(path string, config map[string]interface{}) (segment.Se
 			vecIndexCache:     newVectorIndexCache(),
 			synIndexCache:     newSynonymIndexCache(),
 			geoIndexCache:     newGeoIndexCache(),
+			numIndexCache:     newNumericIndexCache(),
 			nstIndexCache:     newNestedIndexCache(),
 			trainedIndexCache: newTrainedIndexCache(),
-			fieldDvReaders:    make([][]*docValueReader, len(segmentSections)),
+			fieldDvReaders:    make([][]*docValueReader, NumSections),
 			config:            config,
 			stats:             zapStats,
 		},
@@ -140,9 +141,13 @@ type SegmentBase struct {
 	numDocs             uint64
 	storedIndexOffset   uint64
 	sectionsIndexOffset uint64
-	fieldDvReaders      [][]*docValueReader // naive chunk cache per field; section->fieldID->reader
-	fieldDvNames        []string            // field names cached in fieldDvReaders
-	size                uint64
+	// fieldDvReaders is indexed by section ID, so it is sized by NumSections
+	// rather than by the number of registered sections: section IDs are dense
+	// constants, but registration is sparse because some sections sit behind
+	// build tags.
+	fieldDvReaders [][]*docValueReader // naive chunk cache per field; section->fieldID->reader
+	fieldDvNames   []string            // field names cached in fieldDvReaders
+	size           uint64
 
 	// file reader initialised with the writer callback id used by the segment
 	fileReader *FileReader
@@ -157,6 +162,7 @@ type SegmentBase struct {
 	trainedIndexCache *trainedIndexCache
 	synIndexCache     *synonymIndexCache
 	geoIndexCache     *geoIndexCache
+	numIndexCache     *numericIndexCache
 	nstIndexCache     *nestedIndexCache
 
 	// segment level stats that are tracked and reported as part of the segment's lifecycle
@@ -208,6 +214,7 @@ func (sb *SegmentBase) Close() (err error) {
 	sb.synIndexCache.Clear()
 	sb.nstIndexCache.Clear()
 	sb.geoIndexCache.Clear()
+	sb.numIndexCache.Clear()
 	return nil
 }
 
@@ -985,4 +992,36 @@ func (sb *SegmentBase) GeoShapeV2Data(field string, except *roaring.Bitmap) (seg
 		return sb.geoIndexCache.loadOrCreate(fieldIDPlus1-1, sb.mem[pos:], except, sb.fileReader)
 	}
 	return nil, nil
+}
+
+// NumericV2Data returns the number_v2 arrays for the given field, or nil when
+// the field carries no number_v2 section in this segment. The caller owns a
+// reference on the returned data and must Close it.
+func (sb *SegmentBase) NumericV2Data(field string) (segment.NumericV2Data, error) {
+	fieldIDPlus1 := sb.fieldsMap[field]
+	if fieldIDPlus1 == 0 {
+		return nil, nil
+	}
+	pos := sb.fieldsSectionsMap[fieldIDPlus1-1][SectionNumericV2Index]
+	if pos == 0 {
+		return nil, nil
+	}
+
+	// skip the doc value offsets to get to the search arrays; doc values are
+	// reached through those offsets instead, by loadDvReaders
+	for i := 0; i < 2; i++ {
+		_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		pos += uint64(n)
+	}
+
+	data, err := sb.numIndexCache.loadOrCreate(fieldIDPlus1-1, sb.mem[pos:], sb.fileReader)
+	if err != nil {
+		return nil, err
+	}
+	if data == nil {
+		// the cache has been closed; return an untyped nil so the caller's nil
+		// check works rather than a non-nil interface wrapping a nil pointer
+		return nil, nil
+	}
+	return data, nil
 }

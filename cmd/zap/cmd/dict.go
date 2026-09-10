@@ -17,11 +17,9 @@ package cmd
 import (
 	"encoding/binary"
 	"fmt"
-	"math"
 
-	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/blevesearch/vellum"
-	zap "github.com/blevesearch/zapx/v17"
+	zap "github.com/blevesearch/zapx/v18"
 	"github.com/spf13/cobra"
 )
 
@@ -59,17 +57,19 @@ var dictCmd = &cobra.Command{
 			for err == nil {
 				currTerm, currVal := itr.Current()
 				extra := ""
-				if currVal&zap.FSTValEncodingMask == zap.FSTValEncoding1Hit {
-					docNum, normBits := zap.FSTValDecode1Hit(currVal)
-					norm := math.Float32frombits(uint32(normBits))
-					extra = fmt.Sprintf("-- docNum: %d, norm: %f", docNum, norm)
+				info, err := zap.DescribeTermPostings(data, currVal)
+				if err != nil {
+					return err
+				}
+				if info.OneHit {
+					extra = fmt.Sprintf("-- docNum: %d", info.DocNum)
 					fmt.Printf(" %s - %d (%x) %s\n", currTerm, currVal, currVal, extra)
 					hit1Count++
 				} else {
-					// fetch the postings size, cardinality in case of non 1 hits
-					l, c := readPostingCardinality(currVal, data)
-					fmt.Printf(" %s - %d (%x) posting byteSize: %d cardinality: %d\n",
-						currTerm, currVal, currVal, l, c)
+					fmt.Printf(" %s - %d (%x) docFreq: %d blocks: %d tail: %d "+
+						"payload: %d skip: %d locs: %d\n",
+						currTerm, currVal, currVal, info.DocFreq, info.NumBlocks,
+						info.TailLen, info.PayloadLen, info.SkipLen, info.LocsLen)
 				}
 				termsCount++
 				err = itr.Next()
@@ -86,31 +86,4 @@ var dictCmd = &cobra.Command{
 
 func init() {
 	RootCmd.AddCommand(dictCmd)
-}
-
-func readPostingCardinality(postingsOffset uint64, data []byte) (int, uint64) {
-	// read the location of the freq/norm details
-	var n uint64
-	var read int
-
-	_, read = binary.Uvarint(data[postingsOffset+n : postingsOffset+binary.MaxVarintLen64])
-	n += uint64(read)
-
-	_, read = binary.Uvarint(data[postingsOffset+n : postingsOffset+n+binary.MaxVarintLen64])
-	n += uint64(read)
-
-	var postingsLen uint64
-	postingsLen, read = binary.Uvarint(data[postingsOffset+n : postingsOffset+n+binary.MaxVarintLen64])
-	n += uint64(read)
-
-	roaringBytes := data[postingsOffset+n : postingsOffset+n+postingsLen]
-
-	r := roaring.NewBitmap()
-
-	_, err := r.FromBuffer(roaringBytes)
-	if err != nil {
-		fmt.Printf("error loading roaring bitmap: %v", err)
-	}
-
-	return len(roaringBytes), r.GetCardinality()
 }

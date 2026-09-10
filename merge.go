@@ -292,78 +292,73 @@ func computeNewDocCount(segments []*SegmentBase, drops []*roaring.Bitmap) (uint6
 	return newDocCount, droppedCount
 }
 
-func mergeTermFreqNormLocsByCopying(term []byte, postItr *PostingsIterator,
-	newDocNums []uint64, newRoaring *roaring.Bitmap,
-	tfEncoder *chunkedIntCoder, locEncoder *chunkedIntCoder) (
-	lastDocNum uint64, lastFreq uint64, lastNorm uint64, err error) {
-	nextDocNum, nextFreq, nextNorm, nextFreqNormBytes, nextLocBytes, err :=
-		postItr.nextBytes()
-	for err == nil && len(nextFreqNormBytes) > 0 {
-		hitNewDocNum := newDocNums[nextDocNum]
-		if hitNewDocNum == docDropped {
-			return 0, 0, 0, fmt.Errorf("see hit with dropped doc num")
-		}
-
-		newRoaring.Add(uint32(hitNewDocNum))
-
-		err = tfEncoder.AddBytes(hitNewDocNum, nextFreqNormBytes)
+// mergeTermPostingsByCopying moves one source segment's postings for a term
+// into the serializer, carrying each document's location bytes across verbatim
+// rather than decoding and re-encoding them.
+//
+// Only the locations can be copied. Doc numbers are renumbered by the merge, so
+// the bitpacked blocks have to be rebuilt against the new numbering, and norms
+// are not in the postings at all -- they travel as a column, merged once per
+// field rather than once per posting.
+func mergeTermPostingsByCopying(postItr *PostingsIterator, newDocNums []uint64,
+	termHasLocs bool, ser *postingsSerializer,
+	locEncoder *chunkedIntCoder) error {
+	for {
+		docNum, freq, locBytes, exists, err := postItr.nextWithLocBytes()
 		if err != nil {
-			return 0, 0, 0, err
+			return err
+		}
+		if !exists {
+			return nil
 		}
 
-		if len(nextLocBytes) > 0 {
-			err = locEncoder.AddBytes(hitNewDocNum, nextLocBytes)
+		hitNewDocNum := newDocNums[docNum]
+		if hitNewDocNum == docDropped {
+			return fmt.Errorf("see hit with dropped doc num")
+		}
+
+		if err := ser.AddDoc(uint32(hitNewDocNum), uint32(freq)); err != nil {
+			return err
+		}
+
+		if termHasLocs {
+			if len(locBytes) > 0 {
+				err = locEncoder.AddBytes(hitNewDocNum, locBytes)
+			} else {
+				// A term that records locations carries a group for every one
+				// of its postings, so that a reader walking the location stream
+				// stays aligned without needing a per-document flag. This
+				// source segment had none for this term, so the group is empty.
+				err = locEncoder.Add(hitNewDocNum, 0)
+			}
 			if err != nil {
-				return 0, 0, 0, err
+				return err
 			}
 		}
-
-		lastDocNum = hitNewDocNum
-		lastFreq = nextFreq
-		lastNorm = nextNorm
-
-		nextDocNum, nextFreq, nextNorm, nextFreqNormBytes, nextLocBytes, err =
-			postItr.nextBytes()
 	}
-
-	return lastDocNum, lastFreq, lastNorm, err
 }
 
-func mergeTermFreqNormLocs(fieldsMap map[string]uint16, term []byte, postItr *PostingsIterator,
-	newDocNums []uint64, newRoaring *roaring.Bitmap,
-	tfEncoder *chunkedIntCoder, locEncoder *chunkedIntCoder, bufLoc []uint64) (
-	lastDocNum uint64, lastFreq uint64, lastNorm uint64, bufLocOut []uint64, err error) {
+// mergeTermPostings is the general form: it decodes each posting and re-encodes
+// its locations, remapping their field ids into the merged field space. That
+// remapping is why the copying variant above requires the segments to agree on
+// their fields.
+func mergeTermPostings(fieldsMap map[string]uint16, postItr *PostingsIterator,
+	newDocNums []uint64, termHasLocs bool, ser *postingsSerializer,
+	locEncoder *chunkedIntCoder, bufLoc []uint64) (bufLocOut []uint64, err error) {
 	next, err := postItr.Next()
 	for next != nil && err == nil {
 		hitNewDocNum := newDocNums[next.Number()]
 		if hitNewDocNum == docDropped {
-			return 0, 0, 0, nil, fmt.Errorf("see hit with dropped docNum")
+			return nil, fmt.Errorf("see hit with dropped docNum")
 		}
 
-		newRoaring.Add(uint32(hitNewDocNum))
-
-		nextFreq := next.Frequency()
-		var nextNorm uint64
-		if pi, ok := next.(*Posting); ok {
-			nextNorm = pi.NormUint64()
-		} else {
-			return 0, 0, 0, nil, fmt.Errorf("unexpected posting type %T", next)
+		if err = ser.AddDoc(uint32(hitNewDocNum), uint32(next.Frequency())); err != nil {
+			return nil, err
 		}
 
-		locs := next.Locations()
+		if termHasLocs {
+			locs := next.Locations()
 
-		if nextFreq > 0 {
-			err = tfEncoder.Add(hitNewDocNum,
-				encodeFreqHasLocs(nextFreq, len(locs) > 0), nextNorm)
-		} else {
-			err = tfEncoder.Add(hitNewDocNum,
-				encodeFreqHasLocs(nextFreq, len(locs) > 0))
-		}
-		if err != nil {
-			return 0, 0, 0, nil, err
-		}
-
-		if len(locs) > 0 {
 			numBytesLocs := 0
 			for _, loc := range locs {
 				ap := loc.ArrayPositions()
@@ -371,9 +366,8 @@ func mergeTermFreqNormLocs(fieldsMap map[string]uint16, term []byte, postItr *Po
 					loc.Pos(), loc.Start(), loc.End(), uint64(len(ap)), ap)
 			}
 
-			err = locEncoder.Add(hitNewDocNum, uint64(numBytesLocs))
-			if err != nil {
-				return 0, 0, 0, nil, err
+			if err = locEncoder.Add(hitNewDocNum, uint64(numBytesLocs)); err != nil {
+				return nil, err
 			}
 
 			for _, loc := range locs {
@@ -388,75 +382,16 @@ func mergeTermFreqNormLocs(fieldsMap map[string]uint16, term []byte, postItr *Po
 				args[3] = loc.End()
 				args[4] = uint64(len(ap))
 				args = append(args, ap...)
-				err = locEncoder.Add(hitNewDocNum, args...)
-				if err != nil {
-					return 0, 0, 0, nil, err
+				if err = locEncoder.Add(hitNewDocNum, args...); err != nil {
+					return nil, err
 				}
 			}
 		}
 
-		lastDocNum = hitNewDocNum
-		lastFreq = nextFreq
-		lastNorm = nextNorm
-
 		next, err = postItr.Next()
 	}
 
-	return lastDocNum, lastFreq, lastNorm, bufLoc, err
-}
-
-func writePostings(postings *roaring.Bitmap, tfEncoder, locEncoder *chunkedIntCoder,
-	use1HitEncoding func(uint64) (bool, uint64, uint64),
-	w *FileWriter, bufMaxVarintLen64 []byte) (
-	offset uint64, err error) {
-	if postings == nil {
-		return 0, nil
-	}
-
-	termCardinality := postings.GetCardinality()
-	if termCardinality <= 0 {
-		return 0, nil
-	}
-
-	if use1HitEncoding != nil {
-		encodeAs1Hit, docNum1Hit, normBits1Hit := use1HitEncoding(termCardinality)
-		if encodeAs1Hit {
-			return FSTValEncode1Hit(docNum1Hit, normBits1Hit), nil
-		}
-	}
-
-	var tfOffset uint64
-	tfOffset, _, err = tfEncoder.writeAt(w)
-	if err != nil {
-		return 0, err
-	}
-
-	var locOffset uint64
-	locOffset, _, err = locEncoder.writeAt(w)
-	if err != nil {
-		return 0, err
-	}
-
-	postingsOffset := uint64(w.Count())
-
-	n := binary.PutUvarint(bufMaxVarintLen64, tfOffset)
-	_, err = w.Write(bufMaxVarintLen64[:n])
-	if err != nil {
-		return 0, err
-	}
-
-	n = binary.PutUvarint(bufMaxVarintLen64, locOffset)
-	_, err = w.Write(bufMaxVarintLen64[:n])
-	if err != nil {
-		return 0, err
-	}
-
-	_, err = writeRoaringWithLen(postings, w, bufMaxVarintLen64)
-	if err != nil {
-		return 0, err
-	}
-
-	return postingsOffset, nil
+	return bufLoc, err
 }
 
 type varintEncoder func(uint64) (int, error)

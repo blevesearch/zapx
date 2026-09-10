@@ -78,18 +78,88 @@ func (i *invertedTextIndexSection) AddrForField(opaque map[int]resetable, fieldI
 	return io.fieldAddrs[fieldID]
 }
 
+// mergeNormsColumn builds the merged field-norm column for one field by
+// remapping each source segment's column through the merge's doc renumbering.
+//
+// This is where moving norms out of the postings pays off twice over: what used
+// to be a re-encode of one varint per posting is now a single pass over the
+// documents, and with no deletions it degenerates to a copy.
+func mergeNormsColumn(dicts []*Dictionary, newDocNums [][]uint64,
+	dropped []bool, numDocs uint64, buf []uint8) []uint8 {
+	if cap(buf) < int(numDocs) {
+		buf = make([]uint8, numDocs)
+	} else {
+		buf = buf[:numDocs]
+		clear(buf)
+	}
+
+	for i, d := range dicts {
+		if d == nil || d.norms == nil || d.norms.kind == normsKindAbsent {
+			continue
+		}
+		nd := newDocNums[i]
+		if len(nd) == 0 {
+			continue
+		}
+		switch d.norms.kind {
+		case normsKindConstant:
+			for _, nw := range nd {
+				if nw != docDropped {
+					buf[nw] = d.norms.constant
+				}
+			}
+		case normsKindDense:
+			dense := d.norms.dense
+			if len(dense) > len(nd) {
+				dense = dense[:len(nd)]
+			}
+			if !dropped[i] {
+				// No deletions means the renumbering is a constant shift, so
+				// the whole column moves in one copy.
+				copy(buf[nd[0]:], dense)
+				continue
+			}
+			for old, id := range dense {
+				if nw := nd[old]; nw != docDropped {
+					buf[nw] = id
+				}
+			}
+		}
+	}
+	return buf
+}
+
+// writeNormsColumn emits a field's norm column and reports where it landed.
+// It runs before the field's postings because the per-block score bounds are
+// computed from it, the same ordering constraint tantivy has between its
+// fieldnorm and postings files.
+func writeNormsColumn(w *FileWriter, ids []uint8, buf []byte) (
+	offset, length uint64, bufOut []byte, err error) {
+	buf = encodeNormsColumn(ids, buf[:0])
+	processed := w.process(buf)
+	offset = uint64(w.Count())
+	if _, err := w.Write(processed); err != nil {
+		return 0, 0, buf, err
+	}
+	return offset, uint64(len(processed)), buf, nil
+}
+
 func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.Bitmap,
 	fieldsInv []string, fieldsMap map[string]uint16, fieldsOptions map[string]index.FieldIndexingOptions,
 	fieldsSame bool, newDocNumsIn [][]uint64, newSegDocCount uint64, chunkMode uint32, w *FileWriter,
 	closeCh chan struct{}) (map[int]int, error) {
 	var bufMaxVarintLen64 []byte = make([]byte, binary.MaxVarintLen64)
 	var bufLoc []uint64
+	var normsBuf []byte
+	var normIDs []uint8
 
 	var postings *PostingsList
 	var postItr *PostingsIterator
 
 	fieldAddrs := make(map[int]int)
 	dictOffsets := make([]uint64, len(fieldsInv))
+	normsOffsets := make([]uint64, len(fieldsInv))
+	normsLens := make([]uint64, len(fieldsInv))
 	fieldDvLocsStart := make([]uint64, len(fieldsInv))
 	fieldDvLocsEnd := make([]uint64, len(fieldsInv))
 
@@ -107,11 +177,11 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		copyFlag = false
 	}
 
-	// these int coders are initialized with chunk size 1024
-	// however this will be reset to the correct chunk size
-	// while processing each individual field-term section
-	tfEncoder := newChunkedIntCoder(1024, newSegDocCount-1)
+	// The location encoder is initialised with a placeholder chunk size; the
+	// real one is set per term, from the same number that goes into the term
+	// footer.
 	locEncoder := newChunkedIntCoder(1024, newSegDocCount-1)
+	ser := &postingsSerializer{w: w}
 
 	var vellumBuf bytes.Buffer
 	newVellum, err := vellum.New(&vellumBuf, nil)
@@ -119,9 +189,8 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		return nil, err
 	}
 
-	newRoaring := roaring.NewBitmap()
 	newDocNums := make([][]uint64, 0, len(segments))
-	drops := make([]*roaring.Bitmap, 0, len(segments))
+	dropped := make([]bool, 0, len(segments))
 	dicts := make([]*Dictionary, 0, len(segments))
 	itrs := make([]vellum.Iterator, 0, len(segments))
 	segmentsInFocus := make([]*SegmentBase, 0, len(segments))
@@ -129,7 +198,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 	for fieldID, fieldName := range fieldsInv {
 		// collect FST iterators from all active segments for this field
 		newDocNums = newDocNums[:0]
-		drops = drops[:0]
+		dropped = dropped[:0]
 		dicts = dicts[:0]
 		itrs = itrs[:0]
 		segmentsInFocus = segmentsInFocus[:0]
@@ -154,11 +223,8 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 				}
 				if itr != nil {
 					newDocNums = append(newDocNums, newDocNumsIn[segmentI])
-					if dropsIn[segmentI] != nil && !dropsIn[segmentI].IsEmpty() {
-						drops = append(drops, dropsIn[segmentI])
-					} else {
-						drops = append(drops, nil)
-					}
+					dropped = append(dropped,
+						dropsIn[segmentI] != nil && !dropsIn[segmentI].IsEmpty())
 					dicts = append(dicts, dict)
 					itrs = append(itrs, itr)
 					segmentsInFocus = append(segmentsInFocus, segment)
@@ -166,132 +232,110 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 			}
 		}
 
-		var prevTerm []byte
+		hasFreqs := !fieldsOptions[fieldName].SkipFreqNorm()
 
-		newRoaring.Clear()
-
-		var lastDocNum, lastFreq, lastNorm uint64
-
-		// determines whether to use "1-hit" encoding optimization
-		// when a term appears in only 1 doc, with no loc info,
-		// has freq of 1, and the docNum fits into 31-bits
-		use1HitEncoding := func(termCardinality uint64) (bool, uint64, uint64) {
-			if termCardinality == uint64(1) && locEncoder.FinalSize() <= 0 {
-				docNum := uint64(newRoaring.Minimum())
-				if under32Bits(docNum) && docNum == lastDocNum && lastFreq == 1 {
-					return true, docNum, lastNorm
-				}
-			}
-			return false, 0, 0
-		}
-
-		finishTerm := func(term []byte) error {
-			tfEncoder.Close()
-			locEncoder.Close()
-
-			postingsOffset, err := writePostings(newRoaring,
-				tfEncoder, locEncoder, use1HitEncoding, w, bufMaxVarintLen64)
+		// The norm column comes first: the block bounds written with each term
+		// are computed from it.
+		normsOffsets[fieldID] = 0
+		normsLens[fieldID] = 0
+		if hasFreqs && len(dicts) > 0 {
+			normIDs = mergeNormsColumn(dicts, newDocNums, dropped, newSegDocCount, normIDs)
+			normsOffsets[fieldID], normsLens[fieldID], normsBuf, err =
+				writeNormsColumn(w, normIDs, normsBuf)
 			if err != nil {
-				return err
+				return nil, err
 			}
-
-			if postingsOffset > 0 {
-				err = newVellum.Insert(term, postingsOffset)
-				if err != nil {
-					return err
-				}
-			}
-
-			newRoaring.Clear()
-
-			tfEncoder.Reset()
-			locEncoder.Reset()
-
-			lastDocNum = 0
-			lastFreq = 0
-			lastNorm = 0
-
-			return nil
+		} else {
+			normIDs = normIDs[:0]
 		}
 
 		enumerator, err := newEnumerator(itrs)
 
 		for err == nil {
-			term, itrI, postingsOffset := enumerator.Current()
+			// check for the closure in meantime
+			if isClosed(closeCh) {
+				return nil, seg.ErrClosed
+			}
 
-			if !bytes.Equal(prevTerm, term) {
-				// check for the closure in meantime
-				if isClosed(closeCh) {
-					return nil, seg.ErrClosed
+			term, _, _ := enumerator.Current()
+			lowIdxs, lowVals := enumerator.GetLowIdxsAndValues()
+
+			// Look at every contributing segment's term footer before writing
+			// anything. Two things are needed up front: whether the merged term
+			// records locations, because a term that does must carry a location
+			// group for every posting, and an upper bound on its doc frequency
+			// to size the location chunks. The bound is an upper one because
+			// deletions are only discovered while streaming -- which is exactly
+			// why the chunk size is recorded in the footer rather than being
+			// re-derived by the reader.
+			var upperDocFreq uint64
+			termHasLocs := false
+			for i, idx := range lowIdxs {
+				postings, err = dicts[idx].postingsListFromOffset(lowVals[i], nil, postings)
+				if err != nil {
+					return nil, err
+				}
+				upperDocFreq += postings.rawDocFreq()
+				if postings.footer.hasLocs() {
+					termHasLocs = true
+				}
+			}
+
+			locChunkSize, err2 := getChunkSize(chunkMode, upperDocFreq, newSegDocCount)
+			if err2 != nil {
+				return nil, err2
+			}
+			locEncoder.SetChunkSize(locChunkSize, newSegDocCount-1)
+
+			ser.StartTerm(hasFreqs, termHasLocs, normIDs)
+
+			for i, idx := range lowIdxs {
+				var except *roaring.Bitmap
+				if dropped[idx] {
+					except = dropsForDict(dropsIn, segments, segmentsInFocus, idx)
+				}
+				postings, err = dicts[idx].postingsListFromOffset(lowVals[i], except, postings)
+				if err != nil {
+					return nil, err
 				}
 
-				// if the term changed, write out the info collected
-				// for the previous term
-				err = finishTerm(prevTerm)
+				postItr, err = postings.iterator(true, true, termHasLocs, postItr)
+				if err != nil {
+					return nil, err
+				}
+
+				// can only safely copy location bytes if all segments have the
+				// same fields and all have an empty writer id (i.e. no callbacks)
+				if fieldsSame && copyFlag {
+					err = mergeTermPostingsByCopying(postItr, newDocNums[idx],
+						termHasLocs, ser, locEncoder)
+				} else {
+					bufLoc, err = mergeTermPostings(fieldsMap, postItr, newDocNums[idx],
+						termHasLocs, ser, locEncoder, bufLoc)
+				}
 				if err != nil {
 					return nil, err
 				}
 			}
-			if !bytes.Equal(prevTerm, term) || prevTerm == nil {
-				// compute cardinality of field-term in new seg
-				var newCard uint64
-				lowItrIdxs, lowItrVals := enumerator.GetLowIdxsAndValues()
-				for i, idx := range lowItrIdxs {
-					pl, err := dicts[idx].postingsListFromOffset(lowItrVals[i], drops[idx], nil)
-					if err != nil {
-						return nil, err
-					}
-					newCard += pl.Count()
-				}
-				// compute correct chunk size with this
-				chunkSize, err := getChunkSize(chunkMode, newCard, newSegDocCount)
+
+			if err = finishMergedTerm(w, ser, locEncoder, newVellum, term,
+				locChunkSize); err != nil {
+				return nil, err
+			}
+
+			// step the enumerator past every entry for this term
+			for range lowIdxs {
+				err = enumerator.Next()
 				if err != nil {
-					return nil, err
+					break
 				}
-				// update encoders chunk
-				tfEncoder.SetChunkSize(chunkSize, newSegDocCount-1)
-				locEncoder.SetChunkSize(chunkSize, newSegDocCount-1)
 			}
-
-			postings, err = dicts[itrI].postingsListFromOffset(
-				postingsOffset, drops[itrI], postings)
-			if err != nil {
-				return nil, err
-			}
-
-			postItr = postings.iterator(true, true, true, postItr)
-
-			// can only safely copy data if all segments have same fields and all have an empty
-			// writer id (i.e. no callbacks)
-			if fieldsSame && copyFlag {
-				// can optimize by copying freq/norm/loc bytes directly
-				lastDocNum, lastFreq, lastNorm, err = mergeTermFreqNormLocsByCopying(
-					term, postItr, newDocNums[itrI], newRoaring,
-					tfEncoder, locEncoder)
-			} else {
-				lastDocNum, lastFreq, lastNorm, bufLoc, err = mergeTermFreqNormLocs(
-					fieldsMap, term, postItr, newDocNums[itrI], newRoaring,
-					tfEncoder, locEncoder, bufLoc)
-			}
-			if err != nil {
-				return nil, err
-			}
-
-			prevTerm = prevTerm[:0] // copy to prevTerm in case Next() reuses term mem
-			prevTerm = append(prevTerm, term...)
-
-			err = enumerator.Next()
 		}
 		if err != vellum.ErrIteratorDone {
 			return nil, err
 		}
 		// close the enumerator to free the underlying iterators
 		err = enumerator.Close()
-		if err != nil {
-			return nil, err
-		}
-
-		err = finishTerm(prevTerm)
 		if err != nil {
 			return nil, err
 		}
@@ -386,20 +430,9 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 
 		fieldStart := w.Count()
 
-		n = binary.PutUvarint(bufMaxVarintLen64, fieldDvLocsStart[fieldID])
-		_, err = w.Write(bufMaxVarintLen64[:n])
-		if err != nil {
-			return nil, err
-		}
-
-		n = binary.PutUvarint(bufMaxVarintLen64, fieldDvLocsEnd[fieldID])
-		_, err = w.Write(bufMaxVarintLen64[:n])
-		if err != nil {
-			return nil, err
-		}
-
-		n = binary.PutUvarint(bufMaxVarintLen64, dictOffsets[fieldID])
-		_, err = w.Write(bufMaxVarintLen64[:n])
+		err = writeFieldFooter(w, bufMaxVarintLen64, fieldDvLocsStart[fieldID],
+			fieldDvLocsEnd[fieldID], dictOffsets[fieldID],
+			normsOffsets[fieldID], normsLens[fieldID])
 		if err != nil {
 			return nil, err
 		}
@@ -414,6 +447,66 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 		}
 	}
 	return fieldAddrs, nil
+}
+
+// dropsForDict maps an index into the per-field dicts slice back to the
+// deletion bitmap of the segment it came from.
+func dropsForDict(dropsIn []*roaring.Bitmap, segments []*SegmentBase,
+	segmentsInFocus []*SegmentBase, idx int) *roaring.Bitmap {
+	target := segmentsInFocus[idx]
+	for i, s := range segments {
+		if s == target {
+			return dropsIn[i]
+		}
+	}
+	return nil
+}
+
+// finishMergedTerm closes out one term: the uvarint tail, the location blob,
+// the skip list and the footer, then the FST entry.
+func finishMergedTerm(w *FileWriter, ser *postingsSerializer, locEncoder *chunkedIntCoder,
+	builder *vellum.Builder, term []byte, locChunkSize uint64) error {
+	if ser.docFreq == 0 {
+		locEncoder.Reset()
+		return nil
+	}
+
+	if fstVal, ok := ser.OneHit(); ok {
+		locEncoder.Reset()
+		return builder.Insert(term, fstVal)
+	}
+
+	if err := ser.FinishPayload(); err != nil {
+		return err
+	}
+
+	locEncoder.Close()
+	_, locBytes, err := locEncoder.writeAt(w)
+	if err != nil {
+		return err
+	}
+	locEncoder.Reset()
+
+	offset, err := ser.Close(uint64(locBytes), locChunkSize)
+	if err != nil {
+		return err
+	}
+	return builder.Insert(term, offset)
+}
+
+// writeFieldFooter records where each of a field's regions ended up. The first
+// three entries are unchanged from earlier zap versions -- other sections read
+// the doc-value pair from the same place -- and the norm column's location is
+// appended after them.
+func writeFieldFooter(w *FileWriter, buf []byte,
+	dvStart, dvEnd, dictOffset, normsOffset, normsLen uint64) error {
+	for _, v := range []uint64{dvStart, dvEnd, dictOffset, normsOffset, normsLen} {
+		n := binary.PutUvarint(buf, v)
+		if _, err := w.Write(buf[:n]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (i *invertedTextIndexSection) Merge(opaque map[int]resetable, segments []*SegmentBase,
@@ -458,7 +551,11 @@ func (io *invertedIndexOpaque) writeDicts(w *FileWriter) error {
 		return nil
 	}
 
+	numDocs := uint64(len(io.results))
+
 	dictOffsets := make([]uint64, len(io.FieldsInv))
+	normsOffsets := make([]uint64, len(io.FieldsInv))
+	normsLens := make([]uint64, len(io.FieldsInv))
 	var err error
 
 	fdvOffsetsStart := make([]uint64, len(io.FieldsInv))
@@ -466,13 +563,13 @@ func (io *invertedIndexOpaque) writeDicts(w *FileWriter) error {
 
 	buf := io.grabBuf(binary.MaxVarintLen64)
 
-	// these int coders are initialized with chunk size 1024
-	// however this will be reset to the correct chunk size
-	// while processing each individual field-term section
-	tfEncoder := newChunkedIntCoder(1024, uint64(len(io.results)-1))
-	locEncoder := newChunkedIntCoder(1024, uint64(len(io.results)-1))
+	// The location encoder is initialised with a placeholder chunk size; the
+	// real one is set per term and recorded in that term's footer.
+	locEncoder := newChunkedIntCoder(1024, numDocs-1)
+	ser := &postingsSerializer{w: w}
 
 	var docTermMap [][]byte
+	var normsBuf []byte
 
 	if io.builder == nil {
 		io.builder, err = vellum.New(&io.builderBuf, nil)
@@ -492,104 +589,90 @@ func (io *invertedIndexOpaque) writeDicts(w *FileWriter) error {
 		}
 
 		dict := io.Dicts[fieldID]
+		hasFreqs := !io.FieldsOptions[io.FieldsInv[fieldID]].SkipFreqNorm()
+
+		// The field's norm column is written before its postings, because the
+		// per-block score bounds are computed from it.
+		normIDs := io.NormIDs[fieldID]
+		if !hasFreqs {
+			normIDs = nil
+		}
+		if len(normIDs) > 0 {
+			normsOffsets[fieldID], normsLens[fieldID], normsBuf, err =
+				writeNormsColumn(w, normIDs, normsBuf)
+			if err != nil {
+				return err
+			}
+			io.incrementBytesWritten(normsLens[fieldID])
+		}
 
 		for _, term := range terms { // terms are already sorted
 			pid := dict[term] - 1
 
-			postingsBS := io.Postings[pid]
-
-			freqNorms := io.FreqNorms[pid]
-			freqNormOffset := 0
-
-			locs := io.Locs[pid]
-			locOffset := 0
-
-			var cardinality uint64
-			if postingsBS != nil {
-				cardinality = postingsBS.GetCardinality()
+			docNums := io.Postings[pid]
+			if len(docNums) == 0 {
+				continue
 			}
-			chunkSize, err := getChunkSize(io.chunkMode, cardinality, uint64(len(io.results)))
+			freqs := io.Freqs[pid]
+			locs := io.Locs[pid]
+
+			// A term that records locations carries a location group for every
+			// one of its postings, empty ones included, so a reader walking the
+			// location stream stays aligned without a per-document flag.
+			termHasLocs := io.numLocsPerPostingsList[pid] > 0
+
+			locChunkSize, err := getChunkSize(io.chunkMode, uint64(len(docNums)), numDocs)
 			if err != nil {
 				return err
 			}
-			tfEncoder.SetChunkSize(chunkSize, uint64(len(io.results)-1))
-			locEncoder.SetChunkSize(chunkSize, uint64(len(io.results)-1))
+			locEncoder.SetChunkSize(locChunkSize, numDocs-1)
 
-			postingsItr := postingsBS.Iterator()
-			for postingsItr.HasNext() {
-				docNum := uint64(postingsItr.Next())
+			ser.StartTerm(hasFreqs, termHasLocs, normIDs)
 
-				freqNorm := freqNorms[freqNormOffset]
+			for i, docNum := range docNums {
+				freq := freqs[i]
 
-				// check if freq/norm is enabled
-				if freqNorm.freq > 0 {
-					err = tfEncoder.Add(docNum,
-						encodeFreqHasLocs(freqNorm.freq, freqNorm.numLocs > 0),
-						uint64(math.Float32bits(freqNorm.norm)))
-				} else {
-					// if disabled, then skip the norm part
-					err = tfEncoder.Add(docNum,
-						encodeFreqHasLocs(freqNorm.freq, freqNorm.numLocs > 0))
-				}
-				if err != nil {
+				if err = ser.AddDoc(docNum, freq); err != nil {
 					return err
 				}
 
-				if freqNorm.numLocs > 0 {
+				if termHasLocs {
+					docLocs := locs[i]
+
 					numBytesLocs := 0
-					for _, loc := range locs[locOffset : locOffset+freqNorm.numLocs] {
+					for _, loc := range docLocs {
 						numBytesLocs += totalUvarintBytes(
 							uint64(loc.fieldID), loc.pos, loc.start, loc.end,
 							uint64(len(loc.arrayposs)), loc.arrayposs)
 					}
 
-					err = locEncoder.Add(docNum, uint64(numBytesLocs))
-					if err != nil {
+					if err = locEncoder.Add(uint64(docNum), uint64(numBytesLocs)); err != nil {
 						return err
 					}
-					for _, loc := range locs[locOffset : locOffset+freqNorm.numLocs] {
-						err = locEncoder.Add(docNum,
+					for _, loc := range docLocs {
+						err = locEncoder.Add(uint64(docNum),
 							uint64(loc.fieldID), loc.pos, loc.start, loc.end,
 							uint64(len(loc.arrayposs)))
 						if err != nil {
 							return err
 						}
-
-						err = locEncoder.Add(docNum, loc.arrayposs...)
-						if err != nil {
+						if err = locEncoder.Add(uint64(docNum), loc.arrayposs...); err != nil {
 							return err
 						}
 					}
-					locOffset += freqNorm.numLocs
 				}
-
-				freqNormOffset++
 
 				docTermMap[docNum] = append(
 					append(docTermMap[docNum], term...),
 					index.DocValueTermSeparator)
 			}
 
-			tfEncoder.Close()
-			locEncoder.Close()
-			io.incrementBytesWritten(locEncoder.getBytesWritten())
-			io.incrementBytesWritten(tfEncoder.getBytesWritten())
-
-			postingsOffset, err :=
-				writePostings(postingsBS, tfEncoder, locEncoder, nil, w, buf)
-			if err != nil {
+			if err = finishMergedTerm(w, ser, locEncoder, io.builder,
+				[]byte(term), locChunkSize); err != nil {
 				return err
 			}
-
-			if postingsOffset > uint64(0) {
-				err = io.builder.Insert([]byte(term), postingsOffset)
-				if err != nil {
-					return err
-				}
-			}
-
-			tfEncoder.Reset()
-			locEncoder.Reset()
+			io.incrementBytesWritten(ser.BytesWritten())
+			io.incrementBytesWritten(locEncoder.getBytesWritten())
 		}
 
 		err = io.builder.Close()
@@ -634,7 +717,7 @@ func (io *invertedIndexOpaque) writeDicts(w *FileWriter) error {
 		if io.FieldsOptions[io.FieldsInv[fieldID]].SkipDVChunking() {
 			chunkSize = 1
 		}
-		fdvEncoder := newChunkedContentCoder(chunkSize, uint64(len(io.results)-1), w, false, io.FieldsOptions[io.FieldsInv[fieldID]].SkipDVCompression())
+		fdvEncoder := newChunkedContentCoder(chunkSize, numDocs-1, w, false, io.FieldsOptions[io.FieldsInv[fieldID]].SkipDVCompression())
 		if io.IncludeDocValues[fieldID] {
 			for docNum, docTerms := range docTermMap {
 				if fieldTermMap, ok := io.extraDocValues[docNum]; ok {
@@ -674,20 +757,8 @@ func (io *invertedIndexOpaque) writeDicts(w *FileWriter) error {
 
 		fieldStart := w.Count()
 
-		n = binary.PutUvarint(buf, fdvOffsetsStart[fieldID])
-		_, err = w.Write(buf[:n])
-		if err != nil {
-			return err
-		}
-
-		n = binary.PutUvarint(buf, fdvOffsetsEnd[fieldID])
-		_, err = w.Write(buf[:n])
-		if err != nil {
-			return err
-		}
-
-		n = binary.PutUvarint(buf, dictOffsets[fieldID])
-		_, err = w.Write(buf[:n])
+		err = writeFieldFooter(w, buf, fdvOffsetsStart[fieldID], fdvOffsetsEnd[fieldID],
+			dictOffsets[fieldID], normsOffsets[fieldID], normsLens[fieldID])
 		if err != nil {
 			return err
 		}
@@ -708,44 +779,44 @@ func (io *invertedIndexOpaque) process(field index.Field, fieldID uint16, docNum
 	// finished invoking the process() for every field on that doc.
 	if fieldID == math.MaxUint16 {
 		for fid, tfs := range io.reusableFieldTFs {
+			if tfs == nil {
+				continue
+			}
 			dict := io.Dicts[fid]
-			norm := math.Float32frombits(uint32(io.reusableFieldLens[fid]))
+
+			// The field's length is quantized once per document into the
+			// field's norm column, rather than being copied alongside every
+			// posting of every term the document contains.
+			if len(io.NormIDs[fid]) > 0 {
+				io.NormIDs[fid][docNum] = fieldNormToID(uint32(io.reusableFieldLens[fid]))
+			}
 
 			for term, tf := range tfs {
 				pid := dict[term] - 1
-				bs := io.Postings[pid]
-				bs.Add(uint32(docNum))
+				io.Postings[pid] = append(io.Postings[pid], docNum)
+				io.Freqs[pid] = append(io.Freqs[pid], uint32(tf.Frequency()))
 
-				io.FreqNorms[pid] = append(io.FreqNorms[pid],
-					interimFreqNorm{
-						freq:    uint64(tf.Frequency()),
-						norm:    norm,
-						numLocs: len(tf.Locations),
-					})
-
-				if len(tf.Locations) > 0 {
-					locs := io.Locs[pid]
-
-					for _, loc := range tf.Locations {
-						var locf = uint16(fid)
-						if loc.Field != "" {
-							locf = uint16(io.getOrDefineField(loc.Field))
-						}
-						var arrayposs []uint64
-						if len(loc.ArrayPositions) > 0 {
-							arrayposs = loc.ArrayPositions
-						}
-						locs = append(locs, interimLoc{
-							fieldID:   locf,
-							pos:       uint64(loc.Position),
-							start:     uint64(loc.Start),
-							end:       uint64(loc.End),
-							arrayposs: arrayposs,
-						})
+				n := len(tf.Locations)
+				docLocs := io.locsRemaining[pid][:n:n]
+				for i, loc := range tf.Locations {
+					var locf = uint16(fid)
+					if loc.Field != "" {
+						locf = uint16(io.getOrDefineField(loc.Field))
 					}
-
-					io.Locs[pid] = locs
+					var arrayposs []uint64
+					if len(loc.ArrayPositions) > 0 {
+						arrayposs = loc.ArrayPositions
+					}
+					docLocs[i] = interimLoc{
+						fieldID:   locf,
+						pos:       uint64(loc.Position),
+						start:     uint64(loc.Start),
+						end:       uint64(loc.End),
+						arrayposs: arrayposs,
+					}
 				}
+				io.locsRemaining[pid] = io.locsRemaining[pid][n:]
+				io.Locs[pid] = append(io.Locs[pid], docLocs)
 			}
 		}
 		for i := 0; i < len(io.FieldsInv); i++ { // clear these for reuse
@@ -874,41 +945,64 @@ func (i *invertedIndexOpaque) realloc() {
 
 	numPostingsLists := pidNext
 
+	// Doc numbers accumulate into plain slices carved out of one backing array.
+	// They arrive already sorted -- process() is called per document in order --
+	// so there is nothing a bitmap would add here beyond its own overhead.
 	if cap(i.Postings) >= numPostingsLists {
 		i.Postings = i.Postings[:numPostingsLists]
 	} else {
-		postings := make([]*roaring.Bitmap, numPostingsLists)
-		copy(postings, i.Postings[:cap(i.Postings)])
-		for i := 0; i < numPostingsLists; i++ {
-			if postings[i] == nil {
-				postings[i] = roaring.New()
-			}
-		}
-		i.Postings = postings
+		i.Postings = make([][]uint32, numPostingsLists)
 	}
 
-	if cap(i.FreqNorms) >= numPostingsLists {
-		i.FreqNorms = i.FreqNorms[:numPostingsLists]
+	if cap(i.postingsBacking) >= totTFs {
+		i.postingsBacking = i.postingsBacking[:totTFs]
 	} else {
-		i.FreqNorms = make([][]interimFreqNorm, numPostingsLists)
+		i.postingsBacking = make([]uint32, totTFs)
 	}
 
-	if cap(i.freqNormsBacking) >= totTFs {
-		i.freqNormsBacking = i.freqNormsBacking[:totTFs]
-	} else {
-		i.freqNormsBacking = make([]interimFreqNorm, totTFs)
-	}
-
-	freqNormsBacking := i.freqNormsBacking
+	postingsBacking := i.postingsBacking
 	for pid, numTerms := range i.numTermsPerPostingsList {
-		i.FreqNorms[pid] = freqNormsBacking[0:0]
-		freqNormsBacking = freqNormsBacking[numTerms:]
+		i.Postings[pid] = postingsBacking[0:0]
+		postingsBacking = postingsBacking[numTerms:]
 	}
 
+	if cap(i.Freqs) >= numPostingsLists {
+		i.Freqs = i.Freqs[:numPostingsLists]
+	} else {
+		i.Freqs = make([][]uint32, numPostingsLists)
+	}
+
+	if cap(i.freqsBacking) >= totTFs {
+		i.freqsBacking = i.freqsBacking[:totTFs]
+	} else {
+		i.freqsBacking = make([]uint32, totTFs)
+	}
+
+	freqsBacking := i.freqsBacking
+	for pid, numTerms := range i.numTermsPerPostingsList {
+		i.Freqs[pid] = freqsBacking[0:0]
+		freqsBacking = freqsBacking[numTerms:]
+	}
+
+	// Locs mirrors Freqs one level deeper: one []interimLoc per doc-occurrence,
+	// carved from locsPerDocBacking, each in turn carved from locsBacking as
+	// process() fills them in via locsRemaining.
 	if cap(i.Locs) >= numPostingsLists {
 		i.Locs = i.Locs[:numPostingsLists]
 	} else {
-		i.Locs = make([][]interimLoc, numPostingsLists)
+		i.Locs = make([][][]interimLoc, numPostingsLists)
+	}
+
+	if cap(i.locsPerDocBacking) >= totTFs {
+		i.locsPerDocBacking = i.locsPerDocBacking[:totTFs]
+	} else {
+		i.locsPerDocBacking = make([][]interimLoc, totTFs)
+	}
+
+	locsPerDocBacking := i.locsPerDocBacking
+	for pid, numTerms := range i.numTermsPerPostingsList {
+		i.Locs[pid] = locsPerDocBacking[0:0]
+		locsPerDocBacking = locsPerDocBacking[numTerms:]
 	}
 
 	if cap(i.locsBacking) >= totLocs {
@@ -917,14 +1011,39 @@ func (i *invertedIndexOpaque) realloc() {
 		i.locsBacking = make([]interimLoc, totLocs)
 	}
 
+	if cap(i.locsRemaining) >= numPostingsLists {
+		i.locsRemaining = i.locsRemaining[:numPostingsLists]
+	} else {
+		i.locsRemaining = make([][]interimLoc, numPostingsLists)
+	}
+
 	locsBacking := i.locsBacking
 	for pid, numLocs := range i.numLocsPerPostingsList {
-		i.Locs[pid] = locsBacking[0:0]
+		i.locsRemaining[pid] = locsBacking[:numLocs]
 		locsBacking = locsBacking[numLocs:]
 	}
 
 	for _, dict := range i.DictKeys {
 		sort.Strings(dict)
+	}
+
+	// One norm column per field, indexed by doc number. Documents that do not
+	// contain the field keep the zero the allocation leaves behind, which is
+	// exactly what the reader expects.
+	numFields := len(i.FieldsInv)
+	numDocsInBatch := len(i.results)
+	if cap(i.NormIDs) >= numFields {
+		i.NormIDs = i.NormIDs[:numFields]
+	} else {
+		i.NormIDs = make([][]uint8, numFields)
+	}
+	for fid := 0; fid < numFields; fid++ {
+		if cap(i.NormIDs[fid]) >= numDocsInBatch {
+			i.NormIDs[fid] = i.NormIDs[fid][:numDocsInBatch]
+			clear(i.NormIDs[fid])
+		} else {
+			i.NormIDs[fid] = make([]uint8, numDocsInBatch)
+		}
 	}
 
 	if cap(i.reusableFieldTFs) >= len(i.FieldsInv) {
@@ -1013,16 +1132,28 @@ type invertedIndexOpaque struct {
 	//  field id -> bool
 	IncludeDocValues []bool
 
-	// postings id -> bitmap of docNums
-	Postings []*roaring.Bitmap
+	// postings id -> ascending docNums
+	Postings        [][]uint32
+	postingsBacking []uint32
 
-	// postings id -> freq/norm's, one for each docNum in postings
-	FreqNorms        [][]interimFreqNorm
-	freqNormsBacking []interimFreqNorm
+	// field id -> docNum -> quantized field length
+	NormIDs [][]uint8
 
-	// postings id -> locs, one for each freq
-	Locs        [][]interimLoc
-	locsBacking []interimLoc
+	// postings id -> freqs, one for each docNum in postings
+	Freqs        [][]uint32
+	freqsBacking []uint32
+
+	// postings id -> doc index (same index as Postings/Freqs) -> that doc's
+	// locs. A doc with no locations for the term still gets an (empty) entry,
+	// so len(Locs[pid][i]) is the location count for Postings[pid][i] -- there
+	// is no separate count to keep in sync.
+	Locs              [][][]interimLoc
+	locsPerDocBacking [][]interimLoc
+	locsBacking       []interimLoc
+
+	// locsRemaining is the per-pid unconsumed tail of locsBacking, used only
+	// while process() is carving each doc's slice out of it.
+	locsRemaining [][]interimLoc
 
 	numTermsPerPostingsList []int // key is postings list id
 	numLocsPerPostingsList  []int // key is postings list id
@@ -1067,20 +1198,36 @@ func (io *invertedIndexOpaque) Reset() (err error) {
 		io.IncludeDocValues[i] = false
 	}
 	io.IncludeDocValues = io.IncludeDocValues[:0]
-	for _, idn := range io.Postings {
-		idn.Clear()
+	for i := range io.Postings {
+		io.Postings[i] = nil
 	}
 	io.Postings = io.Postings[:0]
-	io.FreqNorms = io.FreqNorms[:0]
-	for i := range io.freqNormsBacking {
-		io.freqNormsBacking[i] = interimFreqNorm{}
+	io.postingsBacking = io.postingsBacking[:0]
+	for i := range io.NormIDs {
+		io.NormIDs[i] = io.NormIDs[i][:0]
 	}
-	io.freqNormsBacking = io.freqNormsBacking[:0]
+	io.NormIDs = io.NormIDs[:0]
+	for i := range io.Freqs {
+		io.Freqs[i] = nil
+	}
+	io.Freqs = io.Freqs[:0]
+	io.freqsBacking = io.freqsBacking[:0]
+	for i := range io.Locs {
+		io.Locs[i] = nil
+	}
 	io.Locs = io.Locs[:0]
+	for i := range io.locsPerDocBacking {
+		io.locsPerDocBacking[i] = nil
+	}
+	io.locsPerDocBacking = io.locsPerDocBacking[:0]
 	for i := range io.locsBacking {
 		io.locsBacking[i] = interimLoc{}
 	}
 	io.locsBacking = io.locsBacking[:0]
+	for i := range io.locsRemaining {
+		io.locsRemaining[i] = nil
+	}
+	io.locsRemaining = io.locsRemaining[:0]
 	io.numTermsPerPostingsList = io.numTermsPerPostingsList[:0]
 	io.numLocsPerPostingsList = io.numLocsPerPostingsList[:0]
 	io.builderBuf.Reset()

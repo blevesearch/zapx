@@ -30,6 +30,10 @@ type Dictionary struct {
 	fieldID uint16
 	fst     *vellum.FST
 
+	// norms is the field's quantized field-length column, shared by every term
+	// in the field and cached alongside the FST
+	norms *normsColumn
+
 	fstReader *vellum.Reader
 
 	bytesRead uint64
@@ -94,16 +98,10 @@ func (d *Dictionary) postingsListInit(rv *PostingsList, except *roaring.Bitmap) 
 	if rv == nil || rv == emptyPostingsList {
 		rv = &PostingsList{}
 	} else {
-		postings := rv.postings
-		if postings != nil {
-			postings.Clear()
-		}
-
 		*rv = PostingsList{} // clear the struct
-
-		rv.postings = postings
 	}
 	rv.sb = d.sb
+	rv.norms = d.norms
 	rv.except = except
 	return rv
 }

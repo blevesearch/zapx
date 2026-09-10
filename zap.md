@@ -124,35 +124,62 @@ Sections Index is a set of NF uint64 addresses (0 through F# - 1) each of which 
 
 Each field has its own types of indexes in separate sections as indicated above. This can be a vector index or inverted text index.
 
-In case of inverted text index, the dictionary is encoded in [Vellum](https://github.com/couchbase/vellum) format. Dictionary consists of pairs `(term, offset)`, where `offset` indicates the position of postings (list of documents) for this particular term.
+In case of inverted text index, the dictionary is encoded in [Vellum](https://github.com/couchbase/vellum) format. Dictionary consists of pairs `(term, offset)`, where `offset` indicates the position of the term header (described below) for this particular term.
+
+Doc numbers and term frequencies are bitpacked 128 at a time. Doc numbers within a
+postings list are strictly increasing, so `delta - 1` is stored, and a term present in
+every document therefore packs at zero bits per document; term frequencies are at
+least 1, so `tf - 1` is stored and a block of all-ones frequencies also costs nothing.
+A flat skip list carries one fixed-size entry per full block, which lets a reader hop
+to the block containing a target document without decoding any payload. Whatever is
+left over at the end of a list -- fewer than 128 documents -- is written as plain
+uvarints.
+
+Field norms are **not** stored in the postings. They live in a dense column, one
+quantized byte per document, shared by every term of the field: a term appearing in a
+million documents would otherwise carry a million copies of the same handful of field
+lengths. The quantization is the scheme Lucene and tantivy use -- exact for lengths
+0..40, then a 3-bit mantissa with a 5-bit exponent -- so reading a norm is one byte
+load plus one lookup in a 256-entry table.
 
         +================================================================+- Inverted Text
         |                                                                |  Index Section
         |                                                                |
-        |    Freq/Norm (chunked)                                         |
-        |    [~~~~~~+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~]                      |
-        | +->[ Freq | Norm (float32 under varint) ]                      |
-        | |  [~~~~~~+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~]                      |
+        |    Field Norms                                                 |
+        |    [~~~~~~+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~]              |
+        | +->[ Kind | absent | constant u8 | u8[numDocs] ]               |
+        | |  [~~~~~~+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~]              |
         | |                                                              |
-        | +------------------------------------------------------------+ |
-        |    Location Details (chunked)                                | |
-        |    [~~~~~~+~~~~~+~~~~~~~+~~~~~+~~~~~~+~~~~~~~~+~~~~~]        | |
-        | +->[ Size | Pos | Start | End | Arr# | ArrPos | ... ]        | |
-        | |  [~~~~~~+~~~~~+~~~~~~~+~~~~~+~~~~~~+~~~~~~~~+~~~~~]        | |
-        | |                                                            | |
-        | +----------------------+                                     | |
-        |          Postings List |                                     | |
-        |         +~~~~~~~~+~~~~~+~~+~~~~~~~~+----------+...+-+        | |
-        |      +->+    F/N |     LD | Length | ROARING BITMAP |        | |
-        |      |  +~~~~~+~~|~~~~~~~~|~~~~~~~~+----------+...+-+        | |
-        |      |        +----------------------------------------------+ |
-        |      +-------------------------------------------------+       |
-        |                                                        |       |
-        |                     Dictionary                         |       |
-        | +~~~~~~~~~~+~~~~~~~+~~~~~~~~+--------------------------+-...-+ |
-    +-----> DV Start | DV End| Length | VELLUM DATA : (TERM -> OFFSET) | |
-    |   | +~~~~~~~~~~+~~~~~~~+~~~~~~~~+----------------------------...-+ |
-    |   |                                                                |
+        | |  Per term, in term order:                                    |
+        | |                                                              |
+        | |  Payload                                                     |
+        | |  [~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+~~~~~~~~~~~~~~~~~~~~~~]  |
+        | |  [ 128 docNum deltas @docNumBits   | 128 tfs @tfNumBits  ]*  |
+        | |  [~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+~~~~~~~~~~~~~~~~~~~~~~]  |
+        | |  [ uvarint doc deltas | uvarint tfs ]  (tail, < 128 docs)    |
+        | |                                                              |
+        | |  Location Details (chunked)                                  |
+        | |  [~~~~~~+~~~~~+~~~~~~~+~~~~~+~~~~~~+~~~~~~~~+~~~~~]          |
+        | |  [ Size | Pos | Start | End | Arr# | ArrPos | ... ]          |
+        | |  [~~~~~~+~~~~~+~~~~~~~+~~~~~+~~~~~~+~~~~~~~~+~~~~~]          |
+        | |                                                              |
+        | |  Skip List (one entry per full block, then a tail offset)    |
+        | |  [~~~~~~~~~+~~~~~~~~~~~~+~~~~~~~~~+~~~~~~~~+~~~~~~~+~~~~~~]  |
+        | |  [ LastDoc | BlockOffset | DocBits | TfBits | MinNorm| MaxTf] |
+        | |  [~~~~~~~~~+~~~~~~~~~~~~~+~~~~~~~~+~~~~~~~~+~~~~~~~~+~~~~~~] |
+        | |                                                              |
+        | |  Term Header                          <- the FST value       |
+        | |  +~~~~~~~~~+~~~~~~~+~~~~~~~~~~~+~~~~~~~~~+~~~~~~~~~+~~~~~~+  |
+        | +->| DocFreq | Flags | PayloadLen | LocsLen | SkipLen | LocCS| |
+        | |  +~~~~~~~~~+~~~~~~~+~~~~~~~~~~~+~~~~~~~~~+~~~~~~~~~+~~~~~~+  |
+        | |                                                              |
+        | +----------------------------------------------+               |
+        |                                                |               |
+        |                     Dictionary                 |               |
+        | +~~~~~~~~~~+~~~~~~~+~~~~~~~~+-------------------+-...-+~~~~~~~+ |
+    +-----> DV Start | DV End| Length | VELLUM (TERM->OFFSET) | Norms  | |
+    |   | +~~~~~~~~~~+~~~~~~~+~~~~~~~~+-------------------+-...-+~~~~~~~+ |
+    |   |                                            Offset & Length      |
     |   |                                                                |
     |   |================================================================+- Vector Index Section
     |   |                                                                |
@@ -166,6 +193,24 @@ In case of inverted text index, the dictionary is encoded in [Vellum](https://gi
         |     +-------+-----+------------+~~~~~~~~+~~~~~~~~+--+...+--+   |
         +================================================================+
 
+
+The regions of a term are written in the order the writer can produce them and the
+header comes last, so nothing needs buffering or back-patching. A reader walks
+backwards from the header: skip data starts at `header - skipLen`, locations at
+`skip - locsLen`, payload at `locs - payloadLen`.
+
+Each block is passed through the writer's `process()` hook independently, which is why
+the skip entry records the block's byte offset rather than deriving it from the bit
+widths: an encrypting or compressing callback changes a block's length, and a reader
+must still be able to reach one block without decoding the whole term.
+
+`MinNorm` and `MaxTf` bound the BM25 contribution of every document in a block --
+score rises with frequency and falls with field length. Nothing consumes them yet;
+they are written so that enabling block-max WAND later is not another format change.
+
+A term with a single document, a frequency of one and no locations skips all of this:
+its doc number is packed directly into the FST value ("1-hit" encoding). That is most
+of the dictionary in a real corpus.
 
          ITI - Inverted Text Index
 

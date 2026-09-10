@@ -180,12 +180,6 @@ type interimStoredField struct {
 	arrayposs [][]uint64 // array positions
 }
 
-type interimFreqNorm struct {
-	freq    uint64
-	norm    float32
-	numLocs int
-}
-
 type interimLoc struct {
 	fieldID   uint16
 	pos       uint64

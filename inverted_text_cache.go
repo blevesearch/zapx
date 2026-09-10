@@ -40,12 +40,23 @@ func (sc *invertedIndexCache) Clear() {
 	sc.m.Unlock()
 }
 
+// dictLocation names the two regions of a field's inverted index section that
+// the cache materialises: the term dictionary and the field-norm column.
+type dictLocation struct {
+	dictOffset  uint64
+	normsOffset uint64
+	normsLen    uint64
+	numDocs     uint64
+}
+
 // loadOrCreate loads the inverted index cache for the specified fieldID if it is already present,
-// or creates it if not. The inverted index cache for a fieldID consists of an FST (Finite State Transducer):
+// or creates it if not. The inverted index cache for a fieldID consists of:
 // - A Vellum FST (Finite State Transducer) representing the TermDictionary.
-// This function returns the loaded or newly created FST, and the number of bytes read from the provided memory slice,
-// if the cache was created.
-func (sc *invertedIndexCache) loadOrCreate(fieldID uint16, mem []byte, fr *FileReader) (*vellum.FST, uint64, error) {
+// - The field's quantized field-norm column, which every term of the field reads.
+// This function returns the loaded or newly created entries, and the number of bytes read from
+// the provided memory slice, if the cache was created.
+func (sc *invertedIndexCache) loadOrCreate(fieldID uint16, mem []byte, loc dictLocation,
+	fr *FileReader) (*vellum.FST, *normsColumn, uint64, error) {
 	sc.m.RLock()
 	entry, ok := sc.cache[fieldID]
 	if ok {
@@ -63,45 +74,66 @@ func (sc *invertedIndexCache) loadOrCreate(fieldID uint16, mem []byte, fr *FileR
 		return entry.load()
 	}
 
-	return sc.createAndCacheLOCKED(fieldID, mem, fr)
+	return sc.createAndCacheLOCKED(fieldID, mem, loc, fr)
 }
 
 // createAndCacheLOCKED creates the inverted index cache for the specified fieldID and caches it.
-func (sc *invertedIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte, fr *FileReader) (*vellum.FST, uint64, error) {
-	var pos uint64
-	vellumLen, read := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])
+func (sc *invertedIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte, loc dictLocation,
+	fr *FileReader) (*vellum.FST, *normsColumn, uint64, error) {
+	pos := loc.dictOffset
+	vellumLen, read := binary.Uvarint(memAt(mem, pos, binary.MaxVarintLen64))
 	if vellumLen == 0 || read <= 0 {
-		return nil, 0, fmt.Errorf("vellum length is 0")
+		return nil, nil, 0, fmt.Errorf("vellum length is 0")
 	}
 	pos += uint64(read)
 	fstBytes, err := fr.process(mem[pos : pos+vellumLen])
 	if err != nil {
-		return nil, 0, fmt.Errorf("error processing vellum bytes: %v", err)
+		return nil, nil, 0, fmt.Errorf("error processing vellum bytes: %v", err)
 	}
 	fst, err := vellum.Load(fstBytes)
 	if err != nil {
-		return nil, 0, fmt.Errorf("vellum err: %v", err)
+		return nil, nil, 0, fmt.Errorf("vellum err: %v", err)
 	}
 	pos += vellumLen
-	sc.insertLOCKED(fieldID, fst)
-	return fst, pos, nil
+	bytesRead := pos - loc.dictOffset
+
+	// The norm column is decoded once per field rather than per term, which is
+	// the point of it living here: a term lookup then costs a single byte load.
+	norms := normsAbsent
+	if loc.normsLen > 0 {
+		normBytes, err := fr.process(mem[loc.normsOffset : loc.normsOffset+loc.normsLen])
+		if err != nil {
+			return nil, nil, 0, fmt.Errorf("error processing norms bytes: %v", err)
+		}
+		norms, err = decodeNormsColumn(normBytes, loc.numDocs)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		bytesRead += loc.normsLen
+	}
+
+	sc.insertLOCKED(fieldID, fst, norms)
+	return fst, norms, bytesRead, nil
 }
 
-// insertLOCKED inserts the vellum FST into the cache for the specified fieldID.
-func (sc *invertedIndexCache) insertLOCKED(fieldID uint16, fst *vellum.FST) {
+// insertLOCKED inserts the vellum FST and norm column into the cache for the specified fieldID.
+func (sc *invertedIndexCache) insertLOCKED(fieldID uint16, fst *vellum.FST, norms *normsColumn) {
 	_, ok := sc.cache[fieldID]
 	if !ok {
 		sc.cache[fieldID] = &invertedCacheEntry{
-			fst: fst,
+			fst:   fst,
+			norms: norms,
 		}
 	}
 }
 
-// invertedCacheEntry is the vellum FST and is the value stored in the invertedIndexCache cache, for a given fieldID.
+// invertedCacheEntry is the per-field inverted index state stored in the
+// invertedIndexCache: the vellum FST and the field-norm column.
 type invertedCacheEntry struct {
-	fst *vellum.FST
+	fst   *vellum.FST
+	norms *normsColumn
 }
 
-func (ce *invertedCacheEntry) load() (*vellum.FST, uint64, error) {
-	return ce.fst, 0, nil
+func (ce *invertedCacheEntry) load() (*vellum.FST, *normsColumn, uint64, error) {
+	return ce.fst, ce.norms, 0, nil
 }

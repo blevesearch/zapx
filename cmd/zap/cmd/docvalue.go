@@ -24,7 +24,7 @@ import (
 	"strconv"
 
 	index "github.com/blevesearch/bleve_index_api"
-	zap "github.com/blevesearch/zapx/v17"
+	zap "github.com/blevesearch/zapx/v18"
 	"github.com/golang/snappy"
 	"github.com/spf13/cobra"
 )

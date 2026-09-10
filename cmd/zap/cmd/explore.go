@@ -17,11 +17,9 @@ package cmd
 import (
 	"encoding/binary"
 	"fmt"
-	"math"
 
-	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/blevesearch/vellum"
-	zap "github.com/blevesearch/zapx/v17"
+	zap "github.com/blevesearch/zapx/v18"
 	"github.com/spf13/cobra"
 )
 
@@ -63,58 +61,29 @@ var exploreCmd = &cobra.Command{
 				if exists {
 					fmt.Printf("FST val is %d (%x)\n", postingsAddr, postingsAddr)
 
-					if postingsAddr&zap.FSTValEncodingMask == zap.FSTValEncoding1Hit {
-						docNum, normBits := zap.FSTValDecode1Hit(postingsAddr)
-						norm := math.Float32frombits(uint32(normBits))
-						fmt.Printf("Posting List is 1-hit encoded, docNum: %d, norm: %f\n",
-							docNum, norm)
-						return nil
-					}
-
-					if postingsAddr&zap.FSTValEncodingMask != zap.FSTValEncodingGeneral {
-						return fmt.Errorf("unknown fst val encoding")
-					}
-
-					var n uint64
-					freqAddr, read := binary.Uvarint(data[postingsAddr : postingsAddr+binary.MaxVarintLen64])
-					n += uint64(read)
-
-					var locAddr uint64
-					locAddr, read = binary.Uvarint(data[postingsAddr+n : postingsAddr+n+binary.MaxVarintLen64])
-					n += uint64(read)
-
-					var postingListLen uint64
-					postingListLen, read = binary.Uvarint(data[postingsAddr+n : postingsAddr+n+binary.MaxVarintLen64])
-					n += uint64(read)
-
-					fmt.Printf("Posting List Length: %d\n", postingListLen)
-					bitmap := roaring.New()
-					_, err = bitmap.FromBuffer(data[postingsAddr+n : postingsAddr+n+postingListLen])
+					info, err := zap.DescribeTermPostings(data, postingsAddr)
 					if err != nil {
 						return err
 					}
-					fmt.Printf("Posting List: %v\n", bitmap)
-
-					fmt.Printf("Freq details at: %d (%x)\n", freqAddr, freqAddr)
-					numChunks, r2 := binary.Uvarint(data[freqAddr : freqAddr+binary.MaxVarintLen64])
-					n = uint64(r2)
-
-					var freqOffsets []uint64
-					for j := uint64(0); j < numChunks; j++ {
-						chunkLen, r3 := binary.Uvarint(data[freqAddr+n : freqAddr+n+binary.MaxVarintLen64])
-						n += uint64(r3)
-						freqOffsets = append(freqOffsets, chunkLen)
-					}
-					running := freqAddr + n
-					for k, offset := range freqOffsets {
-						fmt.Printf("freq chunk: %d, len %d, start at %d (%x) end %d (%x)\n", k, offset, running, running, running+offset, running+offset)
-						running += offset
+					if info.OneHit {
+						fmt.Printf("Posting List is 1-hit encoded, docNum: %d\n", info.DocNum)
+						return nil
 					}
 
-					if locAddr != termNotEncoded {
-						fmt.Printf("Loc details at: %d (%x)\n", locAddr, locAddr)
+					fmt.Printf("docFreq: %d hasFreqs: %v hasLocs: %v\n",
+						info.DocFreq, info.HasFreqs, info.HasLocs)
+					fmt.Printf("payload: %d bytes at %d (%x), %d full blocks + %d tail docs\n",
+						info.PayloadLen, info.PayloadStart, info.PayloadStart,
+						info.NumBlocks, info.TailLen)
+					fmt.Printf("skip: %d bytes at %d (%x)\n",
+						info.SkipLen, info.SkipStart, info.SkipStart)
+
+					if info.LocsLen > 0 {
+						locAddr := info.LocsStart
+						fmt.Printf("Loc details at: %d (%x), %d bytes, chunk size %d\n",
+							locAddr, locAddr, info.LocsLen, info.LocChunkSize)
 						numLChunks, r4 := binary.Uvarint(data[locAddr : locAddr+binary.MaxVarintLen64])
-						n = uint64(r4)
+						n := uint64(r4)
 						fmt.Printf("there are %d loc chunks\n", numLChunks)
 
 						var locOffsets []uint64

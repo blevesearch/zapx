@@ -465,16 +465,25 @@ func (sb *SegmentBase) dictionary(field string) (rv *Dictionary, err error) {
 		}
 		// skip the doc value offsets to get to the dictionary portion
 		for i := 0; i < 2; i++ {
-			_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+			_, n := binary.Uvarint(memAt(sb.mem, pos, binary.MaxVarintLen64))
 			pos += uint64(n)
 		}
-		dictLoc, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
+		var loc dictLocation
+		loc.numDocs = sb.numDocs
+		var n int
+		loc.dictOffset, n = binary.Uvarint(memAt(sb.mem, pos, binary.MaxVarintLen64))
 		pos += uint64(n)
-		fst, bytesRead, err := sb.invIndexCache.loadOrCreate(rv.fieldID, sb.mem[dictLoc:], sb.fileReader)
+		loc.normsOffset, n = binary.Uvarint(memAt(sb.mem, pos, binary.MaxVarintLen64))
+		pos += uint64(n)
+		loc.normsLen, _ = binary.Uvarint(memAt(sb.mem, pos, binary.MaxVarintLen64))
+
+		fst, norms, bytesRead, err := sb.invIndexCache.loadOrCreate(
+			rv.fieldID, sb.mem, loc, sb.fileReader)
 		if err != nil {
 			return nil, fmt.Errorf("dictionary for field %s err: %v", field, err)
 		}
 		rv.fst = fst
+		rv.norms = norms
 		rv.fstReader, err = rv.fst.Reader()
 		if err != nil {
 			return nil, fmt.Errorf("dictionary for field %s, vellum reader err: %v", field, err)

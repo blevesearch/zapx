@@ -169,11 +169,11 @@ func (p *PostingsList) docBitmap() (*roaring.Bitmap, error) {
 		return nil, err
 	}
 	docNums := make([]uint32, 0, p.footer.docFreq)
-	for !c.Exhausted() {
+	for !c.isExhausted() {
 		if err := c.loadBlock(); err != nil {
 			return nil, err
 		}
-		docNums = append(docNums, c.Docs()[:c.NumDocs()]...)
+		docNums = append(docNums, c.docs()[:c.numDocs()]...)
 		c.nextBlock()
 	}
 	bm := roaring.New()
@@ -248,7 +248,7 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 
 	if p.is1Hit {
 		rv.is1Hit = true
-		rv.cursor.MarkExhausted()
+		rv.cursor.markExhausted()
 		rv.docNum1Hit = p.docNum1Hit
 		if rv.exceptItr != nil && p.except.Contains(uint32(rv.docNum1Hit)) {
 			rv.docNum1Hit = DocNum1HitFinished
@@ -257,7 +257,7 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 	}
 
 	if p.footer.docFreq == 0 {
-		rv.cursor.MarkExhausted()
+		rv.cursor.markExhausted()
 		return rv, nil
 	}
 
@@ -445,14 +445,14 @@ func (i *PostingsIterator) Size() int {
 // cumulative and monotonic between resets.
 func (i *PostingsIterator) ResetBytesRead(val uint64) {
 	i.bytesRead = val
-	i.cursor.ResetBytesRead()
+	i.cursor.bytesRead = 0
 	if i.locReader != nil {
 		i.locReader.bytesRead = 0
 	}
 }
 
 func (i *PostingsIterator) BytesRead() uint64 {
-	rv := i.bytesRead + i.cursor.BytesRead()
+	rv := i.bytesRead + i.cursor.bytesRead
 	if i.locReader != nil {
 		rv += i.locReader.getBytesRead()
 	}
@@ -482,25 +482,25 @@ func (i *PostingsIterator) positionAt(lo uint32) (bool, error) {
 	if i.positioned {
 		// Already there. Happens when a caller advances to a doc it has just
 		// been handed.
-		if i.cur < c.NumDocs() && c.DocAt(i.cur) >= lo {
+		if i.cur < c.numDocs() && c.docAt(i.cur) >= lo {
 			return true, nil
 		}
 		// The overwhelmingly common case: the answer is the very next slot.
 		i.cur++
-		if i.cur < c.NumDocs() && c.DocAt(i.cur) >= lo {
+		if i.cur < c.numDocs() && c.docAt(i.cur) >= lo {
 			return true, nil
 		}
 		// Still inside this block, but further along.
-		if i.cur < c.NumDocs() && c.LastDoc() >= lo {
-			i.cur = searchBlock(c.Docs(), lo)
-			return i.cur < c.NumDocs(), nil
+		if i.cur < c.numDocs() && c.lastDoc() >= lo {
+			i.cur = searchBlock(c.docs(), lo)
+			return i.cur < c.numDocs(), nil
 		}
 	}
 
 	// Walk the skip list to the block that could hold lo, then decode just
 	// that one block.
 	c.seekBlock(lo)
-	if c.Exhausted() {
+	if c.isExhausted() {
 		i.positioned = false
 		return false, nil
 	}
@@ -508,8 +508,8 @@ func (i *PostingsIterator) positionAt(lo uint32) (bool, error) {
 		return false, err
 	}
 	i.positioned = true
-	i.cur = searchBlock(c.Docs(), lo)
-	return i.cur < c.NumDocs(), nil
+	i.cur = searchBlock(c.docs(), lo)
+	return i.cur < c.numDocs(), nil
 }
 
 // advanceOne steps to the next posting without skipping, which is what the
@@ -519,12 +519,12 @@ func (i *PostingsIterator) advanceOne() (bool, error) {
 	c := &i.cursor
 	if i.positioned {
 		i.cur++
-		if i.cur < c.NumDocs() {
+		if i.cur < c.numDocs() {
 			return true, nil
 		}
 		c.nextBlock()
 	}
-	if c.Exhausted() {
+	if c.isExhausted() {
 		i.positioned = false
 		return false, nil
 	}
@@ -533,7 +533,7 @@ func (i *PostingsIterator) advanceOne() (bool, error) {
 	}
 	i.positioned = true
 	i.cur = 0
-	return i.cur < c.NumDocs(), nil
+	return i.cur < c.numDocs(), nil
 }
 
 // stepFast advances one posting inside the block that is already decoded. It
@@ -545,11 +545,11 @@ func (i *PostingsIterator) stepFast() (uint32, bool) {
 		return 0, false
 	}
 	k := i.cur + 1
-	if k >= i.cursor.NumDocs() {
+	if k >= i.cursor.numDocs() {
 		return 0, false
 	}
 	i.cur = k
-	d := i.cursor.DocAt(k)
+	d := i.cursor.docAt(k)
 	i.nextAllowed = d + 1
 	return d, true
 }
@@ -604,7 +604,7 @@ func (i *PostingsIterator) nextDocNumAtOrAfter(atOrAfter uint64) (uint64, bool, 
 		if err != nil || !ok {
 			return 0, false, err
 		}
-		docNum := i.cursor.DocAt(i.cur)
+		docNum := i.cursor.docAt(i.cur)
 		if docNum == docNumTerminated {
 			return 0, false, nil
 		}
@@ -634,7 +634,7 @@ func (i *PostingsIterator) stepWithLocs(lo uint32) (bool, error) {
 		if err != nil || !ok {
 			return false, err
 		}
-		docNum := i.cursor.DocAt(i.cur)
+		docNum := i.cursor.docAt(i.cur)
 		if docNum >= lo {
 			return true, nil
 		}
@@ -649,8 +649,8 @@ func (i *PostingsIterator) currFreq(docNum uint32) uint64 {
 	if !i.includeFreqNorm || !i.positioned {
 		return 1
 	}
-	if i.cur < i.cursor.NumDocs() && i.cursor.DocAt(i.cur) == docNum {
-		return uint64(i.cursor.FreqAt(i.cur))
+	if i.cur < i.cursor.numDocs() && i.cursor.docAt(i.cur) == docNum {
+		return uint64(i.cursor.freqAt(i.cur))
 	}
 	return 1
 }
@@ -833,7 +833,7 @@ func (i *PostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.Posting, err
 		if d, ok := i.stepFast(); ok {
 			rv := &i.next
 			rv.docNum = uint64(d)
-			rv.freq = uint64(i.cursor.FreqAt(i.cur))
+			rv.freq = uint64(i.cursor.freqAt(i.cur))
 			rv.normID = i.normIDOf(d)
 			rv.locs = nil
 			return rv, nil

@@ -64,10 +64,10 @@ type postingsSerializer struct {
 	payloadStart uint64
 	payloadEnd   uint64
 
-	skipBuf []byte
-	packBuf []byte
-	tailBuf []byte
-	footerBuf  []byte
+	skipBuf   []byte
+	packBuf   []byte
+	tailBuf   []byte
+	footerBuf []byte
 }
 
 func (s *postingsSerializer) StartTerm(hasFreqs, hasLocs bool, normIDs []uint8) {
@@ -94,14 +94,15 @@ func (s *postingsSerializer) AddDoc(docNum, freq uint32) error {
 	return nil
 }
 
-// blockBound returns the pair that bounds the BM25 contribution of every
-// document in the staged block: the shortest field length and the highest term
+// blockBound returns the pair that bounds the BM25 contribution of the first
+// n staged documents: the shortest field length and the highest term
 // frequency.  See the note in postings_format.go on why the two need not come
-// from the same document.
-func (s *postingsSerializer) blockBound() (minNormID, maxTF uint8) {
+// from the same document. Called with postingsBlockLen for a full block and
+// with s.n for the tail.
+func (s *postingsSerializer) blockBound(n int) (minNormID, maxTF uint8) {
 	minNormID = 0xFF
 	var mtf uint32
-	for i := 0; i < postingsBlockLen; i++ {
+	for i := 0; i < n; i++ {
 		var id uint8
 		if int(s.docs[i]) < len(s.normIDs) {
 			id = s.normIDs[s.docs[i]]
@@ -155,7 +156,7 @@ func (s *postingsSerializer) flushBlock() error {
 		tfNumBits:   tfNumBits,
 	}
 	if s.hasFreqs {
-		e.minNormID, e.maxTF = s.blockBound()
+		e.minNormID, e.maxTF = s.blockBound(postingsBlockLen)
 	}
 	var entry [skipEntryLenWithFreqs]byte
 	s.skipBuf = append(s.skipBuf, entry[:e.encode(entry[:], s.hasFreqs)]...)
@@ -194,8 +195,11 @@ func (s *postingsSerializer) OneHit() (uint64, bool) {
 func (s *postingsSerializer) FinishPayload() error {
 	tailOffset := uint64(s.w.Count()) - s.payloadStart
 
-	var tailLastDoc uint32
 	if s.n > 0 {
+		if tailOffset > math.MaxUint32 {
+			return fmt.Errorf("postings payload for a single term exceeds 4GiB")
+		}
+
 		buf := s.tailBuf[:0]
 		// Plain deltas here, not delta-minus-one: the tail is decoded by the
 		// uvarint reader, which has no bit width to save.
@@ -210,37 +214,28 @@ func (s *postingsSerializer) FinishPayload() error {
 			}
 		}
 		s.tailBuf = buf
-		tailLastDoc = prev
 
 		processed := s.w.process(buf)
 		if _, err := s.w.Write(processed); err != nil {
 			return err
 		}
-	}
 
-	// The skip list records where the tail begins, which also gives the last
-	// full block its length. Only meaningful once there is at least one full
-	// block -- with none, the tail starts at the payload itself.
-	if len(s.skipBuf) > 0 {
-		if tailOffset > math.MaxUint32 {
-			return fmt.Errorf("postings payload for a single term exceeds 4GiB")
+		// The tail is a skipEntry in every sense that matters -- lastDoc is
+		// what lets a seek past a term's entire range conclude "not present"
+		// from skip metadata alone instead of always decoding the tail, and
+		// blockOffset is where its bytes start, exactly like a full block.
+		// This is the common case: most terms in a real dictionary never
+		// fill even one 128-document block, so they are nothing but a tail,
+		// and this is the only bound they get.
+		e := skipEntry{
+			lastDoc:     prev,
+			blockOffset: uint32(tailOffset),
 		}
-		var off [skipTailOffsetLen]byte
-		binary.LittleEndian.PutUint32(off[:], uint32(tailOffset))
-		s.skipBuf = append(s.skipBuf, off[:]...)
-	}
-
-	// The tail's own last doc number lets a seek past a term's entire range --
-	// full blocks and tail alike -- conclude "not present" from skip metadata,
-	// the same way it already can for a target past a full block. Without
-	// this, that seek would have to decode the tail's uvarint stream just to
-	// discover it doesn't contain the target. This is the common case: most
-	// terms in a real dictionary never fill even one 128-document block, so
-	// they are nothing but a tail, and this is the only bound they get.
-	if s.n > 0 {
-		var last [skipTailLastDocLen]byte
-		binary.LittleEndian.PutUint32(last[:], tailLastDoc)
-		s.skipBuf = append(s.skipBuf, last[:]...)
+		if s.hasFreqs {
+			e.minNormID, e.maxTF = s.blockBound(s.n)
+		}
+		var entry [tailEntryLenWithFreqs]byte
+		s.skipBuf = append(s.skipBuf, entry[:e.encodeTail(entry[:], s.hasFreqs)]...)
 	}
 
 	s.payloadEnd = uint64(s.w.Count())

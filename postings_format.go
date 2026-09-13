@@ -58,7 +58,7 @@ const (
 // can exceed is what makes the in-block search branchless.
 const docNumTerminated = uint32(math.MaxUint32)
 
-// Skip entry layout.  Each entry describes one full block:
+// Skip entry layout.  Each full block gets one entry:
 //
 //	u32 lastDocInBlock
 //	u32 blockByteOffset      (from the start of the payload)
@@ -67,19 +67,34 @@ const docNumTerminated = uint32(math.MaxUint32)
 //	u8  minNormID             > only when the term records frequencies
 //	u8  maxTF                /
 //
-// followed, after the last entry and only once there is at least one full
-// block, by a u32 giving the byte offset of the uvarint tail -- or, when
-// there is no tail, the end of the last full block's byte range.
-//
 // followed, whenever the term has a tail (fewer than 128 trailing documents
-// that didn't fill a block), by a u32 giving the tail's own last, largest doc
-// number. Without this, a seek past a term's entire range has no way to tell
-// "the tail might still hold the target" apart from "the tail's own range
-// ends before the target", and has to decode the tail's uvarint stream just
-// to find out which. With it, that seek is a skip-metadata comparison, the
-// same as seeking past a full block. This matters more than it might look:
-// most terms in a real dictionary never fill even one 128-document block, so
-// they are nothing but a tail, and this is the only bound they get.
+// that didn't fill a block -- the common case, since most terms in a real
+// dictionary never fill even one block), by one more entry describing it:
+//
+//	u32 lastDocInTail
+//	u32 tailByteOffset       (from the start of the payload)
+//	u8  minNormID            \  only when the term records frequencies;
+//	u8  maxTF                /  no docNumBits/tfNumBits -- the tail is a
+//	                            plain uvarint run, never bit-packed, so
+//	                            there is no bit width to record
+//
+// The tail's entry is a skipEntry in every sense that matters -- same
+// fields, same meaning, decoded into the same struct a reader already uses
+// for full blocks, so nothing consuming it (seekBlock's bound check, and
+// later a block-max pruner) needs a separate code path for "am I looking at
+// a block or the tail". It is two bytes shorter on the wire only because
+// docNumBits/tfNumBits can never mean anything for it, not because of some
+// second condition layered on top of hasFreqs.
+//
+// Without lastDocInTail, a seek past a term's entire range would have no way
+// to tell "the tail might still hold the target" apart from "the tail's own
+// range ends before the target", and would have to decode the tail's uvarint
+// stream just to find out which. With it, that seek is a skip-metadata
+// comparison, the same as seeking past a full block.
+//
+// A term whose docFreq is an exact multiple of 128 has no tail at all, and
+// so no trailing entry either; the last full block's byte range in that case
+// is bounded by the term footer's own payloadLen instead.
 //
 // Storing the block's byte offset rather than deriving it from the bit widths
 // costs four bytes per 128 documents and buys two things: each block can be run
@@ -90,8 +105,8 @@ const docNumTerminated = uint32(math.MaxUint32)
 const (
 	skipEntryLenNoFreqs   = 9
 	skipEntryLenWithFreqs = 12
-	skipTailOffsetLen     = 4
-	skipTailLastDocLen    = 4
+	tailEntryLenNoFreqs   = 8
+	tailEntryLenWithFreqs = 10
 )
 
 func skipEntryLen(hasFreqs bool) int {
@@ -101,15 +116,19 @@ func skipEntryLen(hasFreqs bool) int {
 	return skipEntryLenNoFreqs
 }
 
+func tailEntryLen(hasFreqs bool) int {
+	if hasFreqs {
+		return tailEntryLenWithFreqs
+	}
+	return tailEntryLenNoFreqs
+}
+
 // skipDataLen is the size of the whole skip region for a term, which is empty
 // only for a term with neither a full block nor a tail.
 func skipDataLen(numFullBlocks, tailLen int, hasFreqs bool) int {
 	n := numFullBlocks * skipEntryLen(hasFreqs)
-	if numFullBlocks > 0 {
-		n += skipTailOffsetLen
-	}
 	if tailLen > 0 {
-		n += skipTailLastDocLen
+		n += tailEntryLen(hasFreqs)
 	}
 	return n
 }
@@ -149,14 +168,39 @@ func (e *skipEntry) decode(src []byte, hasFreqs bool) {
 	e.maxTF = src[11]
 }
 
+// encodeTail is encode without docNumBits/tfNumBits: the tail is never
+// bit-packed, so there is no bit width to record for it.
+func (e *skipEntry) encodeTail(dst []byte, hasFreqs bool) int {
+	binary.LittleEndian.PutUint32(dst[0:4], e.lastDoc)
+	binary.LittleEndian.PutUint32(dst[4:8], e.blockOffset)
+	if !hasFreqs {
+		return tailEntryLenNoFreqs
+	}
+	dst[8] = e.minNormID
+	dst[9] = e.maxTF
+	return tailEntryLenWithFreqs
+}
+
+func (e *skipEntry) decodeTail(src []byte, hasFreqs bool) {
+	e.lastDoc = binary.LittleEndian.Uint32(src[0:4])
+	e.blockOffset = binary.LittleEndian.Uint32(src[4:8])
+	e.docNumBits, e.tfNumBits = 0, 0
+	if !hasFreqs {
+		e.minNormID, e.maxTF = 0, 0
+		return
+	}
+	e.minNormID = src[8]
+	e.maxTF = src[9]
+}
+
 // The block-max pair, minNormID and maxTF, bounds the BM25 contribution of
-// every document in the block: the score rises with term frequency and falls
-// with field length, so the shortest field paired with the highest frequency
-// dominates.  The two need not come from the same document, which makes the
-// bound looser than tantivy's joint argmax but keeps it a bound -- and a bound
-// is all a block-max pruner requires.  Nothing consumes these yet; they are
-// written now so that turning on block-max WAND later is not another format
-// break.
+// every document in the block (or tail): the score rises with term frequency
+// and falls with field length, so the shortest field paired with the highest
+// frequency dominates.  The two need not come from the same document, which
+// makes the bound looser than tantivy's joint argmax but keeps it a bound --
+// and a bound is all a block-max pruner requires.  Nothing consumes these
+// yet; they are written now so that turning on block-max WAND later is not
+// another format break.
 //
 // encodeBlockMaxTF caps a term frequency into a byte.  A saturated value
 // decodes back as "unbounded", which over-estimates the block maximum, and an

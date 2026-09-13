@@ -639,6 +639,91 @@ func TestTailSeekPastRangeSkipsDecode(t *testing.T) {
 	}
 }
 
+// TestTailBlockMaxBound checks that the tail gets a real minNormID/maxTF
+// bound, computed over just its own documents, the same way a full block
+// does -- not the zero-valued placeholder the tail used to report before it
+// had a real skipEntry of its own. This covers both a term that is nothing
+// but a tail (no full blocks at all) and a term with full blocks followed by
+// a tail, checking the full block's bound alongside the tail's as a
+// regression check on blockBound's now-parameterized document count.
+func TestTailBlockMaxBound(t *testing.T) {
+	const numDocs = 300
+	sb, model := buildBlockTestSegment(t, numDocs, false)
+
+	cases := []struct {
+		name string
+		term string
+	}{
+		{"allTail", "mod50"},      // docFreq ~6: numFullBlocks == 0, nothing but a tail
+		{"blocksPlusTail", "all"}, // docFreq == numDocs: full blocks, then a tail
+	}
+
+	boundOf := func(postings []expPosting) (minNormID uint8, maxTF uint8) {
+		minNormID = 0xFF
+		var maxFreq uint64
+		for _, p := range postings {
+			if p.normID < minNormID {
+				minNormID = p.normID
+			}
+			if p.freq > maxFreq {
+				maxFreq = p.freq
+			}
+		}
+		return minNormID, encodeBlockMaxTF(uint32(maxFreq))
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			postings := model.terms[tc.term]
+			numFull := len(postings) / postingsBlockLen
+			tailLen := len(postings) % postingsBlockLen
+			if tailLen == 0 {
+				t.Fatalf("term %q: expected a tail, got an exact multiple of the block size", tc.term)
+			}
+
+			dict, err := sb.dictionary("body")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pl, err := dict.postingsList([]byte(tc.term), nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			itr := pl.Iterator(true, true, false, nil).(*PostingsIterator)
+
+			if numFull > 0 {
+				wantMinNormID, wantMaxTF := boundOf(postings[:postingsBlockLen])
+				if _, err := itr.Advance(postings[0].docNum); err != nil {
+					t.Fatal(err)
+				}
+				if itr.cursor.inTail {
+					t.Fatalf("term %q: expected the first doc to land in a full block, not the tail", tc.term)
+				}
+				if got := itr.cursor.entry.minNormID; got != wantMinNormID {
+					t.Fatalf("term %q: block 0 minNormID = %d, want %d", tc.term, got, wantMinNormID)
+				}
+				if got := itr.cursor.entry.maxTF; got != wantMaxTF {
+					t.Fatalf("term %q: block 0 maxTF = %d, want %d", tc.term, got, wantMaxTF)
+				}
+			}
+
+			wantMinNormID, wantMaxTF := boundOf(postings[len(postings)-tailLen:])
+			if _, err := itr.Advance(postings[len(postings)-tailLen].docNum); err != nil {
+				t.Fatal(err)
+			}
+			if !itr.cursor.inTail {
+				t.Fatalf("term %q: expected the cursor to be positioned in the tail", tc.term)
+			}
+			if got := itr.cursor.entry.minNormID; got != wantMinNormID {
+				t.Fatalf("term %q: tail minNormID = %d, want %d", tc.term, got, wantMinNormID)
+			}
+			if got := itr.cursor.entry.maxTF; got != wantMaxTF {
+				t.Fatalf("term %q: tail maxTF = %d, want %d", tc.term, got, wantMaxTF)
+			}
+		})
+	}
+}
+
 // TestSearchBlock checks the branchless in-block lower bound against a linear
 // scan, including the padded region past the end of a partial block.
 func TestSearchBlock(t *testing.T) {

@@ -43,11 +43,13 @@ type blockCursor struct {
 	hasFreqs      bool
 	wantFreqs     bool
 
-	// tailLastDoc is the tail's own last, largest doc number, read once from
-	// the skip trailer. It gives seekBlock a real bound to compare the tail
-	// against instead of always having to decode it. Meaningless when
-	// tailLen == 0.
-	tailLastDoc uint32
+	// tailEntry is the tail's own skipEntry, read once from the skip region.
+	// It is exactly what selectBlock installs as c.entry while positioned on
+	// the tail, giving seekBlock a real bound to compare against instead of
+	// always having to decode the tail to find out. Meaningless when
+	// tailLen == 0 (docNumBits/tfNumBits are always meaningless for it, tail
+	// or not -- see the note in postings_format.go).
+	tailEntry skipEntry
 
 	// Position in the skip list.  blockIdx counts full blocks; reaching
 	// numFullBlocks means the uvarint tail, and going past it means the list is
@@ -113,7 +115,7 @@ func (c *blockCursor) init(sb *SegmentBase, h *termFooter,
 	c.entryLen = skipEntryLen(c.hasFreqs)
 
 	c.skip = nil
-	c.tailLastDoc = docNumTerminated
+	c.tailEntry = skipEntry{}
 	if h.skipLen > 0 {
 		raw, err := sb.fileReader.process(sb.mem[skipStart : skipStart+h.skipLen])
 		if err != nil {
@@ -127,11 +129,7 @@ func (c *blockCursor) init(sb *SegmentBase, h *termFooter,
 		c.skip = raw
 		c.bytesRead += h.skipLen
 		if c.tailLen > 0 {
-			off := c.numFullBlocks * c.entryLen
-			if c.numFullBlocks > 0 {
-				off += skipTailOffsetLen
-			}
-			c.tailLastDoc = binary.LittleEndian.Uint32(c.skip[off:])
+			c.tailEntry.decodeTail(c.skip[c.numFullBlocks*c.entryLen:], c.hasFreqs)
 		}
 	} else if c.numFullBlocks > 0 || c.tailLen > 0 {
 		return fmt.Errorf("corrupt term: %d full blocks, %d tail docs, but no skip data",
@@ -165,10 +163,10 @@ func (c *blockCursor) selectBlock() {
 		c.inTail = false
 		c.exhausted = false
 	case c.blockIdx == c.numFullBlocks && c.tailLen > 0:
-		// tailLastDoc came from the skip trailer, so seekBlock's ordinary bound
+		// tailEntry came from the skip region, so seekBlock's ordinary bound
 		// check applies to the tail exactly like a full block: a target past
 		// the tail's own range exhausts the cursor without decoding it.
-		c.entry = skipEntry{lastDoc: c.tailLastDoc}
+		c.entry = c.tailEntry
 		c.inTail = true
 		c.exhausted = false
 	default:
@@ -203,11 +201,15 @@ func (c *blockCursor) seekBlock(target uint32) {
 }
 
 // blockOffsetAt returns the payload-relative offset of block i.  Index
-// numFullBlocks is the tail, whose offset is the trailing value the writer
-// appended after the last entry; that also gives the last full block its length.
+// numFullBlocks is the tail's offset, which also gives the last full block
+// its length; when there is no tail at all, the payload's own length plays
+// that role instead, since nothing follows the last full block to record one.
 func (c *blockCursor) blockOffsetAt(i int) uint32 {
 	if i >= c.numFullBlocks {
-		return binary.LittleEndian.Uint32(c.skip[c.numFullBlocks*c.entryLen:])
+		if c.tailLen == 0 {
+			return uint32(c.payloadLen)
+		}
+		return c.tailEntry.blockOffset
 	}
 	return binary.LittleEndian.Uint32(c.skip[i*c.entryLen+4:])
 }
@@ -260,13 +262,10 @@ func (c *blockCursor) loadBlock() error {
 // They are plain uvarints: there is no bit width to save on a run this short,
 // and it keeps the reader on the existing uvarint decoder.
 func (c *blockCursor) loadTail() error {
-	var tailOffset uint64
-	if c.numFullBlocks > 0 {
-		// With no full blocks the tail starts at the payload itself; the skip
-		// trailer in that case holds only tailLastDoc, not a tail offset.
-		tailOffset = uint64(c.blockOffsetAt(c.numFullBlocks))
-	}
-	start := c.payloadStart + tailOffset
+	// tailEntry.blockOffset is 0 when there are no full blocks -- the tail
+	// starts at the payload itself in that case, which is exactly what a
+	// zero offset already means.
+	start := c.payloadStart + uint64(c.tailEntry.blockOffset)
 	end := c.payloadStart + c.payloadLen
 	if end < start || end > uint64(len(c.sb.mem)) {
 		return fmt.Errorf("corrupt postings tail range [%d,%d)", start, end)

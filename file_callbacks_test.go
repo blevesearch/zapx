@@ -385,5 +385,6 @@ func TestFileCallbacks(t *testing.T) {
 	TestNormsColumnConstantEncoding(t)
 	TestBlockPostingsMerge(t)
 	TestTailSeekPastRangeSkipsDecode(t)
+	TestTailBlockMaxBound(t)
 	TestOneHitEncoding(t)
 }

@@ -303,6 +303,49 @@ func (c *blockCursor) loadTail() error {
 	return nil
 }
 
+// -------------------------------------------------------------- read surface
+//
+// Everything below is what a caller reads after seekBlock/nextBlock/loadBlock
+// has done its work -- the result of the last decode, not a step in doing it.
+// Trivial enough that the compiler inlines all of them (checked directly with
+// -gcflags=-m: every one of these gets "inlining call to" at its call sites,
+// not just "can inline" in isolation), so this costs nothing at runtime; it
+// exists to give PostingsIterator a named boundary to read through instead of
+// reaching into the cursor's own bookkeeping fields directly.
+
+// NumDocs is how many entries of the currently loaded block are real postings
+// rather than terminator padding.
+func (c *blockCursor) NumDocs() int { return c.nDocs }
+
+// DocAt returns the doc number at index i of the currently loaded block.
+func (c *blockCursor) DocAt(i int) uint32 { return c.buf.docs[i] }
+
+// FreqAt returns the term frequency at index i of the currently loaded block.
+func (c *blockCursor) FreqAt(i int) uint32 { return c.buf.freqs[i] }
+
+// LastDoc is the highest doc number in the currently loaded block.
+func (c *blockCursor) LastDoc() uint32 { return c.blockLastDoc }
+
+// Exhausted reports whether the cursor has no more blocks to offer.
+func (c *blockCursor) Exhausted() bool { return c.exhausted }
+
+// Docs returns the currently loaded block's whole doc-number array, for a
+// caller that needs to operate across it in bulk -- namely searchBlock --
+// rather than one entry at a time.
+func (c *blockCursor) Docs() *[postingsBlockLen]uint32 { return &c.buf.docs }
+
+// MarkExhausted forces the cursor into the exhausted state directly, for a
+// postings list that never has any blocks to begin with (a 1-hit term, or one
+// with no postings at all) and so never calls init.
+func (c *blockCursor) MarkExhausted() { c.exhausted = true }
+
+// BytesRead reports the bytes charged to this cursor's decodes so far.
+func (c *blockCursor) BytesRead() uint64 { return c.bytesRead }
+
+// ResetBytesRead zeroes the cursor's own byte count; the caller is
+// responsible for folding the prior value into its own running total first.
+func (c *blockCursor) ResetBytesRead() { c.bytesRead = 0 }
+
 // b2i is the branchless comparison helper the in-block search is built from;
 // the compiler turns it into a set-on-condition.
 func b2i(b bool) int {

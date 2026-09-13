@@ -100,12 +100,12 @@ var allTerminated = func() (a [postingsBlockLen]uint32) {
 	return
 }()
 
-// init points the cursor at a term.  The footer has already been decoded, which
-// is where the three region offsets come from.
-func (c *blockCursor) init(sb *SegmentBase, h *termFooter,
-	payloadStart, skipStart uint64, wantFreqs bool) error {
+// init points the cursor at a term.  The footer has already been decoded and
+// is self-describing at this point -- it is where the region offsets come
+// from, not a separate argument.
+func (c *blockCursor) init(sb *SegmentBase, h *termFooter, wantFreqs bool) error {
 	c.sb = sb
-	c.payloadStart = payloadStart
+	c.payloadStart = h.payloadStart
 	c.payloadLen = h.payloadLen
 	c.docFreq = h.docFreq
 	c.hasFreqs = h.hasFreqs()
@@ -117,7 +117,7 @@ func (c *blockCursor) init(sb *SegmentBase, h *termFooter,
 	c.skip = nil
 	c.tailEntry = skipEntry{}
 	if h.skipLen > 0 {
-		raw, err := sb.fileReader.process(sb.mem[skipStart : skipStart+h.skipLen])
+		raw, err := sb.fileReader.process(sb.mem[h.skipStart : h.skipStart+h.skipLen])
 		if err != nil {
 			return fmt.Errorf("error processing skip data: %v", err)
 		}

@@ -90,15 +90,14 @@ type PostingsList struct {
 	sb    *SegmentBase
 	norms *normsColumn
 
-	footer       termFooter
-	payloadStart uint64
-	locsStart    uint64
-	skipStart    uint64
+	// footer's own payloadStart/locsStart/skipStart are the absolute region
+	// offsets, resolved once by decode when this list was read.
+	footer termFooter
 
 	except *roaring.Bitmap
 
-	// when is1Hit, the whole list is the single docNum1Hit and none of the
-	// region offsets above are meaningful
+	// when is1Hit, the whole list is the single docNum1Hit and the footer
+	// above is not meaningful
 	is1Hit     bool
 	docNum1Hit uint64
 
@@ -165,7 +164,7 @@ func (p *PostingsList) docBitmap() (*roaring.Bitmap, error) {
 	}
 
 	var c blockCursor
-	if err := c.init(p.sb, &p.footer, p.payloadStart, p.skipStart, false); err != nil {
+	if err := c.init(p.sb, &p.footer, false); err != nil {
 		return nil, err
 	}
 	docNums := make([]uint32, 0, p.footer.docFreq)
@@ -269,13 +268,13 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 	}
 	rv.fastScan = rv.exceptItr == nil && !includeLocs
 
-	err := rv.cursor.init(p.sb, &p.footer, p.payloadStart, p.skipStart, rv.includeFreqNorm)
+	err := rv.cursor.init(p.sb, &p.footer, rv.includeFreqNorm)
 	if err != nil {
 		return rv, err
 	}
 
 	if rv.includeLocs && p.footer.hasLocs() {
-		rv.locReader = newChunkedIntDecoder(p.sb.mem, p.locsStart, rv.locReader, p.sb.fileReader)
+		rv.locReader = newChunkedIntDecoder(p.sb.mem, p.footer.locsStart, rv.locReader, p.sb.fileReader)
 		rv.hasLocs = true
 		rv.locChunk = -1
 	}
@@ -350,13 +349,9 @@ func (rv *PostingsList) read(postingsOffset uint64, d *Dictionary) error {
 		return nil
 	}
 
-	payloadStart, locsStart, skipStart, err := rv.footer.decode(d.sb.mem, postingsOffset)
-	if err != nil {
+	if err := rv.footer.decode(d.sb.mem, postingsOffset); err != nil {
 		return err
 	}
-	rv.payloadStart = payloadStart
-	rv.locsStart = locsStart
-	rv.skipStart = skipStart
 	// Only the footer has actually been read. The payload is charged block by
 	// block as the cursor decodes it, which is the point of the format: a query
 	// that skips most of a long postings list should not be billed for it.

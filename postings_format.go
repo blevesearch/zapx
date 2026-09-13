@@ -221,6 +221,14 @@ type termFooter struct {
 	locsLen    uint64
 	skipLen    uint64
 
+	// payloadStart, locsStart, and skipStart are the absolute offsets of the
+	// three regions the footer sits after, resolved once by decode from the
+	// footer's own position (its only input that isn't already a field here)
+	// and cached rather than recomputed by every caller that needs them.
+	payloadStart uint64
+	locsStart    uint64
+	skipStart    uint64
+
 	// locChunkSize is the chunking the location blob was written with, carried
 	// here rather than re-derived from the doc frequency the way earlier zap
 	// versions did.  A merge cannot know a term's post-deletion frequency until
@@ -249,22 +257,22 @@ func (h *termFooter) encode(dst []byte) int {
 	return n
 }
 
-// decode reads a footer from mem at offset, and returns the absolute offsets of
-// the three regions that precede it.
-func (h *termFooter) decode(mem []byte, offset uint64) (
-	payloadStart, locsStart, skipStart uint64, err error) {
+// decode reads a footer from mem at offset, and resolves the absolute offsets
+// of the three regions that precede it (payloadStart, locsStart, skipStart)
+// onto the footer itself, so it is fully self-describing from here on.
+func (h *termFooter) decode(mem []byte, offset uint64) error {
 	buf := memAt(mem, offset, maxTermFooterLen)
 
 	docFreq, n := binary.Uvarint(buf)
 	if n <= 0 {
-		return 0, 0, 0, fmt.Errorf("corrupt term footer: bad docFreq at offset %d", offset)
+		return fmt.Errorf("corrupt term footer: bad docFreq at offset %d", offset)
 	}
 	if docFreq > math.MaxUint32 {
-		return 0, 0, 0, fmt.Errorf("corrupt term footer: docFreq %d out of range", docFreq)
+		return fmt.Errorf("corrupt term footer: docFreq %d out of range", docFreq)
 	}
 	h.docFreq = uint32(docFreq)
 	if n >= len(buf) {
-		return 0, 0, 0, fmt.Errorf("corrupt term footer: truncated at offset %d", offset)
+		return fmt.Errorf("corrupt term footer: truncated at offset %d", offset)
 	}
 	h.flags = buf[n]
 	n++
@@ -272,36 +280,36 @@ func (h *termFooter) decode(mem []byte, offset uint64) (
 	var read int
 	h.payloadLen, read = binary.Uvarint(buf[n:])
 	if read <= 0 {
-		return 0, 0, 0, fmt.Errorf("corrupt term footer: bad payloadLen at offset %d", offset)
+		return fmt.Errorf("corrupt term footer: bad payloadLen at offset %d", offset)
 	}
 	n += read
 	h.locsLen, read = binary.Uvarint(buf[n:])
 	if read <= 0 {
-		return 0, 0, 0, fmt.Errorf("corrupt term footer: bad locsLen at offset %d", offset)
+		return fmt.Errorf("corrupt term footer: bad locsLen at offset %d", offset)
 	}
 	n += read
 	h.skipLen, read = binary.Uvarint(buf[n:])
 	if read <= 0 {
-		return 0, 0, 0, fmt.Errorf("corrupt term footer: bad skipLen at offset %d", offset)
+		return fmt.Errorf("corrupt term footer: bad skipLen at offset %d", offset)
 	}
 	n += read
 	h.locChunkSize = 0
 	if h.hasLocs() {
 		h.locChunkSize, read = binary.Uvarint(buf[n:])
 		if read <= 0 {
-			return 0, 0, 0, fmt.Errorf("corrupt term footer: bad locChunkSize at offset %d", offset)
+			return fmt.Errorf("corrupt term footer: bad locChunkSize at offset %d", offset)
 		}
 	}
 
 	total := h.payloadLen + h.locsLen + h.skipLen
 	if total > offset {
-		return 0, 0, 0, fmt.Errorf(
+		return fmt.Errorf(
 			"corrupt term footer at offset %d: regions total %d bytes", offset, total)
 	}
-	skipStart = offset - h.skipLen
-	locsStart = skipStart - h.locsLen
-	payloadStart = locsStart - h.payloadLen
-	return payloadStart, locsStart, skipStart, nil
+	h.skipStart = offset - h.skipLen
+	h.locsStart = h.skipStart - h.locsLen
+	h.payloadStart = h.locsStart - h.payloadLen
+	return nil
 }
 
 // memAt returns up to n bytes of mem starting at offset, clamped to the end of
@@ -430,8 +438,7 @@ func DescribeTermPostings(mem []byte, fstVal uint64) (*TermPostingsInfo, error) 
 		}, nil
 	}
 	var h termFooter
-	payloadStart, locsStart, skipStart, err := h.decode(mem, fstVal)
-	if err != nil {
+	if err := h.decode(mem, fstVal); err != nil {
 		return nil, err
 	}
 	return &TermPostingsInfo{
@@ -443,9 +450,9 @@ func DescribeTermPostings(mem []byte, fstVal uint64) (*TermPostingsInfo, error) 
 		PayloadLen:   h.payloadLen,
 		LocsLen:      h.locsLen,
 		SkipLen:      h.skipLen,
-		PayloadStart: payloadStart,
-		LocsStart:    locsStart,
-		SkipStart:    skipStart,
+		PayloadStart: h.payloadStart,
+		LocsStart:    h.locsStart,
+		SkipStart:    h.skipStart,
 		LocChunkSize: h.locChunkSize,
 	}, nil
 }

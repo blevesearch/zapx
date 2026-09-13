@@ -100,6 +100,16 @@ var allTerminated = func() (a [postingsBlockLen]uint32) {
 	return
 }()
 
+// -------------------------------------------------------------------------
+// block movement: deciding which block, if any, is current. init points the
+// cursor at a term; rewind, nextBlock and seekBlock walk the skip list from
+// there (selectBlock, the step they all land on, is in the helpers section
+// below -- nothing outside blockCursor calls it directly); isExhausted
+// reports when nothing is left to walk to. None of these decode a block's
+// payload -- that is loadBlock's job, once movement has settled on a block
+// for it to decode.
+// -------------------------------------------------------------------------
+
 // init points the cursor at a term.  The footer has already been decoded and
 // is self-describing at this point -- it is where the region offsets come
 // from, not a separate argument.
@@ -114,7 +124,6 @@ func (c *blockCursor) init(sb *SegmentBase, h *termFooter, wantFreqs bool) error
 	c.tailLen = int(h.docFreq) % postingsBlockLen
 	c.entryLen = skipEntryLen(c.hasFreqs)
 
-	c.skip = nil
 	c.tailEntry = skipEntry{}
 	if h.skipLen > 0 {
 		raw, err := sb.fileReader.process(sb.mem[h.skipStart : h.skipStart+h.skipLen])
@@ -154,27 +163,6 @@ func (c *blockCursor) rewind() {
 	c.selectBlock()
 }
 
-// selectBlock reads the skip entry for blockIdx, or switches to the tail, or
-// marks the cursor spent.
-func (c *blockCursor) selectBlock() {
-	switch {
-	case c.blockIdx < c.numFullBlocks:
-		c.entry.decode(c.skip[c.blockIdx*c.entryLen:], c.hasFreqs)
-		c.inTail = false
-		c.exhausted = false
-	case c.blockIdx == c.numFullBlocks && c.tailLen > 0:
-		// tailEntry came from the skip region, so seekBlock's ordinary bound
-		// check applies to the tail exactly like a full block: a target past
-		// the tail's own range exhausts the cursor without decoding it.
-		c.entry = c.tailEntry
-		c.inTail = true
-		c.exhausted = false
-	default:
-		c.inTail = false
-		c.exhausted = true
-	}
-}
-
 // nextBlock steps one block forward.
 func (c *blockCursor) nextBlock() {
 	if c.exhausted {
@@ -200,19 +188,30 @@ func (c *blockCursor) seekBlock(target uint32) {
 	}
 }
 
-// blockOffsetAt returns the payload-relative offset of block i.  Index
-// numFullBlocks is the tail's offset, which also gives the last full block
-// its length; when there is no tail at all, the payload's own length plays
-// that role instead, since nothing follows the last full block to record one.
-func (c *blockCursor) blockOffsetAt(i int) uint32 {
-	if i >= c.numFullBlocks {
-		if c.tailLen == 0 {
-			return uint32(c.payloadLen)
-		}
-		return c.tailEntry.blockOffset
-	}
-	return binary.LittleEndian.Uint32(c.skip[i*c.entryLen+4:])
-}
+// isExhausted reports whether the cursor has no more blocks to offer. Named
+// with the is- prefix rather than matching the exhausted field verbatim,
+// since Go doesn't allow a method and a field to share one identifier.
+// Confirmed inlined at its call sites (-gcflags=-m), same as the
+// block-reading accessors below.
+func (c *blockCursor) isExhausted() bool { return c.exhausted }
+
+// -------------------------------------------------------------------------
+// block reading: decoding the block movement settled on, and looking at what
+// that decode produced. loadBlock is the entry point PostingsIterator calls
+// (blockOffsetAt and loadTail, the internals it delegates to for a full
+// block and the tail respectively, are in the helpers section below);
+// numDocs, lastDoc, docs and freqs are read afterward by a caller such as
+// PostingsIterator; searchBlock queries the same in-block arrays loadBlock
+// filled in.
+//
+// numDocs, lastDoc, docs and freqs are trivial enough that the compiler
+// inlines all of them (checked directly with -gcflags=-m: every one of these
+// gets "inlining call to" at its call sites, not just "can inline" in
+// isolation), so this costs nothing at runtime; it exists to give
+// PostingsIterator a named boundary to read through instead of reaching into
+// the cursor's own bookkeeping fields directly. Unexported like blockCursor
+// itself -- this is a same-package boundary, not a public one.
+// -------------------------------------------------------------------------
 
 func (c *blockCursor) loadBlock() error {
 	if c.loaded {
@@ -256,6 +255,98 @@ func (c *blockCursor) loadBlock() error {
 	c.nDocs = postingsBlockLen
 	c.blockLastDoc = c.entry.lastDoc
 	return nil
+}
+
+// numDocs is how many entries of the currently loaded block are real postings
+// rather than terminator padding.
+func (c *blockCursor) numDocs() int { return c.nDocs }
+
+// lastDoc is the highest doc number in the currently loaded block.
+func (c *blockCursor) lastDoc() uint32 { return c.blockLastDoc }
+
+// docs returns the currently loaded block's whole doc-number array, for a
+// caller that needs to operate across it in bulk -- namely searchBlock --
+// rather than one entry at a time.
+func (c *blockCursor) docs() *[postingsBlockLen]uint32 { return &c.buf.docs }
+
+// freqs returns the currently loaded block's whole term-frequency array.
+func (c *blockCursor) freqs() *[postingsBlockLen]uint32 { return &c.buf.freqs }
+
+// searchBlock returns the index of the first entry in a decoded block that is
+// greater than or equal to target -- a lower bound.
+//
+// This is the 8-ary search of Schlegel, Gemulla and Lehner rather than a binary
+// search: 128 narrows to 16, then to 2, then a two-element scan, for sixteen
+// comparisons instead of seven.  All sixteen are branchless, and the seven
+// probes of each round are independent loads the processor can issue together,
+// so the extra comparisons cost less than the mispredictions they replace.
+//
+// It relies on the padding invariant: the block always holds 128 non-decreasing
+// entries ending in a value no legal target can exceed, so the result is always
+// in range.
+func searchBlock(arr *[postingsBlockLen]uint32, target uint32) int {
+	base, span := 0, postingsBlockLen
+	for {
+		step := span / 8
+		if step == 0 {
+			break
+		}
+		count := 0
+		for i := 1; i < 8; i++ {
+			count += b2i(arr[base+i*step-1] < target)
+		}
+		base += count * step
+		span = step
+	}
+	count := 0
+	for i := 0; i < span; i++ {
+		count += b2i(arr[base+i] < target)
+	}
+	return base + count
+}
+
+// -------------------------------------------------------------------------
+// helpers: called only by the block-movement and block-reading functions
+// above, never directly by anything outside blockCursor. selectBlock is the
+// step rewind and nextBlock both land on; blockOffsetAt and loadTail are
+// loadBlock's own internals for the two things it can decode -- a full
+// block, or the short uvarint tail; b2i is the branchless comparison
+// searchBlock is built from.
+// -------------------------------------------------------------------------
+
+// selectBlock reads the skip entry for blockIdx, or switches to the tail, or
+// marks the cursor spent.
+func (c *blockCursor) selectBlock() {
+	switch {
+	case c.blockIdx < c.numFullBlocks:
+		c.entry.decode(c.skip[c.blockIdx*c.entryLen:], c.hasFreqs)
+		c.inTail = false
+		c.exhausted = false
+	case c.blockIdx == c.numFullBlocks && c.tailLen > 0:
+		// tailEntry came from the skip region, so seekBlock's ordinary bound
+		// check applies to the tail exactly like a full block: a target past
+		// the tail's own range exhausts the cursor without decoding it.
+		c.entry = c.tailEntry
+		c.inTail = true
+		c.exhausted = false
+	default:
+		c.inTail = false
+		c.exhausted = true
+	}
+}
+
+// blockOffsetAt returns the payload-relative offset of block i.  Index
+// numFullBlocks is the tail's offset, which also gives the last full block
+// its length; when there is no tail at all, the payload's own length plays
+// that role instead, since nothing follows the last full block to record one.
+func (c *blockCursor) blockOffsetAt(i int) uint32 {
+	if i >= c.numFullBlocks {
+		if c.tailLen == 0 {
+			return uint32(c.payloadLen)
+		}
+		return c.tailEntry.blockOffset
+	}
+	return binary.LittleEndian.Uint32(c.skip[i*c.entryLen+4:])
 }
 
 // loadTail decodes the fewer-than-128 documents that could not fill a block.
@@ -303,45 +394,6 @@ func (c *blockCursor) loadTail() error {
 	return nil
 }
 
-// -------------------------------------------------------------- read surface
-//
-// Everything below is what a caller reads after seekBlock/nextBlock/loadBlock
-// has done its work -- the result of the last decode, not a step in doing it.
-// Trivial enough that the compiler inlines all of them (checked directly with
-// -gcflags=-m: every one of these gets "inlining call to" at its call sites,
-// not just "can inline" in isolation), so this costs nothing at runtime; it
-// exists to give PostingsIterator a named boundary to read through instead of
-// reaching into the cursor's own bookkeeping fields directly. Unexported like
-// blockCursor itself -- this is a same-package boundary, not a public one.
-
-// numDocs is how many entries of the currently loaded block are real postings
-// rather than terminator padding.
-func (c *blockCursor) numDocs() int { return c.nDocs }
-
-// docAt returns the doc number at index i of the currently loaded block.
-func (c *blockCursor) docAt(i int) uint32 { return c.buf.docs[i] }
-
-// freqAt returns the term frequency at index i of the currently loaded block.
-func (c *blockCursor) freqAt(i int) uint32 { return c.buf.freqs[i] }
-
-// lastDoc is the highest doc number in the currently loaded block.
-func (c *blockCursor) lastDoc() uint32 { return c.blockLastDoc }
-
-// isExhausted reports whether the cursor has no more blocks to offer. Named
-// with the is- prefix rather than matching the exhausted field verbatim,
-// since Go doesn't allow a method and a field to share one identifier.
-func (c *blockCursor) isExhausted() bool { return c.exhausted }
-
-// docs returns the currently loaded block's whole doc-number array, for a
-// caller that needs to operate across it in bulk -- namely searchBlock --
-// rather than one entry at a time.
-func (c *blockCursor) docs() *[postingsBlockLen]uint32 { return &c.buf.docs }
-
-// markExhausted forces the cursor into the exhausted state directly, for a
-// postings list that never has any blocks to begin with (a 1-hit term, or one
-// with no postings at all) and so never calls init.
-func (c *blockCursor) markExhausted() { c.exhausted = true }
-
 // b2i is the branchless comparison helper the in-block search is built from;
 // the compiler turns it into a set-on-condition.
 func b2i(b bool) int {
@@ -349,37 +401,4 @@ func b2i(b bool) int {
 		return 1
 	}
 	return 0
-}
-
-// searchBlock returns the index of the first entry in a decoded block that is
-// greater than or equal to target -- a lower bound.
-//
-// This is the 8-ary search of Schlegel, Gemulla and Lehner rather than a binary
-// search: 128 narrows to 16, then to 2, then a two-element scan, for sixteen
-// comparisons instead of seven.  All sixteen are branchless, and the seven
-// probes of each round are independent loads the processor can issue together,
-// so the extra comparisons cost less than the mispredictions they replace.
-//
-// It relies on the padding invariant: the block always holds 128 non-decreasing
-// entries ending in a value no legal target can exceed, so the result is always
-// in range.
-func searchBlock(arr *[postingsBlockLen]uint32, target uint32) int {
-	base, span := 0, postingsBlockLen
-	for {
-		step := span / 8
-		if step == 0 {
-			break
-		}
-		count := 0
-		for i := 1; i < 8; i++ {
-			count += b2i(arr[base+i*step-1] < target)
-		}
-		base += count * step
-		span = step
-	}
-	count := 0
-	for i := 0; i < span; i++ {
-		count += b2i(arr[base+i] < target)
-	}
-	return base + count
 }

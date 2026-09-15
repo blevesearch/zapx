@@ -30,8 +30,7 @@ type Dictionary struct {
 	fieldID uint16
 	fst     *vellum.FST
 
-	// norms is the field's quantized field-length column, shared by every term
-	// in the field and cached alongside the FST
+	// norms is the columnar store of quantized norms
 	norms *normsColumn
 
 	fstReader *vellum.Reader
@@ -146,10 +145,6 @@ func (d *Dictionary) automatonIterator(a segment.Automaton,
 		return rv
 	}
 	return emptyDictionaryIterator
-}
-
-func (d *Dictionary) incrementBytesRead(val uint64) {
-	d.bytesRead += val
 }
 
 func (d *Dictionary) BytesRead() uint64 {

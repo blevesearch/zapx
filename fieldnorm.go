@@ -19,21 +19,29 @@ import (
 	"sort"
 )
 
-// A field norm is the number of tokens the analyzer emitted for one field of
-// one document -- the "dl" term in BM25.  It is stored as a single quantized
-// byte per document per field, in a dense column shared by every term of the
-// field, rather than being repeated alongside every posting.
+// The field norm is the number of tokens in the field that is indexed.
+// Typically this value is a uint32 (integer length, always positive).
+// At search time, we need the reciprocal square root of this (1 / sqrt(norm))
+// which we refer to here as the norm factor.
 //
-// The quantization is the scheme Lucene and tantivy both use: a 3-bit mantissa
-// with an implicit leading 1 and a 5-bit exponent, biased so that the first 41
-// lengths are represented exactly.  Properties worth knowing:
+// One key thing to note is that the final BM25/TF-IDF score is robust to
+// perturbations in the norm/norm factor. Search engines take advantage of this
+// by trying to "quantize" the norm to 8 bits rather than 32 bits usually needed.
+// This quantized form is called the norm ID.
 //
-//   - lengths 0..=40 represented exactly, so short fields (titles, names, tags),
-//     where length normalization matters most, lose nothing;
-//   - the mapping is monotonic and rounds *down*, so a stored length is never
-//     larger than the true one;
-//   - relative error above 40 is bounded by 1/8;
-//   - it saturates at fieldNormTable[255].
+// We store a precomputed table `fieldNormTable` that maps the norm ID to the
+// field length it represents so that it's just a simple lookup. There are two
+// ways the norm ID represents numbers:
+// 1. If the norm ID has a value < 24, the norm ID stores the raw length
+// 2. If the norm ID >= 24, we store the difference between the ID and 24
+// 	  in a custom floating point type that fits in the 8 bits: the lowest 3
+//    bits are used for the mantissa, the highest 5 are the exponent.
+//
+// The way the data is encoded ensures that norm values up until 40 is represented
+// exactly, and values above 40 have a relative error bounded by 12.5%.
+//
+// We also store an additional precomputed table `fieldNormFactor` that directly
+// gives us the norm factor for a norm ID.
 
 // identityPart is the number of leading ids that decode to themselves before
 // the exponential part takes over.
@@ -74,6 +82,10 @@ func decodeFieldNormID(id uint8) uint32 {
 	}
 	return identityPart + decodeExpPart(id-identityPart)
 }
+
+// ---------------------------------------------------------------
+// Functions below use the precomputed tables to get norm, norm ID
+// and norm factor
 
 // idToFieldNorm returns the field length a norm id stands for.
 func idToFieldNorm(id uint8) uint32 {

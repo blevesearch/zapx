@@ -97,10 +97,12 @@ func (sc *invertedIndexCache) createAndCacheLOCKED(fieldID uint16, mem []byte, l
 	pos += vellumLen
 	bytesRead := pos - loc.dictOffset
 
-	// The norm column is decoded once per field rather than per term, which is
-	// the point of it living here: a term lookup then costs a single byte load.
 	norms := normsAbsent
 	if loc.normsLen > 0 {
+		// NOTE: if encryption is enabled, we are reading the entire norms column in one shot,
+		// bringing it into memory in it's decrypted form and operating on that. This could
+		// mean a few MB of extra memory for large indexes. If this ends up being a measurably
+		// large amount, we can try chunking the norms column, encrypting each chunk separately.
 		normBytes, err := fr.process(mem[loc.normsOffset : loc.normsOffset+loc.normsLen])
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("error processing norms bytes: %v", err)

@@ -968,7 +968,7 @@ func TestOneHitEncoding(t *testing.T) {
 }
 
 // TestFSTVal1HitBitLayout checks the encode/decode round trip directly at the
-// edges of what the format's 31-bit docNum and 20-bit freq fields can hold,
+// edges of what the format's two 31-bit docNum and freq fields can hold,
 // independent of any segment build.
 func TestFSTVal1HitBitLayout(t *testing.T) {
 	cases := []struct {
@@ -977,9 +977,9 @@ func TestFSTVal1HitBitLayout(t *testing.T) {
 		{0, 0},
 		{1, 1},
 		{42, 4},
-		{mask31Bits, mask20Bits}, // both fields maxed out at once
+		{mask31Bits, mask31Bits}, // both fields maxed out at once
 		{mask31Bits, 0},
-		{0, mask20Bits},
+		{0, mask31Bits},
 	}
 	for _, c := range cases {
 		val := FSTValEncode1Hit(c.docNum, c.freq)
@@ -992,11 +992,11 @@ func TestFSTVal1HitBitLayout(t *testing.T) {
 		}
 	}
 
-	if !under20Bits(mask20Bits) {
-		t.Fatalf("under20Bits(%d) = false, want true", mask20Bits)
+	if !under32Bits(mask31Bits) {
+		t.Fatalf("under32Bits(%d) = false, want true", mask31Bits)
 	}
-	if under20Bits(mask20Bits + 1) {
-		t.Fatalf("under20Bits(%d) = true, want false", mask20Bits+1)
+	if under32Bits(mask31Bits + 1) {
+		t.Fatalf("under32Bits(%d) = true, want false", mask31Bits+1)
 	}
 }
 

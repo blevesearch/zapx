@@ -186,7 +186,7 @@ func (s *postingsSerializer) OneHit() (uint64, bool) {
 	freq := uint64(1)
 	if s.hasFreqs {
 		freq = uint64(s.freqs[0])
-		if !under20Bits(freq) {
+		if !under32Bits(freq) {
 			return 0, false
 		}
 	}

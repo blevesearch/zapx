@@ -47,7 +47,7 @@ func init() {
 //	----------+---+---+---------------------------------------------------
 //	 general  : 0 | 0 | 62-bits offset of the term footer.
 //	 ~        : 0 | 1 | reserved for future.
-//	 1-hit    : 1 | 0 | 11 reserved bits | 20-bits freq | 31-bits docNum.
+//	 1-hit    : 1 | 0 | 31-bits freq | 31-bits docNum.
 //	 ~        : 1 | 1 | reserved for future.
 //
 // Encoding "general" is able to handle all cases, where the offset points at
@@ -58,36 +58,33 @@ func init() {
 // applies when:
 //
 //   - the term appears in only a single doc for that field;
-//   - and, the term's freq in that doc fits into 20 bits (freq is taken to be
+//   - and, the term's freq in that doc fits into 31 bits (freq is taken to be
 //     1, regardless of the true count, when the field has frequencies
 //     disabled -- see hasFreqs in postings_serializer.go);
 //   - and, term vectors are not recorded for the term;
 //   - and, the docNum fits into 31-bits.
 //
-// Earlier zap versions also had to pack the norm into this value. That is no
-// longer necessary: the norm lives in the field's norm column, keyed by doc
-// number, so a 1-hit term needs nothing but the doc number and its frequency.
+// Earlier zap versions also had to pack the norm into this same 31-bit slot.
+// That is no longer necessary: the norm lives in the field's norm column,
+// keyed by doc number, so this slot is free for something else useful
+// instead -- the frequency -- at the same width earlier versions already
+// established for it.
 const FSTValEncodingMask = uint64(0xc000000000000000)
 const FSTValEncodingGeneral = uint64(0x0000000000000000)
 const FSTValEncoding1Hit = uint64(0x8000000000000000)
 
 func FSTValEncode1Hit(docNum, freq uint64) uint64 {
-	return FSTValEncoding1Hit | ((mask20Bits & freq) << 31) | (mask31Bits & docNum)
+	return FSTValEncoding1Hit | ((mask31Bits & freq) << 31) | (mask31Bits & docNum)
 }
 
 func FSTValDecode1Hit(v uint64) (docNum, freq uint64) {
-	return mask31Bits & v, mask20Bits & (v >> 31)
+	return mask31Bits & v, mask31Bits & (v >> 31)
 }
 
 const mask31Bits = uint64(0x000000007fffffff)
-const mask20Bits = uint64(0x00000000000fffff)
 
 func under32Bits(x uint64) bool {
 	return x <= mask31Bits
-}
-
-func under20Bits(x uint64) bool {
-	return x <= mask20Bits
 }
 
 const DocNum1HitFinished = math.MaxUint64

@@ -389,4 +389,5 @@ func TestFileCallbacks(t *testing.T) {
 	TestTailSeekPastRangeSkipsDecode(t)
 	TestTailBlockMaxBound(t)
 	TestOneHitEncoding(t)
+	TestFSTVal1HitBitLayout(t)
 }

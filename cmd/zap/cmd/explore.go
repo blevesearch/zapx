@@ -66,7 +66,7 @@ var exploreCmd = &cobra.Command{
 						return err
 					}
 					if info.OneHit {
-						fmt.Printf("Posting List is 1-hit encoded, docNum: %d\n", info.DocNum)
+						fmt.Printf("Posting List is 1-hit encoded, docNum: %d freq: %d\n", info.DocNum, info.Freq)
 						return nil
 					}
 

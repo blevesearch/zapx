@@ -413,6 +413,7 @@ func decodeNormsColumn(buf []byte, numDocs uint64) (*normsColumn, error) {
 type TermPostingsInfo struct {
 	OneHit     bool
 	DocNum     uint64 // only meaningful when OneHit
+	Freq       uint64 // only meaningful when OneHit
 	DocFreq    uint32
 	HasFreqs   bool
 	HasLocs    bool
@@ -431,9 +432,11 @@ type TermPostingsInfo struct {
 // DescribeTermPostings decodes the term footer an FST value points at.
 func DescribeTermPostings(mem []byte, fstVal uint64) (*TermPostingsInfo, error) {
 	if fstVal&FSTValEncodingMask == FSTValEncoding1Hit {
+		docNum, freq := FSTValDecode1Hit(fstVal)
 		return &TermPostingsInfo{
 			OneHit:  true,
-			DocNum:  FSTValDecode1Hit(fstVal),
+			DocNum:  docNum,
+			Freq:    freq,
 			DocFreq: 1,
 		}, nil
 	}

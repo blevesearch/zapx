@@ -167,26 +167,34 @@ func (s *postingsSerializer) flushBlock() error {
 }
 
 // OneHit reports the FST value for a term that can skip the general encoding
-// entirely: a single document, a frequency of one, no locations, and a doc
-// number that fits the 31 bits available.  Nothing has been written to w at
-// that point, because a term this small never filled a block.
+// entirely: a single document, no locations, and a doc number and frequency
+// that both fit the bits available.  Nothing has been written to w at that
+// point, because a term this small never filled a block.
 //
 // The long tail of a real dictionary is terms like this, so avoiding an
 // indirection for them is worth the special case.  Unlike earlier zap versions
-// the norm does not have to be carried in the FST value -- it is in the field's
-// norm column -- which leaves the encoding to just the doc number.
+// the norm does not have to be carried in the FST value -- it is in the
+// field's norm column -- which leaves the encoding to just the doc number and
+// the frequency.  When the field has frequencies disabled, freq is not read
+// from the document at all: 1 is encoded, matching what a reader gets back
+// for any term in such a field regardless of encoding (see wantFreqs in
+// postings_block.go).
 func (s *postingsSerializer) OneHit() (uint64, bool) {
 	if s.docFreq != 1 || s.hasLocs || s.n != 1 {
 		return 0, false
 	}
-	if s.hasFreqs && s.freqs[0] != 1 {
-		return 0, false
+	freq := uint64(1)
+	if s.hasFreqs {
+		freq = uint64(s.freqs[0])
+		if !under20Bits(freq) {
+			return 0, false
+		}
 	}
 	docNum := uint64(s.docs[0])
 	if !under32Bits(docNum) {
 		return 0, false
 	}
-	return FSTValEncode1Hit(docNum), true
+	return FSTValEncode1Hit(docNum, freq), true
 }
 
 // FinishPayload flushes the leftover documents as a uvarint tail and closes out

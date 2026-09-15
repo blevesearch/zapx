@@ -47,7 +47,7 @@ func init() {
 //	----------+---+---+---------------------------------------------------
 //	 general  : 0 | 0 | 62-bits offset of the term footer.
 //	 ~        : 0 | 1 | reserved for future.
-//	 1-hit    : 1 | 0 | 31 unused bits | 31-bits docNum.
+//	 1-hit    : 1 | 0 | 11 reserved bits | 20-bits freq | 31-bits docNum.
 //	 ~        : 1 | 1 | reserved for future.
 //
 // Encoding "general" is able to handle all cases, where the offset points at
@@ -58,29 +58,36 @@ func init() {
 // applies when:
 //
 //   - the term appears in only a single doc for that field;
-//   - and, the term's freq is exactly 1 in that doc;
+//   - and, the term's freq in that doc fits into 20 bits (freq is taken to be
+//     1, regardless of the true count, when the field has frequencies
+//     disabled -- see hasFreqs in postings_serializer.go);
 //   - and, term vectors are not recorded for the term;
 //   - and, the docNum fits into 31-bits.
 //
 // Earlier zap versions also had to pack the norm into this value. That is no
 // longer necessary: the norm lives in the field's norm column, keyed by doc
-// number, so a 1-hit term needs nothing but the doc number itself.
+// number, so a 1-hit term needs nothing but the doc number and its frequency.
 const FSTValEncodingMask = uint64(0xc000000000000000)
 const FSTValEncodingGeneral = uint64(0x0000000000000000)
 const FSTValEncoding1Hit = uint64(0x8000000000000000)
 
-func FSTValEncode1Hit(docNum uint64) uint64 {
-	return FSTValEncoding1Hit | (mask31Bits & docNum)
+func FSTValEncode1Hit(docNum, freq uint64) uint64 {
+	return FSTValEncoding1Hit | ((mask20Bits & freq) << 31) | (mask31Bits & docNum)
 }
 
-func FSTValDecode1Hit(v uint64) (docNum uint64) {
-	return mask31Bits & v
+func FSTValDecode1Hit(v uint64) (docNum, freq uint64) {
+	return mask31Bits & v, mask20Bits & (v >> 31)
 }
 
 const mask31Bits = uint64(0x000000007fffffff)
+const mask20Bits = uint64(0x00000000000fffff)
 
 func under32Bits(x uint64) bool {
 	return x <= mask31Bits
+}
+
+func under20Bits(x uint64) bool {
+	return x <= mask20Bits
 }
 
 const DocNum1HitFinished = math.MaxUint64
@@ -96,16 +103,17 @@ type PostingsList struct {
 
 	except *roaring.Bitmap
 
-	// when is1Hit, the whole list is the single docNum1Hit and the footer
-	// above is not meaningful
+	// when is1Hit, the whole list is the single docNum1Hit/freq1Hit pair and
+	// the footer above is not meaningful
 	is1Hit     bool
 	docNum1Hit uint64
+	freq1Hit   uint64
 
 	// docBM is the postings list as a roaring bitmap, created on demand and
 	// cached.
 	// It's needed for resolving external _id strings to internal doc
 	// numbers, not on the scan path, so will not impact search latency
-	// TODO: will it blow up memory footprint?
+	// TODO: will it blow up memory?
 	docBM *roaring.Bitmap
 
 	// chunkSize governs the location blob, which keeps the chunked encoding of
@@ -253,6 +261,7 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 		// there is nothing to mark exhausted.
 		rv.is1Hit = true
 		rv.docNum1Hit = p.docNum1Hit
+		rv.freq1Hit = p.freq1Hit
 		if rv.exceptItr != nil && p.except.Contains(uint32(rv.docNum1Hit)) {
 			rv.docNum1Hit = DocNum1HitFinished
 		}
@@ -349,7 +358,7 @@ func (rv *PostingsList) read(postingsOffset uint64, d *Dictionary) error {
 	// handle "1-hit" encoding special case
 	if postingsOffset&FSTValEncodingMask == FSTValEncoding1Hit {
 		rv.is1Hit = true
-		rv.docNum1Hit = FSTValDecode1Hit(postingsOffset)
+		rv.docNum1Hit, rv.freq1Hit = FSTValDecode1Hit(postingsOffset)
 		return nil
 	}
 
@@ -412,6 +421,7 @@ type PostingsIterator struct {
 	nextSegmentLocs []segment.Location // reused across Next() calls
 
 	docNum1Hit uint64
+	freq1Hit   uint64
 
 	buf []byte
 
@@ -645,12 +655,12 @@ func (i *PostingsIterator) stepWithLocs(lo uint32) (bool, error) {
 // docNum is already exactly i.cursor.docs()[i.cur] (that's where it came
 // from), so the only real question left is whether there is a cursor to read
 // at all: a 1-hit list has none -- its blockCursor is never init'd, so
-// cursor.freqs() would dereference a nil buf -- but it is only ever 1-hit
-// because its single posting's frequency is exactly 1 by construction (see
-// FSTValEncoding1Hit's preconditions), so that's the answer regardless.
+// cursor.freqs() would dereference a nil buf -- but its frequency was already
+// packed into the FST value at encode time (freq1Hit), so that's read
+// instead.
 func (i *PostingsIterator) currFreq() uint64 {
 	if i.is1Hit {
-		return 1
+		return i.freq1Hit
 	}
 	return uint64(i.cursor.freqs()[i.cur])
 }
@@ -907,6 +917,7 @@ func PostingsIteratorFrom1Hit(docNum1Hit uint64,
 	return &PostingsIterator{
 		is1Hit:          true,
 		docNum1Hit:      docNum1Hit,
+		freq1Hit:        1, // this constructor has no way to know a real frequency
 		includeFreqNorm: includeFreqNorm,
 		includeLocs:     includeLocs,
 	}, nil

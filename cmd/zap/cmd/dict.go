@@ -62,7 +62,7 @@ var dictCmd = &cobra.Command{
 					return err
 				}
 				if info.OneHit {
-					extra = fmt.Sprintf("-- docNum: %d", info.DocNum)
+					extra = fmt.Sprintf("-- docNum: %d freq: %d", info.DocNum, info.Freq)
 					fmt.Printf(" %s - %d (%x) %s\n", currTerm, currVal, currVal, extra)
 					hit1Count++
 				} else {

@@ -76,6 +76,12 @@ func buildBlockTestSegment(t *testing.T, numDocs int, termVectors bool) (
 		}
 		// A term unique to this document: the 1-hit case.
 		tokens = append(tokens, fmt.Sprintf("uniq%d", i))
+		// A term unique to this document but repeated within it: the 1-hit
+		// case with a frequency greater than 1.
+		soloReps := 2 + i%4
+		for r := 0; r < soloReps; r++ {
+			tokens = append(tokens, fmt.Sprintf("solo%d", i))
+		}
 		// Pad so field lengths vary and the norm column is not constant.
 		for p := 0; p < i%37; p++ {
 			tokens = append(tokens, "pad")
@@ -924,13 +930,31 @@ func TestOneHitEncoding(t *testing.T) {
 	if val&FSTValEncodingMask != FSTValEncoding1Hit {
 		t.Fatalf("expected uniq42 to use the 1-hit encoding, got %x", val)
 	}
-	if got := FSTValDecode1Hit(val); got != 42 {
-		t.Fatalf("1-hit docNum = %d, want 42", got)
+	if gotDoc, gotFreq := FSTValDecode1Hit(val); gotDoc != 42 || gotFreq != 1 {
+		t.Fatalf("1-hit (docNum, freq) = (%d, %d), want (42, 1)", gotDoc, gotFreq)
 	}
 
 	got := collect(t, sb, "body", "uniq42", nil, false)
 	if len(got) != 1 || got[0].docNum != 42 || got[0].freq != 1 {
 		t.Fatalf("uniq42 postings = %v", got)
+	}
+
+	// solo42 is also unique to doc 42, but repeated within it (2+42%4 = 4
+	// times) -- the 1-hit encoding must still apply, carrying that real
+	// frequency rather than falling back to the general encoding.
+	val, exists, err = dict.fstReader.Get([]byte("solo42"))
+	if err != nil || !exists {
+		t.Fatalf("term solo42 missing: exists=%v err=%v", exists, err)
+	}
+	if val&FSTValEncodingMask != FSTValEncoding1Hit {
+		t.Fatalf("expected solo42 to use the 1-hit encoding, got %x", val)
+	}
+	if gotDoc, gotFreq := FSTValDecode1Hit(val); gotDoc != 42 || gotFreq != 4 {
+		t.Fatalf("1-hit (docNum, freq) = (%d, %d), want (42, 4)", gotDoc, gotFreq)
+	}
+	got = collect(t, sb, "body", "solo42", nil, false)
+	if len(got) != 1 || got[0].docNum != 42 || got[0].freq != 4 {
+		t.Fatalf("solo42 postings = %v", got)
 	}
 
 	// "all" is in every document, so it must not be 1-hit.
@@ -940,6 +964,39 @@ func TestOneHitEncoding(t *testing.T) {
 	}
 	if val&FSTValEncodingMask == FSTValEncoding1Hit {
 		t.Fatal("term present in every document should not be 1-hit encoded")
+	}
+}
+
+// TestFSTVal1HitBitLayout checks the encode/decode round trip directly at the
+// edges of what the format's 31-bit docNum and 20-bit freq fields can hold,
+// independent of any segment build.
+func TestFSTVal1HitBitLayout(t *testing.T) {
+	cases := []struct {
+		docNum, freq uint64
+	}{
+		{0, 0},
+		{1, 1},
+		{42, 4},
+		{mask31Bits, mask20Bits}, // both fields maxed out at once
+		{mask31Bits, 0},
+		{0, mask20Bits},
+	}
+	for _, c := range cases {
+		val := FSTValEncode1Hit(c.docNum, c.freq)
+		if val&FSTValEncodingMask != FSTValEncoding1Hit {
+			t.Fatalf("docNum=%d freq=%d: encoded value %x is not tagged 1-hit", c.docNum, c.freq, val)
+		}
+		gotDoc, gotFreq := FSTValDecode1Hit(val)
+		if gotDoc != c.docNum || gotFreq != c.freq {
+			t.Fatalf("docNum=%d freq=%d: round trip got (%d, %d)", c.docNum, c.freq, gotDoc, gotFreq)
+		}
+	}
+
+	if !under20Bits(mask20Bits) {
+		t.Fatalf("under20Bits(%d) = false, want true", mask20Bits)
+	}
+	if under20Bits(mask20Bits + 1) {
+		t.Fatalf("under20Bits(%d) = true, want false", mask20Bits+1)
 	}
 }
 

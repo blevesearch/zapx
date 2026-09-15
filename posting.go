@@ -60,29 +60,37 @@ func init() {
 //   - the term appears in only a single doc for that field;
 //   - and, the term's freq in that doc fits into 31 bits (freq is taken to be
 //     1, regardless of the true count, when the field has frequencies
-//     disabled -- see hasFreqs in postings_serializer.go);
+//     disabled, see hasFreqs in postings_serializer.go);
 //   - and, term vectors are not recorded for the term;
 //   - and, the docNum fits into 31-bits.
 //
 // Earlier zap versions also had to pack the norm into this same 31-bit slot.
 // That is no longer necessary: the norm lives in the field's norm column,
 // keyed by doc number, so this slot is free for something else useful
-// instead -- the frequency -- at the same width earlier versions already
+// instead (the frequency) at the same width earlier versions already
 // established for it.
+
+// Represented as 1100 0000 0000 ... -> mask to get the top two bits
 const FSTValEncodingMask = uint64(0xc000000000000000)
+// Represented as all zeros, covers the general encoding case described above
 const FSTValEncodingGeneral = uint64(0x0000000000000000)
+// Represented as 1000 0000 0000 ... -> covers the 1 hit case
 const FSTValEncoding1Hit = uint64(0x8000000000000000)
 
+// Mask to get the bottom 31 bits
+const mask31Bits = uint64(0x000000007fffffff)
+
+// Returns the encoded 1 hit entry, given the docNum and freq
 func FSTValEncode1Hit(docNum, freq uint64) uint64 {
 	return FSTValEncoding1Hit | ((mask31Bits & freq) << 31) | (mask31Bits & docNum)
 }
 
+// Retruns the decoded 1 hit entry
 func FSTValDecode1Hit(v uint64) (docNum, freq uint64) {
 	return mask31Bits & v, mask31Bits & (v >> 31)
 }
 
-const mask31Bits = uint64(0x000000007fffffff)
-
+// Check if x can be represented in less than 32 bits (1 hit scenario)
 func under32Bits(x uint64) bool {
 	return x <= mask31Bits
 }

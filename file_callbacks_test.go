@@ -377,7 +377,9 @@ func TestFileCallbacks(t *testing.T) {
 	// tests that would notice if that stopped being true.
 	TestBlockPostingsRoundTrip(t)
 	TestBlockPostingsCount(t)
+	TestBlockPostingsFastScanNoFreqNorm(t)
 	TestBlockPostingsAdvance(t)
+	TestBlockPostingsAdvanceWithDeletions(t)
 	TestBlockPostingsWithDeletions(t)
 	TestBlockPostingsLocations(t)
 	TestBlockPostingsLocationsWithAdvance(t)

@@ -199,6 +199,58 @@ func TestBlockPostingsCount(t *testing.T) {
 	}
 }
 
+// TestBlockPostingsFastScanNoFreqNorm exercises nextAtOrAfter's stepFast path
+// when the caller asked for neither frequency nor norm: stepFast itself only
+// depends on fastScan (no deletions, no locations), not on includeFreqNorm,
+// so a plain doc-number-only scan still takes the fast in-block path -- and,
+// since frequencies are never decoded from disk in this configuration
+// (blockCursor.wantFreqs is false), the returned postings must not populate
+// Frequency() with placeholder data.
+func TestBlockPostingsFastScanNoFreqNorm(t *testing.T) {
+	sb, model := buildBlockTestSegment(t, 1000, false)
+	dict, err := sb.dictionary("body")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, term := range sortedTerms(model.terms) {
+		want := model.terms[term]
+		pl, err := dict.postingsList([]byte(term), nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		itr := pl.Iterator(false, false, false, nil)
+
+		var gotDocs []uint64
+		for {
+			next, err := itr.Next()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if next == nil {
+				break
+			}
+			p, ok := next.(*Posting)
+			if !ok {
+				t.Fatalf("unexpected posting type %T", next)
+			}
+			if p.Frequency() != 0 {
+				t.Fatalf("term %q doc %d: Frequency() = %d, want 0 (not requested)",
+					term, p.Number(), p.Frequency())
+			}
+			gotDocs = append(gotDocs, p.Number())
+		}
+
+		var wantDocs []uint64
+		for _, w := range want {
+			wantDocs = append(wantDocs, w.docNum)
+		}
+		if !reflect.DeepEqual(gotDocs, wantDocs) {
+			t.Fatalf("term %q: got docs %v, want %v", term, gotDocs, wantDocs)
+		}
+	}
+}
+
 func TestBlockPostingsAdvance(t *testing.T) {
 	sb, model := buildBlockTestSegment(t, 3000, false)
 	dict, err := sb.dictionary("body")
@@ -243,6 +295,110 @@ func TestBlockPostingsAdvance(t *testing.T) {
 			if !reflect.DeepEqual(got, exp) {
 				t.Fatalf("term %q stride %d: got %d postings, want %d\ngot:  %v\nwant: %v",
 					term, stride, len(got), len(exp), got, exp)
+			}
+		}
+	}
+}
+
+// TestBlockPostingsAdvanceWithDeletions is TestBlockPostingsAdvance's
+// counterpart for a live iterator: strided Advance() calls, but with a
+// deletion set applied too, exercising positionAtLive's per-block delMask
+// and its bit-scan across a mix of patterns -- some naturally producing a
+// whole block with nothing live left in it (forcing the cross-block loop),
+// some hitting exact block-boundary doc numbers (searchBlock/bit-scan
+// off-by-one risk), some with nothing or everything deleted at all.
+func TestBlockPostingsAdvanceWithDeletions(t *testing.T) {
+	const numDocs = 2000
+	sb, model := buildBlockTestSegment(t, numDocs, false)
+	dict, err := sb.dictionary("body")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rng := rand.New(rand.NewSource(11))
+	random := map[uint64]bool{}
+	for i := 0; i < numDocs/3; i++ {
+		random[uint64(rng.Intn(numDocs))] = true
+	}
+
+	patterns := []struct {
+		name    string
+		deleted func(docNum uint64) bool
+	}{
+		{"none", func(uint64) bool { return false }},
+		{"all", func(uint64) bool { return true }},
+		{"everyOther", func(d uint64) bool { return d%2 == 0 }},
+		// A whole run of global doc numbers, which for a dense term (every
+		// doc, or nearly so) lines up with one or more of that term's own
+		// 128-doc blocks having nothing live left in it at all -- the case
+		// that forces positionAtLive to cross into the next block.
+		{"fullBlockRun", func(d uint64) bool { return d >= 128 && d < 384 }},
+		// Only the high end, so a sparse term's tail (and a dense term's
+		// last full block plus tail) end up entirely deleted.
+		{"tailHeavy", func(d uint64) bool { return d >= numDocs-40 }},
+		// A handful of doc numbers landing exactly on typical block
+		// boundaries for a dense term, to stress the boundary between
+		// searchBlock's result and the bit scan that follows it.
+		{"boundaryExact", func(d uint64) bool {
+			switch d {
+			case 0, 127, 128, 255, 256, 383, 384:
+				return true
+			default:
+				return false
+			}
+		}},
+		{"random", func(d uint64) bool { return random[d] }},
+	}
+
+	for _, pat := range patterns {
+		except := roaring.New()
+		for d := uint64(0); d < numDocs; d++ {
+			if pat.deleted(d) {
+				except.Add(uint32(d))
+			}
+		}
+
+		for _, stride := range []uint64{1, 2, 17, 128, 129, 511} {
+			for _, term := range []string{"all", "rep", "mod2", "mod7", "mod50", "mod977"} {
+				pl, err := dict.postingsList([]byte(term), except, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				itr := pl.Iterator(true, true, false, nil)
+
+				var got []expPosting
+				var target uint64
+				for {
+					next, err := itr.Advance(target)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if next == nil {
+						break
+					}
+					p := next.(*Posting)
+					got = append(got, expPosting{p.Number(), p.Frequency(), p.normID})
+					target = p.Number() + stride
+				}
+
+				// Expected: filter the term's postings to the live docs
+				// first, then apply the same "first at or after each
+				// successive target" logic TestBlockPostingsAdvance uses.
+				var exp []expPosting
+				t2 := uint64(0)
+				for _, w := range model.terms[term] {
+					if pat.deleted(w.docNum) {
+						continue
+					}
+					if w.docNum >= t2 {
+						exp = append(exp, w)
+						t2 = w.docNum + stride
+					}
+				}
+				if !reflect.DeepEqual(got, exp) {
+					t.Fatalf("pattern %q term %q stride %d: got %d postings, want %d\ngot:  %v\nwant: %v",
+						pat.name, term, stride, len(got), len(exp), got, exp)
+				}
 			}
 		}
 	}

@@ -265,7 +265,12 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 	if p.norms.kind == normsKindAbsent {
 		rv.normConst = normFactorFromID(0)
 	}
-	rv.fastScan = rv.exceptItr == nil && !includeLocs
+	// !p.is1Hit is redundant with the early return above -- this line is
+	// never reached when it's true -- but stepFast only ever checks
+	// fastScan, not is1Hit itself, so writing it into the expression makes
+	// that exclusion something the boolean enforces on its own, rather than
+	// something a future reordering of this function could silently break.
+	rv.fastScan = !p.is1Hit && rv.exceptItr == nil && !includeLocs
 
 	err := rv.cursor.init(p.sb, &p.footer, rv.includeFreqNorm)
 	if err != nil {
@@ -566,15 +571,6 @@ func (i *PostingsIterator) nextDocNumAtOrAfter(atOrAfter uint64) (uint64, bool, 
 		return docNum, true, nil
 	}
 
-	if i.docNum1Hit != DocNum1HitFinished {
-		docNum := i.docNum1Hit
-		i.docNum1Hit = DocNum1HitFinished // consume our 1-hit docNum
-		if docNum < atOrAfter {
-			return 0, false, nil
-		}
-		return docNum, true, nil
-	}
-
 	if i.postings == nil {
 		return 0, false, nil
 	}
@@ -590,7 +586,11 @@ func (i *PostingsIterator) nextDocNumAtOrAfter(atOrAfter uint64) (uint64, bool, 
 	for {
 		var ok bool
 		var err error
-		if i.includeLocs {
+		// hasLocs, not includeLocs: a caller can ask for locations on a term
+		// that has none, and stepWithLocs's one-doc-at-a-time walk exists only
+		// to keep a location stream aligned -- with no stream to align,
+		// positionAt's faster block-level stepping is correct here too.
+		if i.hasLocs {
 			ok, err = i.stepWithLocs(lo)
 		} else {
 			ok, err = i.positionAt(lo)
@@ -610,8 +610,10 @@ func (i *PostingsIterator) nextDocNumAtOrAfter(atOrAfter uint64) (uint64, bool, 
 		// its group has to be discarded here. stepWithLocs only skips the
 		// documents it passes over on the way to lo; this one sits exactly at
 		// lo and was handed back before the deletion check rejected it.
-		if err := i.skipLocations(docNum); err != nil {
-			return 0, false, err
+		if i.hasLocs {
+			if err := i.skipLocations(docNum); err != nil {
+				return 0, false, err
+			}
 		}
 		if docNum == math.MaxUint32 {
 			return 0, false, nil
@@ -638,15 +640,19 @@ func (i *PostingsIterator) stepWithLocs(lo uint32) (bool, error) {
 	}
 }
 
-// freqAt returns the frequency of the posting the cursor is sitting on.
-func (i *PostingsIterator) currFreq(docNum uint32) uint64 {
-	if !i.includeFreqNorm || !i.positioned {
+// currFreq returns the frequency of the posting the cursor is sitting on.
+// Both callers only reach this once includeFreqNorm is already known true and
+// docNum is already exactly i.cursor.docs()[i.cur] (that's where it came
+// from), so the only real question left is whether there is a cursor to read
+// at all: a 1-hit list has none -- its blockCursor is never init'd, so
+// cursor.freqs() would dereference a nil buf -- but it is only ever 1-hit
+// because its single posting's frequency is exactly 1 by construction (see
+// FSTValEncoding1Hit's preconditions), so that's the answer regardless.
+func (i *PostingsIterator) currFreq() uint64 {
+	if i.is1Hit {
 		return 1
 	}
-	if i.cur < i.cursor.numDocs() && i.cursor.docs()[i.cur] == docNum {
-		return uint64(i.cursor.freqs()[i.cur])
-	}
-	return 1
+	return uint64(i.cursor.freqs()[i.cur])
 }
 
 // normIDOf reads a document's quantized norm ID directly, without the
@@ -823,12 +829,14 @@ func (i *PostingsIterator) Advance(docNum uint64) (segment.Posting, error) {
 }
 
 func (i *PostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.Posting, error) {
-	if atOrAfter == 0 && i.includeFreqNorm {
+	if atOrAfter == 0 {
 		if d, ok := i.stepFast(); ok {
 			rv := &i.next
 			rv.docNum = uint64(d)
-			rv.freq = uint64(i.cursor.freqs()[i.cur])
-			rv.normID = i.normIDOf(d)
+			if i.includeFreqNorm {
+				rv.freq = uint64(i.cursor.freqs()[i.cur])
+				rv.normID = i.normIDOf(d)
+			}
 			rv.locs = nil
 			return rv, nil
 		}
@@ -847,7 +855,7 @@ func (i *PostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.Posting, err
 		return rv, nil
 	}
 
-	rv.freq = i.currFreq(uint32(docNum))
+	rv.freq = i.currFreq()
 	rv.normID = i.currNormID(uint32(docNum))
 
 	if i.hasLocs {
@@ -872,7 +880,7 @@ func (i *PostingsIterator) nextWithLocBytes() (
 	if err != nil || !exists {
 		return 0, 0, nil, false, err
 	}
-	freq = i.currFreq(uint32(docNum))
+	freq = i.currFreq()
 
 	if i.hasLocs {
 		if err := i.loadLocChunk(uint32(docNum)); err != nil {

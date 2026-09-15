@@ -155,6 +155,111 @@ func BenchmarkPostingsAdvance(b *testing.B) {
 	}
 }
 
+// benchDeletionSpecs names two deletion shapes because they stress
+// positionAtLive's per-block delMask differently: scattered deletions mainly
+// exercise replacing isDeleted's three interface calls with a bit test; a
+// deleted run exercises the bigger win -- skipping a whole block with
+// nothing live left in it via the cross-block loop, instead of bouncing back
+// out to the caller once per deleted doc.
+var benchDeletionSpecs = []struct {
+	name   string
+	except func(numDocs int) *roaring.Bitmap
+}{
+	// Every 11th doc: 11 shares no factor with any benchTermSpecs mod (1, 10,
+	// 1000), so this lands as a partial, non-degenerate overlap against all
+	// three terms instead of deleting one of them outright.
+	{"scattered9pct", func(numDocs int) *roaring.Bitmap {
+		bm := roaring.New()
+		for d := 0; d < numDocs; d += 11 {
+			bm.Add(uint32(d))
+		}
+		return bm
+	}},
+	{"run20pct", func(numDocs int) *roaring.Bitmap {
+		bm := roaring.New()
+		bm.AddRange(0, uint64(numDocs/5))
+		return bm
+	}},
+}
+
+func BenchmarkPostingsNextWithDeletions(b *testing.B) {
+	sb := benchSegment(b)
+	dict, err := sb.dictionary("body")
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, spec := range benchTermSpecs {
+		for _, del := range benchDeletionSpecs {
+			except := del.except(benchNumDocs)
+			b.Run(spec.term+"/"+del.name, func(b *testing.B) {
+				var pl *PostingsList
+				var itr *PostingsIterator
+				var hits int
+				for b.Loop() {
+					pl, err = dict.postingsList([]byte(spec.term), except, pl)
+					if err != nil {
+						b.Fatal(err)
+					}
+					it := pl.Iterator(true, true, false, itr)
+					itr = it.(*PostingsIterator)
+					for {
+						p, err := itr.Next()
+						if err != nil {
+							b.Fatal(err)
+						}
+						if p == nil {
+							break
+						}
+						sinkFloat += p.Norm() * float64(p.Frequency())
+						hits++
+					}
+				}
+				b.ReportMetric(float64(hits)/float64(b.N), "hits/op")
+			})
+		}
+	}
+}
+
+// BenchmarkPostingsAdvanceWithDeletions is BenchmarkPostingsAdvance's
+// counterpart with a deletion set applied, isolating the same stride-based
+// access pattern conjunctions use.
+func BenchmarkPostingsAdvanceWithDeletions(b *testing.B) {
+	sb := benchSegment(b)
+	dict, err := sb.dictionary("body")
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, del := range benchDeletionSpecs {
+		except := del.except(benchNumDocs)
+		for _, stride := range []uint64{16, 256, 4096} {
+			b.Run(fmt.Sprintf("all/%s/stride%d", del.name, stride), func(b *testing.B) {
+				var pl *PostingsList
+				var itr *PostingsIterator
+				for b.Loop() {
+					pl, err = dict.postingsList([]byte("bench_all"), except, pl)
+					if err != nil {
+						b.Fatal(err)
+					}
+					it := pl.Iterator(true, true, false, itr)
+					itr = it.(*PostingsIterator)
+					var target uint64
+					for {
+						p, err := itr.Advance(target)
+						if err != nil {
+							b.Fatal(err)
+						}
+						if p == nil {
+							break
+						}
+						sinkFloat += p.Norm()
+						target = p.Number() + stride
+					}
+				}
+			})
+		}
+	}
+}
+
 var sinkFloat float64
 
 // BenchmarkSegmentBuild and BenchmarkSegmentMerge cover the write path: block

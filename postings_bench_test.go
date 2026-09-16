@@ -325,3 +325,59 @@ func benchDocuments(n int) []index.Document {
 	}
 	return results
 }
+
+// BenchmarkPostingsIteratorConstructOnly measures the pure cost of building
+// a fresh iterator and never touching it -- the "far more iterators than it
+// decodes blocks" case the blockCursor.buf pointer comment describes: a term
+// that gets pruned or found absent in a segment before anything is ever
+// decoded.
+func BenchmarkPostingsIteratorConstructOnly(b *testing.B) {
+	sb := benchSegment(b)
+	dict, err := sb.dictionary("body")
+	if err != nil {
+		b.Fatal(err)
+	}
+	pl, err := dict.postingsList([]byte("bench_all"), nil, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for b.Loop() {
+		itr := pl.Iterator(true, true, false, nil)
+		if itr == nil {
+			b.Fatal("nil iterator")
+		}
+	}
+}
+
+// BenchmarkPostingsIteratorMixed simulates a multi-segment query for a term
+// that only really matters in a fraction of the segments it's looked up in:
+// most constructed iterators are discarded unused, a few are fully scanned.
+func BenchmarkPostingsIteratorMixed(b *testing.B) {
+	sb := benchSegment(b)
+	dict, err := sb.dictionary("body")
+	if err != nil {
+		b.Fatal(err)
+	}
+	pl, err := dict.postingsList([]byte("bench_all"), nil, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	const fanout = 10 // 1 in 10 iterators actually gets scanned
+	i := 0
+	for b.Loop() {
+		itr := pl.Iterator(true, true, false, nil)
+		if i%fanout == 0 {
+			for {
+				p, err := itr.Next()
+				if err != nil {
+					b.Fatal(err)
+				}
+				if p == nil {
+					break
+				}
+				sinkFloat += p.Norm()
+			}
+		}
+		i++
+	}
+}

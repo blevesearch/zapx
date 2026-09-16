@@ -1004,3 +1004,66 @@ func TestFSTVal1HitBitLayout(t *testing.T) {
 }
 
 var _ segment.PostingsIterator = (*PostingsIterator)(nil)
+
+// TestBlockCursorLazyBufReseedsFreqsOnReuse targets the correctness-sensitive
+// part of deferring blockBuf's allocation from init to loadBlock: a buf
+// surviving on a reused cursor from a previous, wantFreqs=true term must not
+// leak its real frequency values into a later term that doesn't want them
+// (init reseeds an already-allocated buf; loadBlock seeds one it allocates
+// itself, so the two paths need to agree).
+func TestBlockCursorLazyBufReseedsFreqsOnReuse(t *testing.T) {
+	sb, model := buildBlockTestSegment(t, 200, false)
+	dict, err := sb.dictionary("body")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pl, err := dict.postingsList([]byte("rep"), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// "rep" appears in every doc with freq = 1 + docNum%5, so doc 1 has
+	// freq 2 -- confirm the test's premise against the model directly.
+	if model.terms["rep"][1].freq != 2 {
+		t.Fatalf("test premise broken: doc 1's \"rep\" freq = %d, want 2",
+			model.terms["rep"][1].freq)
+	}
+
+	var c blockCursor
+	if err := c.init(sb, &pl.footer, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.loadBlock(); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.freqs()[1]; got != 2 {
+		t.Fatalf("wantFreqs=true: freqs()[1] = %d, want 2 (real decode)", got)
+	}
+
+	// Reuse the same cursor (same underlying buf) for a lookup that does not
+	// want frequencies. Every slot must read back as 1, not the previous
+	// term's real value of 2 still sitting in buf.freqs.
+	if err := c.init(sb, &pl.footer, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.loadBlock(); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.freqs()[1]; got != 1 {
+		t.Fatalf("wantFreqs=false after reuse: freqs()[1] = %d, want 1 (stale real value leaked)", got)
+	}
+
+	// And the reverse direction: a cursor that has never allocated a buf at
+	// all (first use is wantFreqs=false) must also seed to all-1s, exercising
+	// loadBlock's own allocate-and-seed path rather than init's reseed path.
+	var c2 blockCursor
+	if err := c2.init(sb, &pl.footer, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := c2.loadBlock(); err != nil {
+		t.Fatal(err)
+	}
+	if got := c2.freqs()[1]; got != 1 {
+		t.Fatalf("wantFreqs=false on a fresh cursor: freqs()[1] = %d, want 1", got)
+	}
+}

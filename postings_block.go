@@ -21,14 +21,31 @@ import (
 	"github.com/blevesearch/freeway/bitpack"
 )
 
-// blockCursor walks one term's postings a block at a time.  It owns two roles
-// that tantivy splits between SkipReader and BlockSegmentPostings: stepping
-// through the skip list, which needs no payload at all, and decoding the block
-// the skip list landed on.
+// blockBuf holds one decoded block: 128 docs and their corresponding freqs
+type blockBuf struct {
+	docs  [postingsBlockLen]uint32
+	freqs [postingsBlockLen]uint32
+}
+
+// blockCursor iterates over the postings one block at a time. It reads the following
+// streams of data:
+//  1. The skip data - This contains metadata for the actual postings block, which is
+//     used to choose the appropriate SIMD kernels to decode a block, whether the block
+//     should be skipped, the offset of the block, etc.
+//  2. The postings list - This is organized as blocks of 128 docs along with their freqs.
+//     Once we have the skip data for the block, we use it to decode an entire block at
+//     a time which we'll populate in a blockBuf. The consumer can read this buf for the
+//     next 128 postings, then continue to load other block when required.
 //
-// Every loaded block presents exactly 128 slots in docs, non-decreasing, padded
-// out with docNumTerminated.  Callers can therefore index docs without a bounds
-// test, and the in-block search below can run without a branch.
+// There are 2 types of APIs that blockCursor has:
+//  1. Block movement: make the cursor move between blocks. This "movement" is really
+//     just iterating over the skip data of each block, not the postings list itself.
+//  2. Block reading: read the data that the cursor is currently pointing to. MUST CALL
+//     loadBlock() PRIOR TO READING DATA FROM THE BLOCK!!!
+//
+// The standard usage pattern would be to use the block movement APIs to move the cursor
+// to a block of interest. Then you call loadBlock(), then access that block's postings
+// through the block reading APIs.
 type blockCursor struct {
 	sb *SegmentBase
 
@@ -43,19 +60,18 @@ type blockCursor struct {
 	hasFreqs      bool
 	wantFreqs     bool
 
-	// tailEntry is the tail's own skipEntry, read once from the skip region.
-	// It is exactly what selectBlock installs as c.entry while positioned on
-	// the tail, giving seekBlock a real bound to compare against instead of
-	// always having to decode the tail to find out. Meaningless when
-	// tailLen == 0 (docNumBits/tfNumBits are always meaningless for it, tail
-	// or not -- see the note in postings_format.go).
+	// The final block of the postings list will be uvarints rather than
+	// using the bitpacked format if it doesn't have 128 docs. In this case, we
+	// decode the tail entry ahead of time since it requires special
+	// handling. Will not exist when the final block is 128 docs
+	// (docFreq % 128 == 0)
 	tailEntry skipEntry
 
 	// Position in the skip list.  blockIdx counts full blocks; reaching
 	// numFullBlocks means the uvarint tail, and going past it means the list is
 	// spent.
 	blockIdx  int
-	entry     skipEntry
+	entry     skipEntry // skipEntry that the cursor is currently pointing to
 	inTail    bool
 	exhausted bool
 
@@ -63,11 +79,11 @@ type blockCursor struct {
 	// anchor the current block's deltas are measured against.
 	prevLastDoc uint32
 
-	// buf holds the decoded block. It lives behind a pointer, and is only
-	// allocated once something actually has to be decoded, because a
-	// PostingsIterator embeds a blockCursor and a query over many small
-	// segments creates far more iterators than it decodes blocks -- inline
-	// arrays would mean a kilobyte allocated and zeroed per iterator.
+	// buf holds the decoded block. It lives behind a pointer and is
+	// allocated lazily in loadBlock, not here in init -- a PostingsIterator
+	// embeds a blockCursor, a query over many small segments creates far
+	// more iterators than it decodes blocks, and an iterator that never
+	// gets past skip-list movement should never pay for this.
 	buf *blockBuf
 
 	nDocs        int
@@ -77,15 +93,8 @@ type blockCursor struct {
 	bytesRead uint64
 }
 
-// blockBuf is one decoded block: 128 doc numbers and 128 frequencies.
-type blockBuf struct {
-	docs  [postingsBlockLen]uint32
-	freqs [postingsBlockLen]uint32
-}
-
-// allOnes seeds the frequency array for terms that do not record frequencies,
-// and for readers that asked not to decode them.  A missing frequency reads as
-// 1, which is what earlier zap versions returned.
+// allOnes is a 128 size array containing just 1s, useful in cases where
+// we are ignoring freqs.
 var allOnes = func() (a [postingsBlockLen]uint32) {
 	for i := range a {
 		a[i] = 1
@@ -93,6 +102,8 @@ var allOnes = func() (a [postingsBlockLen]uint32) {
 	return
 }()
 
+// allTerminated is a 128 size array containing just "terminated" doc nums
+// which are used to signify that the postings list has come to an end.
 var allTerminated = func() (a [postingsBlockLen]uint32) {
 	for i := range a {
 		a[i] = docNumTerminated
@@ -101,13 +112,9 @@ var allTerminated = func() (a [postingsBlockLen]uint32) {
 }()
 
 // -------------------------------------------------------------------------
-// block movement: deciding which block, if any, is current. init points the
-// cursor at a term; rewind, nextBlock and seekBlock walk the skip list from
-// there (selectBlock, the step they all land on, is in the helpers section
-// below -- nothing outside blockCursor calls it directly); isExhausted
-// reports when nothing is left to walk to. None of these decode a block's
-// payload -- that is loadBlock's job, once movement has settled on a block
-// for it to decode.
+//
+// BLOCK MOVEMENT APIs
+//
 // -------------------------------------------------------------------------
 
 // init points the cursor at a term.  The footer has already been decoded and
@@ -145,22 +152,15 @@ func (c *blockCursor) init(sb *SegmentBase, h *termFooter, wantFreqs bool) error
 			c.numFullBlocks, c.tailLen)
 	}
 
-	if c.buf == nil {
-		c.buf = &blockBuf{}
-	}
-	if !c.wantFreqs {
+	// buf is lazy initialized in loadBlock for a fresh iterator. However, in case this
+	// iterator is reused as passed into PostingsList.Iterator(), this buf may already
+	// be initialized from the previous use: we set it to all 1s here in case we don't
+	// care about freqs.
+	if c.buf != nil && !c.wantFreqs {
 		copy(c.buf.freqs[:], allOnes[:])
 	}
 	c.rewind()
 	return nil
-}
-
-// rewind returns the cursor to the first block without re-reading the footer.
-func (c *blockCursor) rewind() {
-	c.blockIdx = 0
-	c.prevLastDoc = 0
-	c.loaded = false
-	c.selectBlock()
 }
 
 // nextBlock steps one block forward.
@@ -173,51 +173,53 @@ func (c *blockCursor) nextBlock() {
 	}
 	c.blockIdx++
 	c.loaded = false
+	// loads the block's skip data: basically
+	// makes the blockCursor "point" to the block
 	c.selectBlock()
 }
 
-// seekBlock walks forward to the first block -- full or tail -- that could
-// contain target, or exhausts the cursor if none can.  It touches only the
-// skip list -- a linear scan over fixed-size records, one per 128 documents,
-// plus the tail's own lastDoc bound -- and never decodes a payload, which is
-// what makes a long forward skip cheap even when the answer turns out not to
-// exist at all.
+// seekBlock iterates over the skip data to find the first block that could
+// contain target. If the target is higher than the doc count of the final
+// block, the cursor will be exhausted.
+//
+// If the cursor isn't exhausted, that doesn't mean the postings list has
+// necessarily found the document: it just means that if the doc was present
+// in any block, it would be in the block that the cursor is pointing at. You
+// will still have to load the block and check the docnums yourself.
 func (c *blockCursor) seekBlock(target uint32) {
 	for !c.exhausted && c.entry.lastDoc < target {
 		c.nextBlock()
 	}
 }
 
-// isExhausted reports whether the cursor has no more blocks to offer. Named
-// with the is- prefix rather than matching the exhausted field verbatim,
-// since Go doesn't allow a method and a field to share one identifier.
-// Confirmed inlined at its call sites (-gcflags=-m), same as the
-// block-reading accessors below.
+// isExhausted reports whether the cursor reached the end of the postings list.
+// Use as a termination case for calling nextBlock, or to check if seekBlock
+// found a block that could contain target.
 func (c *blockCursor) isExhausted() bool { return c.exhausted }
 
 // -------------------------------------------------------------------------
-// block reading: decoding the block movement settled on, and looking at what
-// that decode produced. loadBlock is the entry point PostingsIterator calls
-// (blockOffsetAt and loadTail, the internals it delegates to for a full
-// block and the tail respectively, are in the helpers section below);
-// numDocs, lastDoc, docs and freqs are read afterward by a caller such as
-// PostingsIterator; searchBlock queries the same in-block arrays loadBlock
-// filled in.
 //
-// numDocs, lastDoc, docs and freqs are trivial enough that the compiler
-// inlines all of them (checked directly with -gcflags=-m: every one of these
-// gets "inlining call to" at its call sites, not just "can inline" in
-// isolation), so this costs nothing at runtime; it exists to give
-// PostingsIterator a named boundary to read through instead of reaching into
-// the cursor's own bookkeeping fields directly. Unexported like blockCursor
-// itself -- this is a same-package boundary, not a public one.
+// BLOCK READING APIs
+//
 // -------------------------------------------------------------------------
 
+// This function _has_ to be called prior to any of the following block reading
+// functions. loadBlock actually unpacks the block and populates buf, which is
+// where the block reading APIs are served from.
 func (c *blockCursor) loadBlock() error {
 	if c.loaded {
 		return nil
 	}
 	c.loaded = true
+
+	// lazy allocation of buf, since it's a pretty expensive
+	// operation.
+	if c.buf == nil {
+		c.buf = &blockBuf{}
+		if !c.wantFreqs {
+			copy(c.buf.freqs[:], allOnes[:])
+		}
+	}
 
 	if c.exhausted {
 		copy(c.buf.docs[:], allTerminated[:])
@@ -264,12 +266,10 @@ func (c *blockCursor) numDocs() int { return c.nDocs }
 // lastDoc is the highest doc number in the currently loaded block.
 func (c *blockCursor) lastDoc() uint32 { return c.blockLastDoc }
 
-// docs returns the currently loaded block's whole doc-number array, for a
-// caller that needs to operate across it in bulk -- namely searchBlock --
-// rather than one entry at a time.
+// docs returns the currently loaded block's docnum array
 func (c *blockCursor) docs() *[postingsBlockLen]uint32 { return &c.buf.docs }
 
-// freqs returns the currently loaded block's whole term-frequency array.
+// freqs returns the currently loaded block's freq array.
 func (c *blockCursor) freqs() *[postingsBlockLen]uint32 { return &c.buf.freqs }
 
 // searchBlock returns the index of the first entry in a decoded block that is
@@ -306,13 +306,18 @@ func searchBlock(arr *[postingsBlockLen]uint32, target uint32) int {
 }
 
 // -------------------------------------------------------------------------
-// helpers: called only by the block-movement and block-reading functions
-// above, never directly by anything outside blockCursor. selectBlock is the
-// step rewind and nextBlock both land on; blockOffsetAt and loadTail are
-// loadBlock's own internals for the two things it can decode -- a full
-// block, or the short uvarint tail; b2i is the branchless comparison
-// searchBlock is built from.
+//
+// HELPERS
+//
 // -------------------------------------------------------------------------
+
+// rewind returns the cursor to the first block without re-reading the footer.
+func (c *blockCursor) rewind() {
+	c.blockIdx = 0
+	c.prevLastDoc = 0
+	c.loaded = false
+	c.selectBlock()
+}
 
 // selectBlock reads the skip entry for blockIdx, or switches to the tail, or
 // marks the cursor spent.

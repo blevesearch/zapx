@@ -30,6 +30,9 @@ type Dictionary struct {
 	fieldID uint16
 	fst     *vellum.FST
 
+	// norms is the columnar store of quantized norms
+	norms *normsColumn
+
 	fstReader *vellum.Reader
 
 	bytesRead uint64
@@ -94,16 +97,10 @@ func (d *Dictionary) postingsListInit(rv *PostingsList, except *roaring.Bitmap) 
 	if rv == nil || rv == emptyPostingsList {
 		rv = &PostingsList{}
 	} else {
-		postings := rv.postings
-		if postings != nil {
-			postings.Clear()
-		}
-
 		*rv = PostingsList{} // clear the struct
-
-		rv.postings = postings
 	}
 	rv.sb = d.sb
+	rv.norms = d.norms
 	rv.except = except
 	return rv
 }
@@ -148,10 +145,6 @@ func (d *Dictionary) automatonIterator(a segment.Automaton,
 		return rv
 	}
 	return emptyDictionaryIterator
-}
-
-func (d *Dictionary) incrementBytesRead(val uint64) {
-	d.bytesRead += val
 }
 
 func (d *Dictionary) BytesRead() uint64 {

@@ -369,4 +369,25 @@ func TestFileCallbacks(t *testing.T) {
 
 	TestGeoIndexSectionRoundTrip(t)
 	TestGeoIndexMerge(t)
+
+	// The block postings format is the reason each block is run through the
+	// hook on its own rather than as one blob per term. An encrypting callback
+	// changes a block's length, so the skip list records where each block
+	// actually landed instead of deriving it from the bit widths; these are the
+	// tests that would notice if that stopped being true.
+	TestBlockPostingsRoundTrip(t)
+	TestBlockPostingsCount(t)
+	TestBlockPostingsFastScanNoFreqNorm(t)
+	TestBlockPostingsAdvance(t)
+	TestBlockPostingsAdvanceWithDeletions(t)
+	TestBlockPostingsWithDeletions(t)
+	TestBlockPostingsLocations(t)
+	TestBlockPostingsLocationsWithAdvance(t)
+	TestBlockPostingsNormsRoundTrip(t)
+	TestNormsColumnConstantEncoding(t)
+	TestBlockPostingsMerge(t)
+	TestTailSeekPastRangeSkipsDecode(t)
+	TestTailBlockMaxBound(t)
+	TestOneHitEncoding(t)
+	TestFSTVal1HitBitLayout(t)
 }

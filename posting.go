@@ -367,8 +367,14 @@ func (rv *PostingsList) read(postingsOffset uint64, d *Dictionary) error {
 type PostingsIterator struct {
 	postings *PostingsList
 
-	cursor     blockCursor
-	cur        int // index of the current posting within the decoded block
+	cursor blockCursor
+	cur    int // index of the current posting within the decoded block
+
+	// cursor handles iterating only at the block level, while cur
+	// handles iterating _within_ a block. This can lead to cases where
+	// cursor and cur are inconsistent, in which case positioned is false.
+	// This happens in two cases: when the iterator is first initialized
+	// and when the cursor is exhausted.
 	positioned bool
 
 	// nextAllowed is the lowest doc number the next call may return: one past
@@ -429,13 +435,7 @@ func (i *PostingsIterator) Size() int {
 	return sizeInBytes
 }
 
-// Implements the segment.DiskStatsReporter interface.
-//
-// The count is assembled from the three readers that actually touch the
-// mapping -- the block cursor, the location decoder, and whatever the iterator
-// itself charged at setup -- rather than being overwritten by whichever one
-// reported last. Callers take deltas of this across a query, so it has to be
-// cumulative and monotonic between resets.
+// implements the segment.DiskStatsReporter interface.
 func (i *PostingsIterator) ResetBytesRead(val uint64) {
 	i.bytesRead = val
 	i.cursor.bytesRead = 0
@@ -452,6 +452,7 @@ func (i *PostingsIterator) BytesRead() uint64 {
 	return rv
 }
 
+// never writes anything, just iterates
 func (i *PostingsIterator) BytesWritten() uint64 {
 	return 0
 }

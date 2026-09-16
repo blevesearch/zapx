@@ -275,7 +275,7 @@ func mergeAndPersistInvertedSection(segments []*SegmentBase, dropsIn []*roaring.
 				if err != nil {
 					return nil, err
 				}
-				upperDocFreq += postings.rawDocFreq()
+				upperDocFreq += postings.Count()
 				if postings.footer.hasLocs() {
 					termHasLocs = true
 				}

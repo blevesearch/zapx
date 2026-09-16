@@ -72,8 +72,10 @@ func init() {
 
 // Represented as 1100 0000 0000 ... -> mask to get the top two bits
 const FSTValEncodingMask = uint64(0xc000000000000000)
+
 // Represented as all zeros, covers the general encoding case described above
 const FSTValEncodingGeneral = uint64(0x0000000000000000)
+
 // Represented as 1000 0000 0000 ... -> covers the 1 hit case
 const FSTValEncoding1Hit = uint64(0x8000000000000000)
 
@@ -118,7 +120,8 @@ type PostingsList struct {
 	// cached.
 	// It's needed for resolving external _id strings to internal doc
 	// numbers, not on the scan path, so will not impact search latency
-	// TODO: will it blow up memory?
+	// TODO: this will deserialize the entire on disk postings list to an
+	// in memory roaring bitmap, might have to do something smarter.
 	docBM *roaring.Bitmap
 
 	// chunkSize governs the location blob, which keeps the chunked encoding of
@@ -158,6 +161,7 @@ func (p *PostingsList) OrInto(receiver *roaring.Bitmap) {
 
 // docBitmap materialises the postings list as a roaring bitmap, minus any
 // deletions, and caches it. See the note on PostingsList.docBM.
+// NOTE: avoid using this in the search path as it is expensive
 func (p *PostingsList) docBitmap() (*roaring.Bitmap, error) {
 	if p.docBM != nil {
 		return p.docBM, nil
@@ -251,19 +255,14 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 	rv.docNum1Hit = DocNum1HitFinished
 
 	if p.except != nil && !p.except.IsEmpty() {
-		// Deletions are walked in lockstep with the postings rather than
-		// pre-ANDed into a new bitmap: both sequences are ascending, so a merge
-		// scan costs nothing per document and, unlike roaring.AndNot, allocates
-		// nothing per term.
 		rv.exceptItr = p.except.Iterator()
 	}
 
 	if p.is1Hit {
-		// The cursor is never consulted on this path -- is1Hit/docNum1Hit
-		// short-circuit every place that would read it (nextDocNumAtOrAfter
-		// returns before reaching the cursor-driven code, and fastScan, the
-		// only other thing that touches it, is never set true here) -- so
-		// there is nothing to mark exhausted.
+		// mark the iterator with the 1 hit flag and give it the
+		// docNum and freq of the one hit. The iterator will then
+		// short circuit and return these values before getting
+		// exhausted.
 		rv.is1Hit = true
 		rv.docNum1Hit = p.docNum1Hit
 		rv.freq1Hit = p.freq1Hit
@@ -279,18 +278,17 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 	if p.norms.kind == normsKindAbsent {
 		rv.normConst = normFactorFromID(0)
 	}
-	// !p.is1Hit is redundant with the early return above -- this line is
-	// never reached when it's true -- but stepFast only ever checks
-	// fastScan, not is1Hit itself, so writing it into the expression makes
-	// that exclusion something the boolean enforces on its own, rather than
-	// something a future reordering of this function could silently break.
+
 	rv.fastScan = !p.is1Hit && rv.exceptItr == nil && !includeLocs
 
+	// init the blockCursor
 	err := rv.cursor.init(p.sb, &p.footer, rv.includeFreqNorm)
 	if err != nil {
 		return rv, err
 	}
 
+	// locs still uses the old varint stream format, and so will require
+	// the intDecoder
 	if rv.includeLocs && p.footer.hasLocs() {
 		rv.locReader = newChunkedIntDecoder(p.sb.mem, p.footer.locsStart, rv.locReader, p.sb.fileReader)
 		rv.hasLocs = true
@@ -300,37 +298,18 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 	return rv, nil
 }
 
-// rawDocFreq is the number of postings recorded on disk, before any deletions
-// are taken into account.
-func (p *PostingsList) rawDocFreq() uint64 {
+// Count returns the number of postings WITHOUT considering the except bitmap.
+// this is a conscious step, because the term field reader in bleve will call
+// this count per segment on _every_ term scorer creation, which is very very
+// expensive: it would effectively mean an extra postings list walk to get the
+// exact count for each query. This is adopted from Lucene where they just
+// ignore the except bitmap for performance reasons. We can therefore
+// expect some score drift.
+func (p *PostingsList) Count() uint64 {
 	if p.is1Hit {
 		return 1
 	}
 	return uint64(p.footer.docFreq)
-}
-
-// Count returns the number of items on this postings list
-func (p *PostingsList) Count() uint64 {
-	if p.is1Hit {
-		if p.docNum1Hit == DocNum1HitFinished {
-			return 0
-		}
-		if p.except != nil && p.except.Contains(uint32(p.docNum1Hit)) {
-			return 0
-		}
-		return 1
-	}
-	// Without deletions the answer is on the term footer, so the common case
-	// costs nothing. With deletions it needs the doc set, which is materialised
-	// once and cached.
-	if p.except == nil || p.except.IsEmpty() {
-		return uint64(p.footer.docFreq)
-	}
-	bm, err := p.docBitmap()
-	if err != nil {
-		return 0
-	}
-	return bm.GetCardinality()
 }
 
 // Implements the segment.DiskStatsReporter interface

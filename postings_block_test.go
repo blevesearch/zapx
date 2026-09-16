@@ -442,13 +442,16 @@ func TestBlockPostingsWithDeletions(t *testing.T) {
 				term, len(got), len(want), got, want)
 		}
 
+		// Count() reports the raw, on-disk doc frequency regardless of
+		// deletions (matching tantivy/Elasticsearch) -- deletions only
+		// affect actual iteration, checked above via collect().
 		dict, _ := sb.dictionary("body")
 		pl, err := dict.postingsList([]byte(term), except, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, want := pl.Count(), uint64(len(want)); got != want {
-			t.Errorf("term %q: Count() with deletions = %d, want %d", term, got, want)
+		if got, want := pl.Count(), uint64(len(model.terms[term])); got != want {
+			t.Errorf("term %q: Count() = %d, want raw docFreq %d", term, got, want)
 		}
 	}
 }

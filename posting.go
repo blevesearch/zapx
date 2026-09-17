@@ -413,6 +413,12 @@ type PostingsIterator struct {
 	docNum1Hit uint64
 	freq1Hit   uint64
 
+	// blockDocsBuf/blockFreqsBuf back CurrentBlock(): a widened, reusable
+	// []uint64 view over the blockCursor's native [128]uint32 arrays, lazily
+	// allocated since most iterators never call CurrentBlock.
+	blockDocsBuf  []uint64
+	blockFreqsBuf []uint64
+
 	buf []byte
 
 	includeFreqNorm bool

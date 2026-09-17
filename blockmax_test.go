@@ -94,17 +94,18 @@ func TestBlockMaxCapability(t *testing.T) {
 		}
 
 		// Batch-decode the same block and check it against the model exactly.
-		docs, freqs, ok := bm.CurrentBlock()
+		docs, freqs, norms, ok := bm.CurrentBlock()
 		if !ok {
 			t.Fatal("CurrentBlock() reported no block")
 		}
-		if len(docs) != postingsBlockLen || len(freqs) != postingsBlockLen {
-			t.Fatalf("CurrentBlock() returned %d docs / %d freqs, want %d", len(docs), len(freqs), postingsBlockLen)
+		if len(docs) != postingsBlockLen || len(freqs) != postingsBlockLen || len(norms) != postingsBlockLen {
+			t.Fatalf("CurrentBlock() returned %d docs / %d freqs / %d norms, want %d", len(docs), len(freqs), len(norms), postingsBlockLen)
 		}
 		for k := 0; k < postingsBlockLen; k++ {
-			if docs[k] != postings[k].docNum || freqs[k] != postings[k].freq {
-				t.Fatalf("CurrentBlock()[%d] = (doc %d, freq %d), want (doc %d, freq %d)",
-					k, docs[k], freqs[k], postings[k].docNum, postings[k].freq)
+			wantNorm := normFactorFromID(postings[k].normID)
+			if docs[k] != postings[k].docNum || freqs[k] != postings[k].freq || norms[k] != wantNorm {
+				t.Fatalf("CurrentBlock()[%d] = (doc %d, freq %d, norm %v), want (doc %d, freq %d, norm %v)",
+					k, docs[k], freqs[k], norms[k], postings[k].docNum, postings[k].freq, wantNorm)
 			}
 		}
 
@@ -125,7 +126,7 @@ func TestBlockMaxCapability(t *testing.T) {
 		if got, ok := bm.BlockMinNormID(); !ok || got != wantMinNormID {
 			t.Fatalf("tail BlockMinNormID() = (%d, %v), want (%d, true)", got, ok, wantMinNormID)
 		}
-		docs, freqs, ok = bm.CurrentBlock()
+		docs, freqs, norms, ok = bm.CurrentBlock()
 		if !ok {
 			t.Fatal("CurrentBlock() on the tail reported no block")
 		}
@@ -134,9 +135,10 @@ func TestBlockMaxCapability(t *testing.T) {
 			t.Fatalf("CurrentBlock() on the tail returned %d docs, want %d", len(docs), len(wantTail))
 		}
 		for k := range wantTail {
-			if docs[k] != wantTail[k].docNum || freqs[k] != wantTail[k].freq {
-				t.Fatalf("tail CurrentBlock()[%d] = (doc %d, freq %d), want (doc %d, freq %d)",
-					k, docs[k], freqs[k], wantTail[k].docNum, wantTail[k].freq)
+			wantNorm := normFactorFromID(wantTail[k].normID)
+			if docs[k] != wantTail[k].docNum || freqs[k] != wantTail[k].freq || norms[k] != wantNorm {
+				t.Fatalf("tail CurrentBlock()[%d] = (doc %d, freq %d, norm %v), want (doc %d, freq %d, norm %v)",
+					k, docs[k], freqs[k], norms[k], wantTail[k].docNum, wantTail[k].freq, wantNorm)
 			}
 		}
 
@@ -147,7 +149,7 @@ func TestBlockMaxCapability(t *testing.T) {
 		if _, ok := bm.BlockMaxTF(); ok {
 			t.Fatal("BlockMaxTF() after exhaustion reported a bound")
 		}
-		if _, _, ok := bm.CurrentBlock(); ok {
+		if _, _, _, ok := bm.CurrentBlock(); ok {
 			t.Fatal("CurrentBlock() after exhaustion reported a block")
 		}
 	})
@@ -165,7 +167,7 @@ func TestBlockMaxCapability(t *testing.T) {
 		if _, ok := bm.SeekBlock(postings[mid].docNum); !ok {
 			t.Fatal("SeekBlock reported no block")
 		}
-		if _, _, ok := bm.CurrentBlock(); !ok {
+		if _, _, _, ok := bm.CurrentBlock(); !ok {
 			t.Fatal("CurrentBlock reported no block")
 		}
 
@@ -227,7 +229,7 @@ func TestBlockMaxCapability(t *testing.T) {
 		if _, ok := bm.BlockMinNormID(); ok {
 			t.Fatal("BlockMinNormID on a 1-hit term reported a bound")
 		}
-		if _, _, ok := bm.CurrentBlock(); ok {
+		if _, _, _, ok := bm.CurrentBlock(); ok {
 			t.Fatal("CurrentBlock on a 1-hit term reported a block")
 		}
 	})
@@ -276,7 +278,7 @@ func TestBlockMaxCapabilityNoFreqField(t *testing.T) {
 	if _, ok := bm.BlockMinNormID(); ok {
 		t.Fatal("BlockMinNormID on a no-freq field reported a bound")
 	}
-	docs, _, ok := bm.CurrentBlock()
+	docs, _, _, ok := bm.CurrentBlock()
 	if !ok {
 		t.Fatal("CurrentBlock on a no-freq field reported no block")
 	}

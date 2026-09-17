@@ -94,28 +94,31 @@ func (i *PostingsIterator) NormFromID(normID uint8) float64 {
 // frequencies as iterator-owned []uint64 slices -- a thin widening adapter
 // over the blockCursor's native [128]uint32 arrays, which the batch-scoring
 // (conjunction) path can score directly without going through Next/Advance
-// per document.
-func (i *PostingsIterator) CurrentBlock() ([]uint64, []uint64, bool) {
+// per document. Norms are included (via the same per-doc lookup Posting.Norm
+// uses) so that scoring a candidate never needs a separate seek.
+func (i *PostingsIterator) CurrentBlock() ([]uint64, []uint64, []float64, bool) {
 	if i.is1Hit || i.postings == nil || i.cursor.isExhausted() {
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 	if err := i.cursor.loadBlock(); err != nil {
 		i.err = err
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 	n := i.cursor.numDocs()
 	if n == 0 {
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 
 	if cap(i.blockDocsBuf) < n {
 		i.blockDocsBuf = make([]uint64, n)
 		i.blockFreqsBuf = make([]uint64, n)
+		i.blockNormsBuf = make([]float64, n)
 	}
 	docs, freqs := i.cursor.docs(), i.cursor.freqs()
 	for k := 0; k < n; k++ {
 		i.blockDocsBuf[k] = uint64(docs[k])
 		i.blockFreqsBuf[k] = uint64(freqs[k])
+		i.blockNormsBuf[k] = normFactorFromID(i.normIDOf(docs[k]))
 	}
-	return i.blockDocsBuf[:n], i.blockFreqsBuf[:n], true
+	return i.blockDocsBuf[:n], i.blockFreqsBuf[:n], i.blockNormsBuf[:n], true
 }

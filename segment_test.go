@@ -403,9 +403,12 @@ func TestOpenMulti(t *testing.T) {
 		t.Fatal("got nil postings list, expected non-nil")
 	}
 
+	// Count() reports the raw, on-disk doc frequency regardless of the
+	// exclude bitmap (matching tantivy/Elasticsearch) -- the exclusion only
+	// affects actual iteration, checked below.
 	postingsListExcludingCount := postingsListExcluding.Count()
-	if postingsListExcludingCount != 1 {
-		t.Errorf("expected count from postings list to be 1, got %d", postingsListExcludingCount)
+	if postingsListExcludingCount != 2 {
+		t.Errorf("expected raw count from postings list to be 2, got %d", postingsListExcludingCount)
 	}
 
 	postingsItrExcluding := postingsListExcluding.Iterator(true, true, true, nil)

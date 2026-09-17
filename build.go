@@ -27,7 +27,7 @@ import (
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 
-const Version uint32 = 17
+const Version uint32 = 18
 
 const Type string = "zap"
 

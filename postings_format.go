@@ -22,41 +22,400 @@ import (
 	"github.com/blevesearch/freeway/bitpack"
 )
 
-// The on-disk shape of one term's postings.
+// The code here decides the on disk shape of the postings list along with
+// the norms column (which is persisted separately, refer to zap.md)
 //
-// Doc numbers and term frequencies are bitpacked 128 at a time (see package
-// bitpack); whatever is left over at the end of the list, fewer than 128
-// documents, is written as plain uvarints.  A flat skip list carries one
-// fixed-size entry per full block, which is what lets a reader hop to the block
-// containing a target document without decoding anything.
+// The norms column is not part of the postings list anymore like prior
+// versions of zapx, and is instead just a list organized by docid. The
+// norms are also quantized for compression; see fieldnorm.go.
 //
-// Field norms are not here at all.  They live in a dense column shared by every
-// term of the field -- see normsColumn -- because a term appearing in a million
-// documents would otherwise carry a million copies of the same few lengths.
+// Docids and freqs are bitpacked in blocks of 128, and if the tail of the
+// postings list contains less than 128 docs, we use varints to pack them
+// instead. The postingsSerializer struct here is responsible for writing
+// the postings list, and the blockCursor in postings_block.go reads it.
 //
-// The regions are written in the order a writer can produce them, and the
-// footer comes last so nothing has to be buffered or back-patched:
+// The locs column follows the old intcoder/intdecoder format.
 //
-//	[payload]    blocks, then the uvarint tail
-//	[locs]       chunkedIntCoder blob, unchanged from earlier zap versions
-//	[skip]       one entry per full block, then a trailing tail offset
-//	[footer]     <- the FST value points here
+// The skip entries contain metadata about each block, including the tail
+// block. The skipEntry struct is responsible for encoding/decoding it, and
+// the blockCursor iterates over all the skip entries.
 //
-// The reader walks backwards from the footer: skip starts at footer-skipLen,
-// locs at skip-locsLen, payload at locs-payloadLen.
+// Finally, the term footer contains the offsets and lengths about the previous
+// sections. The vellum FST points to the term footer.
+//
+// The regions are organized as follows:
+// (--- per field ---)
+// [norms column]
+//    (--- per term ---)
+//    [postings list]
+//    [locs]
+//    [skip entries]
+//    [term footer]
 
-const postingsBlockLen = bitpack.BlockLen
+// --------------------------------------------------------------------------
+//
+// NORMS
+//
+// --------------------------------------------------------------------------
 
-// Term footer flags.
+// Field norms: one quantized byte per document, in a column shared by every
+// term of the field.  See fieldnorm.go for the quantization.
 const (
-	termHasFreqs = 1 << 0
-	termHasLocs  = 1 << 1
+	// Used when field norms are not needed/used
+	normsKindAbsent = 0
+	// Used when all documents in the field have the same field norm. Instead
+	// of storing an entry for every doc separately, we store only one entry
+	// representing all docs.
+	normsKindConstant = 1
+	// Used when documents do not have the same norm in a field. We store a
+	// unique entry per doc.
+	normsKindDense = 2
 )
 
-// docNumTerminated pads a decoded doc block out to a full 128 entries.  Keeping
-// every block the same length, non-decreasing, and ending in a value no target
-// can exceed is what makes the in-block search branchless.
-const docNumTerminated = uint32(math.MaxUint32)
+type normsColumn struct {
+	kind     uint8
+	constant uint8
+	dense    []uint8
+}
+
+// normsAbsent is the column a field without norms gets; every lookup returns
+// id 0.
+var normsAbsent = &normsColumn{kind: normsKindAbsent}
+
+// id returns the quantized field length for a document. A document without
+// the field returns 0
+func (n *normsColumn) id(docNum uint32) uint8 {
+	switch n.kind {
+	case normsKindDense:
+		if int(docNum) < len(n.dense) {
+			return n.dense[docNum]
+		}
+	case normsKindConstant:
+		return n.constant
+	}
+	return 0
+}
+
+// Writes the column for one field.
+//
+// normsKindAbsent:   [0]
+//
+// normsKindConstant: [1][constantNorm] -> constantNorm shared by all docs
+//
+// normsKindDense:    [2][norm1][norm2]...[normn] -> one norm per doc
+func encodeNormsColumn(ids []uint8, dst []byte) []byte {
+	if len(ids) == 0 {
+		return append(dst, normsKindAbsent)
+	}
+	constant := true
+	for _, id := range ids[1:] {
+		if id != ids[0] {
+			constant = false
+			break
+		}
+	}
+	if constant {
+		return append(dst, normsKindConstant, ids[0])
+	}
+	dst = append(dst, normsKindDense)
+	return append(dst, ids...)
+}
+
+func decodeNormsColumn(buf []byte, numDocs uint64) (*normsColumn, error) {
+	if len(buf) == 0 {
+		return normsAbsent, nil
+	}
+	switch buf[0] {
+	case normsKindAbsent:
+		return normsAbsent, nil
+	case normsKindConstant:
+		if len(buf) < 2 {
+			return nil, fmt.Errorf("corrupt norms column: truncated constant")
+		}
+		return &normsColumn{kind: normsKindConstant, constant: buf[1]}, nil
+	case normsKindDense:
+		dense := buf[1:]
+		if uint64(len(dense)) != numDocs {
+			return nil, fmt.Errorf("corrupt norms column: %d entries for %d docs",
+				len(dense), numDocs)
+		}
+		return &normsColumn{kind: normsKindDense, dense: dense}, nil
+	}
+	return nil, fmt.Errorf("corrupt norms column: unknown kind %d", buf[0])
+}
+
+// --------------------------------------------------------------------------
+//
+// POSTINGS LIST
+//
+// --------------------------------------------------------------------------
+
+// Signifies the number of postings bitpacked into a block. This depends on
+// the SIMD kernels defined in freeway/bitpack, so if this number needs to be
+// changed the SIMD kernels have to be rewritten to support that new block
+// width.
+const postingsBlockLen = bitpack.BlockLen
+
+// postingsSerializer writes one term's postings in the block format described
+// above.  It is the only implementation of the write side: building a fresh
+// segment and merging existing ones both drive it, so there is no way for the
+// two to drift apart.
+//
+// The caller's protocol for one term is:
+//
+//	s.StartTerm(hasFreqs, hasLocs, normIDs)
+//	for each doc in increasing doc number: s.AddDoc(docNum, freq)
+//	if v, ok := s.OneHit(); ok {
+//	        // nothing was written; v is the FST value
+//	} else {
+//	        s.FinishPayload()
+//	        _, locBytes, _ := locEncoder.writeAt(w)
+//	        off, _ := s.Close(uint64(locBytes), locChunkSize)
+//	}
+//
+// Everything but the skip buffer streams straight to the writer, so a term with
+// a million documents costs a 128-slot staging block and about eight kilobytes
+// of skip data, not a copy of its whole postings list.
+//
+// Close, the last step of the protocol, is under TERM FOOTER below rather
+// than here alongside the rest of this type's methods: its job is writing
+// the footer (and the skip region the footer points at), not the postings
+// list, so it's grouped with the format it produces instead of the type it
+// happens to be a method of.
+type postingsSerializer struct {
+	// w is the segment writer every term's postings land in. It is set once,
+	// for the life of the serializer -- a single build or merge writes to one
+	// FileWriter throughout -- rather than threaded through every method call.
+	w *FileWriter
+
+	docs  [postingsBlockLen]uint32
+	freqs [postingsBlockLen]uint32
+	n     int // documents staged in docs/freqs
+
+	docFreq  uint32
+	lastDoc  uint32 // last doc of the last flushed block: the delta anchor
+	hasFreqs bool
+	hasLocs  bool
+
+	// normIDs is the field's quantized norm column, indexed by doc number.  It
+	// is only read to compute the per-block score bound, and may be nil.
+	normIDs []uint8
+
+	payloadStart uint64
+	payloadEnd   uint64
+
+	skipBuf   []byte
+	packBuf   []byte
+	tailBuf   []byte
+	footerBuf []byte
+}
+
+func (s *postingsSerializer) StartTerm(hasFreqs, hasLocs bool, normIDs []uint8) {
+	s.n = 0
+	s.docFreq = 0
+	s.lastDoc = 0
+	s.hasFreqs = hasFreqs
+	s.hasLocs = hasLocs
+	s.normIDs = normIDs
+	s.payloadStart = uint64(s.w.Count())
+	s.payloadEnd = s.payloadStart
+	s.skipBuf = s.skipBuf[:0]
+}
+
+// AddDoc stages one posting.  Doc numbers must arrive strictly increasing.
+func (s *postingsSerializer) AddDoc(docNum, freq uint32) error {
+	s.docs[s.n] = docNum
+	s.freqs[s.n] = freq
+	s.n++
+	s.docFreq++
+	if s.n == postingsBlockLen {
+		return s.flushBlock()
+	}
+	return nil
+}
+
+// blockBound returns the pair that bounds the BM25 contribution of the first
+// n staged documents: the shortest field length and the highest term
+// frequency -- what a skip entry's minNormID/maxTF record; see the note
+// under SKIP ENTRIES on why the two need not come from the same document.
+// Called with postingsBlockLen for a full block and with s.n for the tail.
+func (s *postingsSerializer) blockBound(n int) (minNormID, maxTF uint8) {
+	minNormID = 0xFF
+	var mtf uint32
+	for i := 0; i < n; i++ {
+		var id uint8
+		if int(s.docs[i]) < len(s.normIDs) {
+			id = s.normIDs[s.docs[i]]
+		}
+		if id < minNormID {
+			minNormID = id
+		}
+		if s.freqs[i] > mtf {
+			mtf = s.freqs[i]
+		}
+	}
+	return minNormID, encodeBlockMaxTF(mtf)
+}
+
+func (s *postingsSerializer) flushBlock() error {
+	blockOffset := uint64(s.w.Count()) - s.payloadStart
+	if blockOffset > math.MaxUint32 {
+		return fmt.Errorf("postings payload for a single term exceeds 4GiB")
+	}
+
+	docNumBits := bitpack.MaxBitsDelta1(&s.docs, s.lastDoc)
+	size := bitpack.BlockBytes(docNumBits)
+	var tfNumBits uint8
+	if s.hasFreqs {
+		tfNumBits = bitpack.MaxBitsMinus1(&s.freqs)
+		size += bitpack.BlockBytes(tfNumBits)
+	}
+
+	if cap(s.packBuf) < size {
+		s.packBuf = make([]byte, size)
+	}
+	buf := s.packBuf[:size]
+	bitpack.PackDelta1(&s.docs, s.lastDoc, docNumBits, buf)
+	if s.hasFreqs {
+		bitpack.PackMinus1(&s.freqs, tfNumBits, buf[bitpack.BlockBytes(docNumBits):])
+	}
+
+	// Each block goes through the writer's hook on its own.  That is what lets
+	// a reader with an encryption or compression callback decode a single
+	// block rather than a whole term, and it is why the skip entry records the
+	// block's byte offset instead of deriving it from the bit widths.
+	processed := s.w.process(buf)
+	if _, err := s.w.Write(processed); err != nil {
+		return err
+	}
+
+	e := skipEntry{
+		lastDoc:     s.docs[postingsBlockLen-1],
+		blockOffset: uint32(blockOffset),
+		docNumBits:  docNumBits,
+		tfNumBits:   tfNumBits,
+	}
+	if s.hasFreqs {
+		e.minNormID, e.maxTF = s.blockBound(postingsBlockLen)
+	}
+	var entry [skipEntryLenWithFreqs]byte
+	s.skipBuf = append(s.skipBuf, entry[:e.encode(entry[:], s.hasFreqs)]...)
+
+	s.lastDoc = s.docs[postingsBlockLen-1]
+	s.n = 0
+	return nil
+}
+
+// OneHit reports the FST value for a term that can skip the general encoding
+// entirely: a single document, no locations, and a doc number and frequency
+// that both fit the bits available.  Nothing has been written to w at that
+// point, because a term this small never filled a block.
+//
+// The long tail of a real dictionary is terms like this, so avoiding an
+// indirection for them is worth the special case.  Unlike earlier zap versions
+// the norm does not have to be carried in the FST value -- it is in the
+// field's norm column -- which leaves the encoding to just the doc number and
+// the frequency.  When the field has frequencies disabled, freq is not read
+// from the document at all: 1 is encoded, matching what a reader gets back
+// for any term in such a field regardless of encoding (see wantFreqs in
+// postings_block.go).
+func (s *postingsSerializer) OneHit() (uint64, bool) {
+	if s.docFreq != 1 || s.hasLocs || s.n != 1 {
+		return 0, false
+	}
+	freq := uint64(1)
+	if s.hasFreqs {
+		freq = uint64(s.freqs[0])
+		if !under32Bits(freq) {
+			return 0, false
+		}
+	}
+	docNum := uint64(s.docs[0])
+	if !under32Bits(docNum) {
+		return 0, false
+	}
+	return FSTValEncode1Hit(docNum, freq), true
+}
+
+// FinishPayload flushes the leftover documents as a uvarint tail and closes out
+// the payload region.  Fewer than 128 documents cannot be bitpacked, and the
+// tail is short by construction, so uvarints cost nothing worth optimising.
+func (s *postingsSerializer) FinishPayload() error {
+	tailOffset := uint64(s.w.Count()) - s.payloadStart
+
+	if s.n > 0 {
+		if tailOffset > math.MaxUint32 {
+			return fmt.Errorf("postings payload for a single term exceeds 4GiB")
+		}
+
+		buf := s.tailBuf[:0]
+		// Plain deltas here, not delta-minus-one: the tail is decoded by the
+		// uvarint reader, which has no bit width to save.
+		prev := s.lastDoc
+		for i := 0; i < s.n; i++ {
+			buf = binary.AppendUvarint(buf, uint64(s.docs[i]-prev))
+			prev = s.docs[i]
+		}
+		if s.hasFreqs {
+			for i := 0; i < s.n; i++ {
+				buf = binary.AppendUvarint(buf, uint64(s.freqs[i]))
+			}
+		}
+		s.tailBuf = buf
+
+		processed := s.w.process(buf)
+		if _, err := s.w.Write(processed); err != nil {
+			return err
+		}
+
+		// The tail is a skipEntry in every sense that matters -- lastDoc is
+		// what lets a seek past a term's entire range conclude "not present"
+		// from skip metadata alone instead of always decoding the tail, and
+		// blockOffset is where its bytes start, exactly like a full block.
+		// This is the common case: most terms in a real dictionary never
+		// fill even one 128-document block, so they are nothing but a tail,
+		// and this is the only bound they get.
+		e := skipEntry{
+			lastDoc:     prev,
+			blockOffset: uint32(tailOffset),
+		}
+		if s.hasFreqs {
+			e.minNormID, e.maxTF = s.blockBound(s.n)
+		}
+		var entry [tailEntryLenWithFreqs]byte
+		s.skipBuf = append(s.skipBuf, entry[:e.encodeTail(entry[:], s.hasFreqs)]...)
+	}
+
+	s.payloadEnd = uint64(s.w.Count())
+	s.n = 0
+	return nil
+}
+
+// BytesWritten reports the payload plus skip bytes this term contributed, for
+// the segment's write statistics.
+func (s *postingsSerializer) BytesWritten() uint64 {
+	return (s.payloadEnd - s.payloadStart) + uint64(len(s.skipBuf))
+}
+
+// --------------------------------------------------------------------------
+//
+// LOCS
+//
+// --------------------------------------------------------------------------
+
+// Term locations are not encoded or decoded in this file. They are a
+// chunkedIntCoder/chunkedIntDecoder blob (intcoder.go/intdecoder.go),
+// unchanged from earlier zap versions, written once per field rather than
+// once per term, so nothing here re-derives their format. What does live
+// here is the metadata a term's footer needs to find and size that blob --
+// locsLen and locChunkSize, under TERM FOOTER below -- and the hasLocs flag
+// recording whether a term has one at all.
+
+// --------------------------------------------------------------------------
+//
+// SKIP ENTRIES
+//
+// --------------------------------------------------------------------------
 
 // Skip entry layout.  Each full block gets one entry:
 //
@@ -212,7 +571,17 @@ func encodeBlockMaxTF(tf uint32) uint8 {
 	return uint8(tf)
 }
 
-// ------------------------------------------------------------- term footer
+// --------------------------------------------------------------------------
+//
+// TERM FOOTER
+//
+// --------------------------------------------------------------------------
+
+// Term footer flags.
+const (
+	termHasFreqs = 1 << 0
+	termHasLocs  = 1 << 1
+)
 
 type termFooter struct {
 	docFreq    uint32
@@ -326,86 +695,54 @@ func memAt(mem []byte, offset uint64, n int) []byte {
 	return mem[offset:end]
 }
 
-// --------------------------------------------------------------- norms column
+// Close writes the skip region and the term footer, and returns the footer's
+// offset, which is what goes into the FST. The last step of
+// postingsSerializer's protocol -- see the type's own doc comment, under
+// POSTINGS LIST, for why this method lives here instead of alongside it.
+func (s *postingsSerializer) Close(locsLen, locChunkSize uint64) (uint64, error) {
+	var skipLen uint64
+	if len(s.skipBuf) > 0 {
+		processed := s.w.process(s.skipBuf)
+		if _, err := s.w.Write(processed); err != nil {
+			return 0, err
+		}
+		skipLen = uint64(len(processed))
+	}
 
-// Field norms: one quantized byte per document, in a column shared by every
-// term of the field.  See fieldnorm.go for the quantization.
-const (
-	normsKindAbsent   = 0
-	normsKindConstant = 1
-	normsKindDense    = 2
-)
+	footerOffset := uint64(s.w.Count())
+	h := termFooter{
+		docFreq:    s.docFreq,
+		payloadLen: s.payloadEnd - s.payloadStart,
+		locsLen:    locsLen,
+		skipLen:    skipLen,
+	}
+	if s.hasFreqs {
+		h.flags |= termHasFreqs
+	}
+	if s.hasLocs && locsLen > 0 {
+		h.flags |= termHasLocs
+		h.locChunkSize = locChunkSize
+	}
 
-type normsColumn struct {
-	kind     uint8
-	constant uint8
-	dense    []uint8
+	if cap(s.footerBuf) < maxTermFooterLen {
+		s.footerBuf = make([]byte, maxTermFooterLen)
+	}
+	buf := s.footerBuf[:maxTermFooterLen]
+	if _, err := s.w.Write(buf[:h.encode(buf)]); err != nil {
+		return 0, err
+	}
+
+	// A footer at offset zero would be indistinguishable from "this term has no
+	// postings", which is how the writer signals an empty term to the FST
+	// builder.  The field's data never starts at zero -- the segment begins
+	// with stored fields -- so this cannot happen in practice.
+	if footerOffset == 0 {
+		return 0, fmt.Errorf("postings footer landed at offset 0")
+	}
+	return footerOffset, nil
 }
 
-// normsAbsent is the column a field without norms gets; every lookup returns
-// id 0.
-var normsAbsent = &normsColumn{kind: normsKindAbsent}
-
-// id returns the quantized field length for a document.  A document that does
-// not contain the field reads as 0, matching what the writer back-fills.
-func (n *normsColumn) id(docNum uint32) uint8 {
-	switch n.kind {
-	case normsKindDense:
-		if int(docNum) < len(n.dense) {
-			return n.dense[docNum]
-		}
-	case normsKindConstant:
-		return n.constant
-	}
-	return 0
-}
-
-// encodeNormsColumn writes the column for one field.  ids has one entry per
-// document in the segment; a field that every document agrees on -- a keyword
-// field, say -- collapses to two bytes instead of one per document, which is
-// what keeps a wide schema from paying numFields*numDocs.
-func encodeNormsColumn(ids []uint8, dst []byte) []byte {
-	if len(ids) == 0 {
-		return append(dst, normsKindAbsent)
-	}
-	constant := true
-	for _, id := range ids[1:] {
-		if id != ids[0] {
-			constant = false
-			break
-		}
-	}
-	if constant {
-		return append(dst, normsKindConstant, ids[0])
-	}
-	dst = append(dst, normsKindDense)
-	return append(dst, ids...)
-}
-
-func decodeNormsColumn(buf []byte, numDocs uint64) (*normsColumn, error) {
-	if len(buf) == 0 {
-		return normsAbsent, nil
-	}
-	switch buf[0] {
-	case normsKindAbsent:
-		return normsAbsent, nil
-	case normsKindConstant:
-		if len(buf) < 2 {
-			return nil, fmt.Errorf("corrupt norms column: truncated constant")
-		}
-		return &normsColumn{kind: normsKindConstant, constant: buf[1]}, nil
-	case normsKindDense:
-		dense := buf[1:]
-		if uint64(len(dense)) != numDocs {
-			return nil, fmt.Errorf("corrupt norms column: %d entries for %d docs",
-				len(dense), numDocs)
-		}
-		return &normsColumn{kind: normsKindDense, dense: dense}, nil
-	}
-	return nil, fmt.Errorf("corrupt norms column: unknown kind %d", buf[0])
-}
-
-// ------------------------------------------------------------------- tooling
+// -------------------------------------------------------------------- tooling
 
 // TermPostingsInfo describes one term's postings on disk. It exists for the zap
 // command-line tool, which lives outside this package and cannot reach the

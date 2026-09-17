@@ -17,6 +17,7 @@ package zap
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/blevesearch/freeway/bitpack"
 )
@@ -92,6 +93,9 @@ type blockCursor struct {
 
 	bytesRead uint64
 }
+
+// Signifies the end of the postings list
+const docNumTerminated = uint32(math.MaxUint32)
 
 // allOnes is a 128 size array containing just 1s, useful in cases where
 // we are ignoring freqs.

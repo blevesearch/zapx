@@ -60,7 +60,7 @@ func init() {
 //   - the term appears in only a single doc for that field;
 //   - and, the term's freq in that doc fits into 31 bits (freq is taken to be
 //     1, regardless of the true count, when the field has frequencies
-//     disabled, see hasFreqs in postings_serializer.go);
+//     disabled, see hasFreqs in postings_format.go);
 //   - and, term vectors are not recorded for the term;
 //   - and, the docNum fits into 31-bits.
 //

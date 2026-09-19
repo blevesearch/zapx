@@ -557,9 +557,13 @@ func (e *skipEntry) decodeTail(src []byte, hasFreqs bool) {
 // and falls with field length, so the shortest field paired with the highest
 // frequency dominates.  The two need not come from the same document, which
 // makes the bound looser than tantivy's joint argmax but keeps it a bound --
-// and a bound is all a block-max pruner requires.  Nothing consumes these
-// yet; they are written now so that turning on block-max WAND later is not
-// another format break.
+// and a bound is all a block-max pruner requires. This is also what keeps
+// the bound sound regardless of which avgFieldLength a query-time BM25
+// scorer ends up using: unlike a joint-argmax estimate (which has to assume
+// some particular average to pick "the" best-scoring document), this pair
+// is a per-field independent max/min, valid for any scoring function
+// monotonic in both factors. blockmax.go is what actually consumes these at
+// read time now, via blockCursor.blockBound/peekNextBlockBound.
 //
 // encodeBlockMaxTF caps a term frequency into a byte.  A saturated value
 // decodes back as "unbounded", which over-estimates the block maximum, and an
@@ -569,6 +573,17 @@ func encodeBlockMaxTF(tf uint32) uint8 {
 		return math.MaxUint8
 	}
 	return uint8(tf)
+}
+
+// decodeBlockMaxTF reverses encodeBlockMaxTF: a saturated code decodes back
+// as math.MaxUint32, the "unbounded, don't plug this into a per-block
+// formula" sentinel a caller must recognize before treating this as a real
+// term frequency.
+func decodeBlockMaxTF(code uint8) uint32 {
+	if code == math.MaxUint8 {
+		return math.MaxUint32
+	}
+	return uint32(code)
 }
 
 // --------------------------------------------------------------------------

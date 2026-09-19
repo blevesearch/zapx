@@ -65,7 +65,50 @@ func TestBlockMaxCapability(t *testing.T) {
 		return itr, bm
 	}
 
-	t.Run("full block then tail", func(t *testing.T) {
+	checkBound := func(t *testing.T, bm segment.BlockMaxPostingsIterator, postings []expPosting, wantLastDoc uint64, wantDocCount int) {
+		t.Helper()
+		wantMinNormID, wantMaxTF := boundOf(postings)
+		wantMaxNormFactor := normFactorFromID(wantMinNormID)
+		maxTF, maxNormFactor, lastDoc, docCount, ok := bm.BlockMax()
+		if !ok {
+			t.Fatal("BlockMax() reported no bound")
+		}
+		if lastDoc != wantLastDoc {
+			t.Fatalf("BlockMax() lastDoc = %d, want %d", lastDoc, wantLastDoc)
+		}
+		if docCount != wantDocCount {
+			t.Fatalf("BlockMax() docCount = %d, want %d", docCount, wantDocCount)
+		}
+		if maxTF != wantMaxTF {
+			t.Fatalf("BlockMax() maxTF = %d, want %d", maxTF, wantMaxTF)
+		}
+		if maxNormFactor != wantMaxNormFactor {
+			t.Fatalf("BlockMax() maxNormFactor = %v, want %v", maxNormFactor, wantMaxNormFactor)
+		}
+	}
+
+	decodeAndCheck := func(t *testing.T, bm segment.BlockMaxPostingsIterator, want []expPosting) {
+		t.Helper()
+		docs := make([]uint64, len(want))
+		freqs := make([]uint64, len(want))
+		norms := make([]float64, len(want))
+		n, err := bm.NextBlock(docs, freqs, norms, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n != len(want) {
+			t.Fatalf("NextBlock() returned %d postings, want %d", n, len(want))
+		}
+		for k := range want {
+			wantNorm := normFactorFromID(want[k].normID)
+			if docs[k] != want[k].docNum || freqs[k] != want[k].freq || norms[k] != wantNorm {
+				t.Fatalf("NextBlock()[%d] = (doc %d, freq %d, norm %v), want (doc %d, freq %d, norm %v)",
+					k, docs[k], freqs[k], norms[k], want[k].docNum, want[k].freq, wantNorm)
+			}
+		}
+	}
+
+	t.Run("full block, then peek block 1, then tail", func(t *testing.T) {
 		term := "all" // present in every doc: numFullBlocks == 2, tailLen == 44 for 300 docs
 		postings := model.terms[term]
 		if len(postings) != numDocs {
@@ -73,109 +116,157 @@ func TestBlockMaxCapability(t *testing.T) {
 		}
 		_, bm := getIterator(t, term)
 
-		// Shallow-seek to the very first doc: must land on block 0 without
-		// having decoded anything, and report block 0's bound.
-		lastDoc, ok := bm.SeekBlock(postings[0].docNum)
-		if !ok {
-			t.Fatal("SeekBlock(0) reported no block")
-		}
-		if lastDoc != postings[postingsBlockLen-1].docNum {
-			t.Fatalf("SeekBlock(0) lastDocInBlock = %d, want %d", lastDoc, postings[postingsBlockLen-1].docNum)
-		}
-		wantMinNormID, wantMaxTF := boundOf(postings[:postingsBlockLen])
-		if got, ok := bm.BlockMaxTF(); !ok || got != wantMaxTF {
-			t.Fatalf("block 0 BlockMaxTF() = (%d, %v), want (%d, true)", got, ok, wantMaxTF)
-		}
-		if got, ok := bm.BlockMinNormID(); !ok || got != wantMinNormID {
-			t.Fatalf("block 0 BlockMinNormID() = (%d, %v), want (%d, true)", got, ok, wantMinNormID)
-		}
-		if got, want := bm.NormFromID(wantMinNormID), normFactorFromID(wantMinNormID); got != want {
-			t.Fatalf("NormFromID(%d) = %v, want %v", wantMinNormID, got, want)
-		}
+		// A fresh iterator, before any Next/Advance/ShallowAdvance/NextBlock,
+		// reports block 0's bound directly (BlockMax's "!positioned" case).
+		checkBound(t, bm, postings[:postingsBlockLen], postings[postingsBlockLen-1].docNum, postingsBlockLen)
 
-		// Batch-decode the same block and check it against the model exactly.
-		docs, freqs, norms, ok := bm.CurrentBlock()
-		if !ok {
-			t.Fatal("CurrentBlock() reported no block")
-		}
-		if len(docs) != postingsBlockLen || len(freqs) != postingsBlockLen || len(norms) != postingsBlockLen {
-			t.Fatalf("CurrentBlock() returned %d docs / %d freqs / %d norms, want %d", len(docs), len(freqs), len(norms), postingsBlockLen)
-		}
-		for k := 0; k < postingsBlockLen; k++ {
-			wantNorm := normFactorFromID(postings[k].normID)
-			if docs[k] != postings[k].docNum || freqs[k] != postings[k].freq || norms[k] != wantNorm {
-				t.Fatalf("CurrentBlock()[%d] = (doc %d, freq %d, norm %v), want (doc %d, freq %d, norm %v)",
-					k, docs[k], freqs[k], norms[k], postings[k].docNum, postings[k].freq, wantNorm)
-			}
-		}
+		// Bulk-decode block 0 in one call and check it against the model
+		// exactly. This fully drains the block (positioned=true, cur at the
+		// last index), which is what lets the next BlockMax call below
+		// exercise the "fully drained, peek the next block" path instead of
+		// repeating block 0's own bound.
+		decodeAndCheck(t, bm, postings[:postingsBlockLen])
 
-		// Skip straight past block 0 and block 1 into the tail using only
-		// shallow seeks, then confirm the bound matches the tail.
+		// Fully drained: BlockMax must now report block 1's bound, peeked
+		// without decoding or disturbing anything.
+		checkBound(t, bm, postings[postingsBlockLen:2*postingsBlockLen], postings[2*postingsBlockLen-1].docNum, postingsBlockLen)
+
+		// Shallow-advance straight into the tail without ever decoding
+		// block 1, then confirm the bound matches the tail exactly.
 		tailStart := 2 * postingsBlockLen
-		lastDoc, ok = bm.SeekBlock(postings[tailStart].docNum)
-		if !ok {
-			t.Fatal("SeekBlock(tail) reported no block")
+		if err := bm.ShallowAdvance(postings[tailStart].docNum); err != nil {
+			t.Fatal(err)
 		}
-		if lastDoc != postings[len(postings)-1].docNum {
-			t.Fatalf("SeekBlock(tail) lastDocInBlock = %d, want %d", lastDoc, postings[len(postings)-1].docNum)
-		}
-		wantMinNormID, wantMaxTF = boundOf(postings[tailStart:])
-		if got, ok := bm.BlockMaxTF(); !ok || got != wantMaxTF {
-			t.Fatalf("tail BlockMaxTF() = (%d, %v), want (%d, true)", got, ok, wantMaxTF)
-		}
-		if got, ok := bm.BlockMinNormID(); !ok || got != wantMinNormID {
-			t.Fatalf("tail BlockMinNormID() = (%d, %v), want (%d, true)", got, ok, wantMinNormID)
-		}
-		docs, freqs, norms, ok = bm.CurrentBlock()
-		if !ok {
-			t.Fatal("CurrentBlock() on the tail reported no block")
-		}
-		wantTail := postings[tailStart:]
-		if len(docs) != len(wantTail) {
-			t.Fatalf("CurrentBlock() on the tail returned %d docs, want %d", len(docs), len(wantTail))
-		}
-		for k := range wantTail {
-			wantNorm := normFactorFromID(wantTail[k].normID)
-			if docs[k] != wantTail[k].docNum || freqs[k] != wantTail[k].freq || norms[k] != wantNorm {
-				t.Fatalf("tail CurrentBlock()[%d] = (doc %d, freq %d, norm %v), want (doc %d, freq %d, norm %v)",
-					k, docs[k], freqs[k], norms[k], wantTail[k].docNum, wantTail[k].freq, wantNorm)
-			}
-		}
+		checkBound(t, bm, postings[tailStart:], postings[len(postings)-1].docNum, len(postings)-tailStart)
 
-		// Past the end: no more blocks.
-		if _, ok := bm.SeekBlock(uint64(numDocs) + 1000); ok {
-			t.Fatal("SeekBlock past the end of the list reported a block")
+		// Bulk-decode the tail and check its contents.
+		decodeAndCheck(t, bm, postings[tailStart:])
+
+		// Past the end: no more blocks, and NextBlock reports exhaustion.
+		if err := bm.ShallowAdvance(uint64(numDocs) + 1000); err != nil {
+			t.Fatal(err)
 		}
-		if _, ok := bm.BlockMaxTF(); ok {
-			t.Fatal("BlockMaxTF() after exhaustion reported a bound")
+		if _, _, _, _, ok := bm.BlockMax(); ok {
+			t.Fatal("BlockMax() after exhaustion reported a bound")
 		}
-		if _, _, _, ok := bm.CurrentBlock(); ok {
-			t.Fatal("CurrentBlock() after exhaustion reported a block")
+		docs := make([]uint64, 10)
+		freqs := make([]uint64, 10)
+		norms := make([]float64, 10)
+		if n, err := bm.NextBlock(docs, freqs, norms, 0); err != nil || n != 0 {
+			t.Fatalf("NextBlock() after exhaustion = (%d, %v), want (0, nil)", n, err)
 		}
 	})
 
-	t.Run("SeekBlock does not corrupt ordinary iteration", func(t *testing.T) {
+	t.Run("NextBlock resumes correctly across a physical block boundary", func(t *testing.T) {
+		// A caller's own batch size (e.g. the collector's 256-doc
+		// DocScoreBlock) need not line up with this format's 128-doc
+		// physical block at all -- NextBlock must transparently span
+		// blocks, and must also correctly resume mid-block when the
+		// caller's buffer is smaller than a physical block.
+		term := "all"
+		postings := model.terms[term]
+		_, bm := getIterator(t, term)
+
+		const step = 37 // deliberately not a divisor of postingsBlockLen or numDocs
+		var got []expPosting
+		for {
+			docs := make([]uint64, step)
+			freqs := make([]uint64, step)
+			norms := make([]float64, step)
+			n, err := bm.NextBlock(docs, freqs, norms, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n == 0 {
+				break
+			}
+			for k := 0; k < n; k++ {
+				got = append(got, expPosting{docs[k], freqs[k], 0}) // normID recovered below
+			}
+			if n < step {
+				break
+			}
+		}
+		if len(got) != len(postings) {
+			t.Fatalf("stepped NextBlock produced %d postings, want %d", len(got), len(postings))
+		}
+		for k := range postings {
+			if got[k].docNum != postings[k].docNum || got[k].freq != postings[k].freq {
+				t.Fatalf("stepped NextBlock[%d] = (doc %d, freq %d), want (doc %d, freq %d)",
+					k, got[k].docNum, got[k].freq, postings[k].docNum, postings[k].freq)
+			}
+		}
+	})
+
+	t.Run("ordinary Next resumes correctly after a partial NextBlock", func(t *testing.T) {
+		// A caller (the bulk collector) can stop calling NextBlock at any
+		// point -- there is no requirement to drain a physical block
+		// completely -- and a DIFFERENT caller (a WAND-ineligible query
+		// falling back to the scalar path mid-scan) must still be able to
+		// continue correctly with ordinary Next() from exactly where that
+		// left off.
 		term := "all"
 		postings := model.terms[term]
 		itr, bm := getIterator(t, term)
 
-		// Shallow-seek deep into the list and force a batch decode, without
-		// ever calling Next/Advance -- this is exactly the sequence a
-		// block-max pruning loop performs before deciding a block is worth
-		// scoring for real.
-		mid := postingsBlockLen + 5
-		if _, ok := bm.SeekBlock(postings[mid].docNum); !ok {
-			t.Fatal("SeekBlock reported no block")
+		const partial = 40 // less than postingsBlockLen: stops mid-block
+		docs := make([]uint64, partial)
+		freqs := make([]uint64, partial)
+		norms := make([]float64, partial)
+		n, err := bm.NextBlock(docs, freqs, norms, 0)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if _, _, _, ok := bm.CurrentBlock(); !ok {
-			t.Fatal("CurrentBlock reported no block")
+		if n != partial {
+			t.Fatalf("NextBlock returned %d postings, want %d", n, partial)
 		}
 
-		// The ordinary path must still resolve to the correct posting,
-		// despite i.positioned/i.cur having been left pointing at block 0's
-		// decode from the previous subtest's iterator (a fresh iterator
-		// here, but the same underlying blockCursor/PostingsIterator code
-		// path that a live one would reuse across many probes).
+		var got []expPosting
+		for {
+			next, err := itr.Next()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if next == nil {
+				break
+			}
+			pp := next.(*Posting)
+			got = append(got, expPosting{pp.Number(), pp.Frequency(), pp.normID})
+		}
+		want := postings[partial:]
+		if len(got) != len(want) {
+			t.Fatalf("post-partial-NextBlock iteration yielded %d postings, want %d", len(got), len(want))
+		}
+		for k := range want {
+			if got[k] != want[k] {
+				t.Fatalf("post-partial-NextBlock posting[%d] = %+v, want %+v", k, got[k], want[k])
+			}
+		}
+	})
+
+	t.Run("ShallowAdvance does not corrupt ordinary iteration", func(t *testing.T) {
+		term := "all"
+		postings := model.terms[term]
+		itr, bm := getIterator(t, term)
+
+		// Shallow-seek deep into the list and peek its bound, without ever
+		// calling Next/Advance -- this is exactly the sequence a block-max
+		// pruning loop performs before deciding a block is worth scoring
+		// for real. Unlike NextBlock, BlockMax never consumes anything, so
+		// (unlike the sibling subtest above) this leaves every document in
+		// the block -- including mid itself -- still there to Advance to.
+		mid := postingsBlockLen + 5
+		if err := bm.ShallowAdvance(postings[mid].docNum); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, _, _, ok := bm.BlockMax(); !ok {
+			t.Fatal("BlockMax reported no bound")
+		}
+
+		// The ordinary path must still resolve to the correct posting from
+		// wherever ShallowAdvance left the cursor -- despite i.positioned
+		// having just been driven through the block-max capability rather
+		// than Next/Advance.
 		p, err := itr.Advance(postings[mid].docNum)
 		if err != nil {
 			t.Fatal(err)
@@ -205,11 +296,11 @@ func TestBlockMaxCapability(t *testing.T) {
 		}
 		want := postings[mid:]
 		if len(got) != len(want) {
-			t.Fatalf("post-SeekBlock iteration yielded %d postings, want %d", len(got), len(want))
+			t.Fatalf("post-ShallowAdvance iteration yielded %d postings, want %d", len(got), len(want))
 		}
 		for k := range want {
 			if got[k] != want[k] {
-				t.Fatalf("post-SeekBlock posting[%d] = %+v, want %+v", k, got[k], want[k])
+				t.Fatalf("post-ShallowAdvance posting[%d] = %+v, want %+v", k, got[k], want[k])
 			}
 		}
 	})
@@ -220,17 +311,21 @@ func TestBlockMaxCapability(t *testing.T) {
 			t.Fatalf("expected %q to be a 1-hit term, got %d postings", term, len(model.terms[term]))
 		}
 		_, bm := getIterator(t, term)
-		if _, ok := bm.SeekBlock(0); ok {
-			t.Fatal("SeekBlock on a 1-hit term reported a block")
+		if _, _, _, _, ok := bm.BlockMax(); ok {
+			t.Fatal("BlockMax on a 1-hit term reported a bound")
 		}
-		if _, ok := bm.BlockMaxTF(); ok {
-			t.Fatal("BlockMaxTF on a 1-hit term reported a bound")
+		if err := bm.ShallowAdvance(0); err != nil {
+			t.Fatalf("ShallowAdvance on a 1-hit term returned an error: %v", err)
 		}
-		if _, ok := bm.BlockMinNormID(); ok {
-			t.Fatal("BlockMinNormID on a 1-hit term reported a bound")
+		docs := make([]uint64, 1)
+		freqs := make([]uint64, 1)
+		norms := make([]float64, 1)
+		n, err := bm.NextBlock(docs, freqs, norms, 0)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if _, _, _, ok := bm.CurrentBlock(); ok {
-			t.Fatal("CurrentBlock on a 1-hit term reported a block")
+		if n != 1 || docs[0] != model.terms[term][0].docNum {
+			t.Fatalf("NextBlock on a 1-hit term = (n=%d, doc=%d), want (1, %d)", n, docs[0], model.terms[term][0].docNum)
 		}
 	})
 }
@@ -238,7 +333,7 @@ func TestBlockMaxCapability(t *testing.T) {
 // TestBlockMaxCapabilityNoFreqField checks that a field indexed without
 // frequencies reports no block-max bound (there is no tf to bound, and the
 // skip entry's minNormID/maxTF bytes are zero-valued rather than a real
-// bound) while CurrentBlock -- which only needs doc numbers, not the bound --
+// bound) while NextBlock -- which only needs doc numbers, not the bound --
 // still works.
 func TestBlockMaxCapabilityNoFreqField(t *testing.T) {
 	const numDocs = 300
@@ -269,25 +364,25 @@ func TestBlockMaxCapabilityNoFreqField(t *testing.T) {
 	itr := pl.Iterator(true, true, false, nil).(*PostingsIterator)
 	bm := segment.PostingsIterator(itr).(segment.BlockMaxPostingsIterator)
 
-	if _, ok := bm.SeekBlock(0); !ok {
-		t.Fatal("SeekBlock on a no-freq field reported no block, want a block with no bound")
+	if _, _, _, _, ok := bm.BlockMax(); ok {
+		t.Fatal("BlockMax on a no-freq field reported a bound")
 	}
-	if _, ok := bm.BlockMaxTF(); ok {
-		t.Fatal("BlockMaxTF on a no-freq field reported a bound")
+	docs := make([]uint64, postingsBlockLen)
+	freqs := make([]uint64, postingsBlockLen)
+	norms := make([]float64, postingsBlockLen)
+	n, err := bm.NextBlock(docs, freqs, norms, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := bm.BlockMinNormID(); ok {
-		t.Fatal("BlockMinNormID on a no-freq field reported a bound")
+	if n != postingsBlockLen {
+		t.Fatalf("NextBlock on a no-freq field returned %d docs, want %d", n, postingsBlockLen)
 	}
-	docs, _, _, ok := bm.CurrentBlock()
-	if !ok {
-		t.Fatal("CurrentBlock on a no-freq field reported no block")
-	}
-	if len(docs) != postingsBlockLen {
-		t.Fatalf("CurrentBlock() on a no-freq field returned %d docs, want %d", len(docs), postingsBlockLen)
-	}
-	for k, d := range docs {
-		if d != uint64(k) {
-			t.Fatalf("CurrentBlock()[%d] = doc %d, want %d", k, d, k)
+	for k := 0; k < n; k++ {
+		if docs[k] != uint64(k) {
+			t.Fatalf("NextBlock()[%d] = doc %d, want %d", k, docs[k], k)
+		}
+		if freqs[k] != 1 {
+			t.Fatalf("NextBlock()[%d] = freq %d, want 1 (no-freq field placeholder)", k, freqs[k])
 		}
 	}
 }

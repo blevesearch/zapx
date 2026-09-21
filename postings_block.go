@@ -201,6 +201,62 @@ func (c *blockCursor) seekBlock(target uint32) {
 // found a block that could contain target.
 func (c *blockCursor) isExhausted() bool { return c.exhausted }
 
+// blockBound reports the bound recorded for whichever block c.entry
+// currently describes -- a full block or the tail, both uniformly, since
+// FinishPayload gives the tail a real skipEntry (including a real
+// minNormID/maxTF pair) exactly like a full block gets from flushBlock; the
+// tail is never a partial or missing bound here, unlike formats that only
+// bound full blocks. docCount is the real number of documents that bound
+// covers: postingsBlockLen for a full block, c.tailLen for the tail.
+//
+// ok is false only when there is no bound to report at all: the cursor is
+// exhausted, or the term has no stored frequencies (a skip entry still
+// exists for such a term, but its minNormID/maxTF bytes were never written
+// with anything meaningful -- see StartTerm/AddDoc).
+func (c *blockCursor) blockBound() (minNormID uint8, maxTF uint32, lastDoc uint32, docCount int, ok bool) {
+	if c.exhausted || !c.hasFreqs {
+		return 0, 0, 0, 0, false
+	}
+	dc := postingsBlockLen
+	if c.inTail {
+		dc = c.tailLen
+	}
+	return c.entry.minNormID, decodeBlockMaxTF(c.entry.maxTF), c.entry.lastDoc, dc, true
+}
+
+// peekNextBlockBound reports the bound of the block one past wherever c
+// currently sits (blockIdx+1), without moving anything -- not even
+// c.entry/c.blockIdx. This is for a caller that has fully consumed the
+// current block (every document up to c.entry.lastDoc already returned via
+// ordinary iteration) and wants to know whether the *next* block is even
+// worth fetching before touching a single byte of it: blockBound can't
+// answer that, since it describes whatever c.entry currently holds, which
+// is still the just-finished block until something explicitly moves past
+// it.
+//
+// The next unit can be another full block, the tail (if blockIdx+1 lands
+// exactly on it), or nothing -- mirroring selectBlock's own three-way
+// switch exactly, since this has to agree with wherever nextBlock would
+// actually go next.
+func (c *blockCursor) peekNextBlockBound() (minNormID uint8, maxTF uint32, lastDoc uint32, docCount int, ok bool) {
+	if !c.hasFreqs {
+		return 0, 0, 0, 0, false
+	}
+	next := c.blockIdx + 1
+	switch {
+	case next < c.numFullBlocks:
+		var e skipEntry
+		e.decode(c.skip[next*c.entryLen:], c.hasFreqs)
+		return e.minNormID, decodeBlockMaxTF(e.maxTF), e.lastDoc, postingsBlockLen, true
+	case next == c.numFullBlocks && c.tailLen > 0:
+		// tailEntry was already decoded once, up front, in init() -- no
+		// need to re-decode it from c.skip here.
+		return c.tailEntry.minNormID, decodeBlockMaxTF(c.tailEntry.maxTF), c.tailEntry.lastDoc, c.tailLen, true
+	default:
+		return 0, 0, 0, 0, false
+	}
+}
+
 // -------------------------------------------------------------------------
 //
 // BLOCK READING APIs

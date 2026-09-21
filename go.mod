@@ -21,3 +21,10 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 )
+
+replace github.com/blevesearch/scorch_segment_api/v2 => ../scorch_segment_api
+
+// perf/tantivy-inspired: FST traversal/allocation fixes. Needed here
+// directly (not just in bleve's own go.mod) so zapx's own test suite
+// exercises it too, not only builds that pull zapx in as a dependency.
+replace github.com/blevesearch/vellum => ../vellum

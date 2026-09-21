@@ -20,6 +20,7 @@ import (
 	"reflect"
 
 	"github.com/RoaringBitmap/roaring/v2"
+	index "github.com/blevesearch/bleve_index_api"
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 
@@ -860,6 +861,57 @@ func (i *PostingsIterator) nextAtOrAfter(atOrAfter uint64) (segment.Posting, err
 	}
 
 	return rv, nil
+}
+
+// FillTermFieldDoc advances the iterator to the first document at or after
+// atOrAfter and writes that posting directly into rv, reporting false once
+// the postings list is exhausted. Pass 0 for a plain forward step.
+//
+// This is a fast path for the very common case where term vectors are not
+// required. The generic Advance/Next route boxes a *Posting into an
+// interface and then costs four virtual calls (Number/Frequency/Norm/
+// Locations) plus a struct clear for every document; profiling a term scan
+// put that glue at roughly a quarter of the whole inner loop. It also spares
+// block-conjunction WAND's per-candidate secondary membership check
+// (bleve's blockConjunction.scoreCandidates) the same boxing on every single
+// candidate. Locations are deliberately not decoded here, so callers that
+// need them must stay on the generic path -- bleve's own caller already
+// only wires this in when term vectors are not requested, and the
+// atOrAfter==0 fast branch below never fires for a locations-carrying
+// iterator regardless (stepFast's fastScan guard is false whenever
+// includeLocs is true), so nextDocNumAtOrAfter's own hasLocs-aware fallback
+// is what actually runs for such an iterator here, exactly as it would via
+// the generic path.
+func (i *PostingsIterator) FillTermFieldDoc(rv *index.TermFieldDoc,
+	globalOffset, atOrAfter uint64, includeFreq, includeNorm bool) (bool, error) {
+	if atOrAfter == 0 {
+		if d, ok := i.stepFast(); ok {
+			rv.ID = index.NewIndexInternalID(rv.ID, uint64(d)+globalOffset)
+			if includeFreq {
+				rv.Freq = uint64(i.cursor.freqs()[i.cur])
+			}
+			if includeNorm {
+				rv.Norm = normFactorFromID(i.normIDOf(d))
+			}
+			return true, nil
+		}
+	}
+
+	docNum, exists, err := i.nextDocNumAtOrAfter(atOrAfter)
+	if err != nil || !exists {
+		return false, err
+	}
+
+	rv.ID = index.NewIndexInternalID(rv.ID, docNum+globalOffset)
+
+	if includeFreq {
+		rv.Freq = i.currFreq()
+	}
+	if includeNorm {
+		rv.Norm = normFactorFromID(i.currNormID(uint32(docNum)))
+	}
+
+	return true, nil
 }
 
 // nextWithLocBytes returns the next posting along with the raw encoded bytes of

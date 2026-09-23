@@ -103,6 +103,11 @@ type faissIndex interface {
 	metricType() int
 	// ntotal returns the total number of vectors currently stored in the index.
 	ntotal() int64
+	// numVecs returns the number of vectors the index was built for, as recorded
+	// in the segment metadata. Unlike ntotal() this stays accurate for an index
+	// that was trained on a corpus without that corpus being added to it, which
+	// is what single-shot training produces.
+	numVecs() int
 	// reconstructBatch reconstructs the original vectors for the given vector IDs in the index.
 	reconstructBatch(vecIDs []int64, prealloc []float32) ([]float32, error)
 	// performs a search on the index using the provided query vector and and retrieves the top K nearest neighbors.
@@ -145,6 +150,10 @@ type faissIndexIVF interface {
 	// inverted lists are probed during search, and is a key parameter that controls the
 	// trade-off between search accuracy and latency.
 	setNProbe(nprobe int32)
+	// trains the IVF index on the provided training data without adding any
+	// vectors to it, leaving an index that carries only the trained centroids.
+	// directMap and nprobe must be set after this call (GPU sync clears them).
+	train(trainingData *vectorSet) error
 	// trains the IVF index on the provided training data and adds the vectors to
 	// the trained index. The training step performs k-means clustering to partition
 	// the data space, which enables efficient non-exhaustive search during query time.

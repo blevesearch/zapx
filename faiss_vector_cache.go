@@ -468,6 +468,15 @@ func (tc *trainedIndexCache) loadOrCreate(fieldID uint16, opts *vectorCacheOptio
 	tc.m.Lock()
 	defer tc.m.Unlock()
 
+	// check again now that the write lock is held: concurrent merges can race
+	// here on the first hit for a field, and building the index twice would
+	// leave the loser's copy in the cache map's place, unreachable and never
+	// closed.
+	entry, ok = tc.cache[fieldID]
+	if ok {
+		return entry.index, nil
+	}
+
 	index, err := tc.createAndCachedLOCKED(fieldID, opts)
 	if err != nil {
 		return nil, err

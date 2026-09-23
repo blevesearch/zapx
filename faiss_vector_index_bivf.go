@@ -119,6 +119,10 @@ func (b *faissBinaryIndex) ntotal() int64 {
 	return b.binary.Ntotal()
 }
 
+func (b *faissBinaryIndex) numVecs() int {
+	return b.params.numVecs
+}
+
 func (b *faissBinaryIndex) reconstructBatch(vecIDs []int64, prealloc []float32) ([]float32, error) {
 	// reconstruct vectors from backing index
 	return b.backing.ReconstructBatch(vecIDs, prealloc)
@@ -286,7 +290,7 @@ func (b *faissBinaryIndex) setNProbe(nprobe int32) {
 	b.binary.SetNProbe(nprobe)
 }
 
-func (b *faissBinaryIndex) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
+func (b *faissBinaryIndex) train(trainingData *vectorSet) error {
 	nvecsToTrain := b.params.numTrainingVecs(trainingData.nvecs)
 	var err error
 	if b.backing.IsSQIndex() {
@@ -296,7 +300,11 @@ func (b *faissBinaryIndex) trainAndAdd(trainingData *vectorSet, vecsToAdd *vecto
 		}
 	}
 
-	err = b.binary.Train(trainingData.binaryData[:nvecsToTrain*(b.dim()/8)])
+	return b.binary.Train(trainingData.binaryData[:nvecsToTrain*(b.dim()/8)])
+}
+
+func (b *faissBinaryIndex) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
+	err := b.train(trainingData)
 	if err != nil {
 		return err
 	}

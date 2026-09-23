@@ -601,10 +601,10 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 		return nil
 	}
 
-	// a lone index that holds no vectors despite the section recording some is a
-	// trained index produced by single-shot training - it carries just the
-	// trained centroids. There is nothing to reconstruct out of it, so carry it
-	// over as is instead of rebuilding it.
+	// when we invoke the merge API on the trained index which doesn't have any
+	// vectors in its inverted list, we're just going to carry forward the bytes
+	// by writing them out via the fileWriter. This is applicable for eg when the
+	// encryption keys have been rotated and we need to rewrite the data on disk
 	if len(vecIndexes) == 1 && vecIndexes[0].index.ntotal() == 0 {
 		err = v.writeTrainedTemplateIndex(sbs[0], vecIndexes[0], w)
 		freeReconstructedIndexes(vecIndexes)
@@ -673,13 +673,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 }
 
 // writeTrainedTemplateIndex re-emits an already serialized vector index into w
-// without decoding it, preserving the trained centroids it carries.
-//
-// A trained index built by single-shot training holds only those centroids, the
-// training corpus having never been added to it, so it cannot be rebuilt by
-// reconstructing vectors out of it. Copying the bytes over is also exactly what
-// the one path that merges such an index needs: the rewrite that rotates the
-// file writer (encryption key) backing the trained index.
+// without deserialising it, preserving the trained centroids it carries.
 func (v *vectorIndexOpaque) writeTrainedTemplateIndex(sb *SegmentBase, vi *vecIndexInfo, w *FileWriter) error {
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 	n := binary.PutUvarint(tempBuf, uint64(vi.indexType))
@@ -749,12 +743,9 @@ func (v *vectorIndexOpaque) writeFaissIndex(vecs *vectorSet, config *faissIndexC
 		// search time we probe only a subset of vectors (non-exhaustive search).
 		start := time.Now()
 		if v.trainingPhase && v.singleShotTraining {
-			// the whole training corpus arrived in one shot, so this index is
-			// the trained index itself and will never be merged with another
-			// training sample. Only its centroids are ever consumed - as the
-			// quantizer template handed to the fast merge path - so the training
-			// vectors are not added to it, saving both the add and the space
-			// they would occupy in the trained index file.
+			// when we're doing the training in a single shot, we don't have to
+			// add the vectors to the index since fast merge only cares about the
+			// centroids and not the actual vectors.
 			err = ivfIndex.train(vecs)
 		} else {
 			err = ivfIndex.trainAndAdd(vecs, vecs)
@@ -1244,8 +1235,6 @@ func canFastMerge(trainedIndex faissIndexIVF, opt string, totalVecs int) bool {
 	default:
 		minVecsForFastMerge = ivfSq8Threshold
 	}
-	// numVecs() rather than ntotal(): a trained index built by single-shot
-	// training carries only its centroids, so the size of the corpus it was
-	// trained on is known from the segment metadata and not from the index.
+
 	return trainedIndex.numVecs() >= minVecsForFastMerge && totalVecs >= minVecsForFastMerge
 }

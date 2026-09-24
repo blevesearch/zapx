@@ -330,6 +330,17 @@ func (b *faissBinaryIndex) setQuantizers(trainedIndex faissIndexIVF) error {
 	return errNotSupported
 }
 
+func (b *faissBinaryIndex) sameQuantizer(other faissIndexIVF) (bool, error) {
+	otherBinaryIndex, ok := other.(*faissBinaryIndex)
+	if !ok {
+		return false, nil
+	}
+	// only the binary index carries the coarse quantizer that assigns vectors
+	// to lists; the backing index is a flat/SQ re-ranker with no clustering of
+	// its own.
+	return b.binary.SameCoarseQuantizer(otherBinaryIndex.binary)
+}
+
 func (b *faissBinaryIndex) isMergeable() bool {
 	switch b.params.optimization {
 	case index.IndexBIVFWithBackingFlat:

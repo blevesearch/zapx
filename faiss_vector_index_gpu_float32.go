@@ -399,6 +399,18 @@ func (f *faissGPUFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {
 	return errNotSupported
 }
 
+func (f *faissGPUFloat32Index) sameQuantizer(other faissIndexIVF) (bool, error) {
+	// the CPU index is the one that would actually serve a cluster search, so
+	// it is the one whose layout has to match.
+	switch o := other.(type) {
+	case *faissGPUFloat32Index:
+		return f.cpuIdx.SameCoarseQuantizer(o.cpuIdx)
+	case *faissFloat32Index:
+		return f.cpuIdx.SameCoarseQuantizer(o.idx)
+	}
+	return false, nil
+}
+
 func (f *faissGPUFloat32Index) isMergeable() bool {
 	return false
 }

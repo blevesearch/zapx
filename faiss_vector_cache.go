@@ -253,6 +253,24 @@ func (vc *vectorIndexCache) insertLOCKED(fieldID uint16,
 	vc.cache[fieldID] = createCacheEntry(index, mapping, 0.4)
 }
 
+// sharesLayout reports whether the cached index for fieldID partitions the
+// vector space exactly as trained does. The answer is memoized on the cache
+// entry, so repeat queries against the same trained index pay for the
+// comparison only once per cached index.
+func (vc *vectorIndexCache) sharesLayout(fieldID uint16, trained faissIndexIVF) (bool, error) {
+	vc.m.RLock()
+	if vc.isClosed {
+		vc.m.RUnlock()
+		return false, nil
+	}
+	entry, ok := vc.cache[fieldID]
+	vc.m.RUnlock()
+	if !ok {
+		return false, nil
+	}
+	return entry.sharesLayout(trained)
+}
+
 func (vc *vectorIndexCache) decRef(fieldID uint16) {
 	vc.m.RLock()
 	entry, ok := vc.cache[fieldID]
@@ -360,6 +378,48 @@ type cacheEntry struct {
 
 	index   faissIndex
 	mapping *idMapping
+
+	// Memo for the centroid layout check against a trained index. Comparing
+	// two coarse quantizers costs a walk over nlist * d bytes, and the answer
+	// never changes for a given (cached index, trained index) pair, so it is
+	// worth holding on to across the many queries this entry serves.
+	//
+	// layoutSrc is the trained index the memo was computed against, held for
+	// identity only and never dereferenced here; a different one invalidates
+	// the memo.
+	layoutMu   sync.Mutex
+	layoutSrc  faissIndex
+	layoutSame bool
+}
+
+// sharesLayout reports whether this entry's index partitions the vector space
+// exactly as trained does, consulting and refreshing the memo.
+func (ce *cacheEntry) sharesLayout(trained faissIndexIVF) (bool, error) {
+	if ce.index == nil || trained == nil {
+		return false, nil
+	}
+	trainedIdx, ok := trained.(faissIndex)
+	if !ok {
+		return false, nil
+	}
+	ce.layoutMu.Lock()
+	defer ce.layoutMu.Unlock()
+	if ce.layoutSrc == trainedIdx {
+		return ce.layoutSame, nil
+	}
+	ivfPtr := ce.index.castIVF()
+	if ivfPtr == nil {
+		// not an IVF index, so it has no centroids to line up.
+		ce.layoutSrc, ce.layoutSame = trainedIdx, false
+		return false, nil
+	}
+	same, err := ivfPtr.sameQuantizer(trained)
+	if err != nil {
+		// leave the memo untouched so a transient failure is not cached.
+		return false, err
+	}
+	ce.layoutSrc, ce.layoutSame = trainedIdx, same
+	return same, nil
 }
 
 func (ce *cacheEntry) incHit() {

@@ -112,6 +112,26 @@ func (v *vectorIndexWrapper) Search(qVector []float32, k int64, params json.RawM
 func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	eligibleList index.EligibleDocumentList, params json.RawMessage) (
 	segment.VecPostingsList, error) {
+	return v.searchWithFilter(qVector, k, eligibleList, nil, params)
+}
+
+// searchWithFilter backs both SearchWithFilter and
+// SearchWithFilterPreassigned. The two differ only in where the ranking of
+// eligible centroids comes from: with a nil pre this index runs its own coarse
+// quantizer search, and with a usable pre it reuses a ranking already computed
+// against the shared trained index. Callers must have confirmed the layout
+// before passing a non-nil pre.
+func (v *vectorIndexWrapper) searchWithFilter(qVector []float32, k int64,
+	eligibleList index.EligibleDocumentList, pre *segment.PreassignedCentroids,
+	params json.RawMessage) (segment.VecPostingsList, error) {
+	// an unfiltered search over the same index, which several early exits below
+	// degrade to, has to stay on whichever of the two paths we are on.
+	fullSearch := func() (segment.VecPostingsList, error) {
+		if pre != nil {
+			return v.searchPreassigned(qVector, k, pre, params)
+		}
+		return v.Search(qVector, k, params)
+	}
 	// if no eligible documents, return empty postings list
 	if eligibleList == nil || eligibleList.Count() == 0 {
 		return emptyVecPostingsList, nil
@@ -131,7 +151,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	}
 	// if all documents are eligible, do a normal search
 	if eligibleList.Count() == uint64(v.mapping.numDocuments()) {
-		return v.Search(qVector, k, params)
+		return fullSearch()
 	}
 	// get the eligible document iterator
 	eligibleIterator := eligibleList.Iterator()
@@ -172,7 +192,7 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	// if we have included all vectors, then we can do a normal search
 	// with full selectivity (no filtering)
 	if numSelected == v.mapping.numVectors() {
-		return v.Search(qVector, k, params)
+		return fullSearch()
 	}
 	// get a vector set using the query vector
 	qVecSet, err := newVectorSet(len(qVector), qVector)
@@ -208,33 +228,16 @@ func (v *vectorIndexWrapper) SearchWithFilter(qVector []float32, k int64,
 	if err != nil {
 		return nil, err
 	}
-	// Create a bitmap for the eligible centroids to be considered for probing.
-	centroidBM := newBitmap(uint32(nlist))
-	centroidCount := 0
-	for centroidID, vectorCount := range clusterVectorCounts {
-		// Only centroids with at least one eligible vector are considered.
-		if vectorCount > 0 {
-			// since we are adding only unique centroid IDs, this is simply an increment
-			// and we can avoid a population count at the end
-			centroidCount++
-			centroidBM.set(uint32(centroidID))
-		}
+	// Rank the centroids that hold at least one eligible vector by their
+	// proximity to the query vector.
+	eligibleCentroidIDs, centroidDistances, err := v.rankEligibleCentroids(
+		ivfPtr, qVecSet, clusterVectorCounts, nlist, k, pre)
+	if err != nil {
+		return nil, err
 	}
-	if centroidCount == 0 {
+	if len(eligibleCentroidIDs) == 0 {
 		// No centroids have any eligible vectors, so return empty postings list.
 		return emptyVecPostingsList, nil
-	}
-	// create a FAISS selector based on the centroid bitmap
-	centroidSelector, err := getIncludeSelector(centroidBM)
-	if err != nil {
-		return nil, err
-	}
-	defer centroidSelector.Delete()
-	// Search the coarse quantizer to order the centroids based on proximity
-	// to the query vector.
-	eligibleCentroidIDs, centroidDistances, err := ivfPtr.searchQuantizer(qVecSet, centroidSelector, int64(centroidCount))
-	if err != nil {
-		return nil, err
 	}
 	// Determining the minimum number of centroids to be probed
 	// to ensure that at least 'k' vectors are collected while

@@ -163,6 +163,16 @@ type faissIndexIVF interface {
 	// IVF index that is trained on the same data and used to assign vectors
 	// to clusters in the IVF index.
 	setQuantizers(trainedIndex faissIndexIVF) error
+	// reports whether this index and other partition the vector space
+	// identically, i.e. their coarse quantizers hold the same centroids, in the
+	// same order, so that list number i means the same thing in both.
+	//
+	// This is what makes it safe to drive searchClusters on this index with the
+	// (centroid id, distance) pairs that searchQuantizer produced on other. It
+	// holds for indexes written by the fast merge path, whose quantizers are
+	// all clones of one trained index, and generally does not hold for an index
+	// that was clustered on its own data.
+	sameQuantizer(other faissIndexIVF) (bool, error)
 	// returns whether the participating index is eligible for fast merge
 	isMergeable() bool
 	// merged another faiss index into the current IVF index,

@@ -206,6 +206,15 @@ func (f *faissFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {
 	return f.idx.SetQuantizers(centroidFaissIndex.idx)
 }
 
+func (f *faissFloat32Index) sameQuantizer(other faissIndexIVF) (bool, error) {
+	otherFaissIndex, ok := other.(*faissFloat32Index)
+	if !ok {
+		// a different index flavour never shares a centroid layout with this one.
+		return false, nil
+	}
+	return f.idx.SameCoarseQuantizer(otherFaissIndex.idx)
+}
+
 func (f *faissFloat32Index) isMergeable() bool {
 	switch f.params.optimization {
 	case index.IndexOptimizedForLatency, index.IndexOptimizedForRecall:

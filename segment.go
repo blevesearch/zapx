@@ -141,10 +141,7 @@ type SegmentBase struct {
 	numDocs             uint64
 	storedIndexOffset   uint64
 	sectionsIndexOffset uint64
-	// fieldDvReaders is indexed by section ID, so it is sized by NumSections
-	// rather than by the number of registered sections: section IDs are dense
-	// constants, but registration is sparse because some sections sit behind
-	// build tags.
+	// fieldDvReaders is indexed by section ID, then by field ID
 	fieldDvReaders [][]*docValueReader // naive chunk cache per field; section->fieldID->reader
 	fieldDvNames   []string            // field names cached in fieldDvReaders
 	size           uint64
@@ -1007,8 +1004,7 @@ func (sb *SegmentBase) NumericV2Data(field string) (segment.NumericV2Data, error
 		return nil, nil
 	}
 
-	// skip the doc value offsets to get to the search arrays; doc values are
-	// reached through those offsets instead, by loadDvReaders
+	// skip the doc value offsets to get to the search arrays
 	for i := 0; i < 2; i++ {
 		_, n := binary.Uvarint(sb.mem[pos : pos+binary.MaxVarintLen64])
 		pos += uint64(n)
@@ -1019,8 +1015,6 @@ func (sb *SegmentBase) NumericV2Data(field string) (segment.NumericV2Data, error
 		return nil, err
 	}
 	if data == nil {
-		// the cache has been closed; return an untyped nil so the caller's nil
-		// check works rather than a non-nil interface wrapping a nil pointer
 		return nil, nil
 	}
 	return data, nil

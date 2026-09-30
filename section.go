@@ -63,8 +63,8 @@ const (
 	SectionNumericV2Index
 
 	// Add new sections above this line.
-	// NumSections automatically reflects the total number of sections
-	// and is used to track how many sections can be registered.
+
+	// total number of sections registered.
 	NumSections
 )
 

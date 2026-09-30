@@ -55,9 +55,6 @@ func (nc *numericIndexCache) Clear() {
 	nc.m.Unlock()
 }
 
-// loadOrCreate returns the cached arrays for the field, parsing them out of mem
-// on first use. The caller owns one reference on the returned entry and must
-// Close it. A nil entry with a nil error means the cache has been closed.
 func (nc *numericIndexCache) loadOrCreate(field uint16, mem []byte,
 	r *FileReader) (*numericCacheEntry, error) {
 	nc.m.RLock()
@@ -106,14 +103,14 @@ func (nc *numericIndexCache) createAndCacheLocked(field uint16, mem []byte,
 		return nil, fmt.Errorf("no numeric entries found")
 	}
 
-	// Load the values, sorted ascending
+	// Load the values
 	values, valuesMem, shift, err := r.ReadUint64Array(mem[pos:])
 	if err != nil {
 		return nil, err
 	}
 	pos += shift
 
-	// Load the segment doc numbers parallel to the values
+	// Load the segment doc numbers
 	docNums, docNumsMem, _, err := r.ReadUint32Array(mem[pos:])
 	if err != nil {
 		return nil, err
@@ -202,10 +199,6 @@ func (nc *numericIndexCache) cleanup() bool {
 // *Mem slices are the byte buffers the value slices were decoded from; when
 // ReadUint*Array returned a zero-copy view over the segment's mmap they keep
 // that memory referenced for as long as the entry lives.
-//
-// Unlike the geo equivalent there is no per-load wrapper: the doc numbers are
-// already in segment doc-number space, so there is no exclusion bitmap to
-// translate and nothing about a load is caller-specific.
 type numericCacheEntry struct {
 	values    []uint64
 	valuesMem []byte

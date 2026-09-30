@@ -838,10 +838,7 @@ func (i *invertedIndexOpaque) realloc() {
 		totTFs += len(tfs)
 
 		i.DictKeys[fieldID] = dictKeys
-		// Only claim doc values for fields this section actually indexes. A
-		// field handled by another section contributes no terms here, so
-		// flagging it would write an empty doc value block under this section
-		// and leave two sections claiming the same field's doc values.
+		// Only claim doc values for fields this section actually indexes.
 		if field.Options().IncludeDocValues() &&
 			!isFieldExcludedFromInvertedTextIndexSection(field) {
 			i.IncludeDocValues[fieldID] = true

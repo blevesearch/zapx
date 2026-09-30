@@ -30,9 +30,9 @@ import (
 // -----------------------------------------------------------------------------
 // stubs
 
-// stubNumericV2Field implements index.Field and index.NumericV2Field. The doc
-// value term is a stand-in for a prefix-coded term: zapx cannot import
-// bleve/numeric, and the section only ever copies these bytes.
+// stubNumericV2Field implements index.Field and index.NumericV2Field. Value is
+// a stand-in for a prefix-coded term: zapx cannot import bleve/numeric, and the
+// section only ever copies these bytes into the doc value block.
 type stubNumericV2Field struct {
 	name    string
 	value   uint64
@@ -50,7 +50,6 @@ func (s *stubNumericV2Field) AnalyzedLength() int                              {
 func (s *stubNumericV2Field) AnalyzedTokenFrequencies() index.TokenFrequencies { return nil }
 func (s *stubNumericV2Field) NumPlainTextBytes() uint64                        { return 0 }
 func (s *stubNumericV2Field) SortableValue() uint64                            { return s.value }
-func (s *stubNumericV2Field) DocValueTerm() []byte                             { return s.dvTerm }
 
 type stubNumericDocument struct {
 	id     string
@@ -500,5 +499,69 @@ func assertDocValueChunksSorted(t *testing.T, sb *SegmentBase, field string) {
 					clone.curChunkHeader[i-1].DocNum, clone.curChunkHeader[i].DocNum)
 			}
 		}
+	}
+}
+
+// TestNumericV2DocValuesOrderIndependence pins the invariant that the doc value
+// runs do not depend on the order in which process is called: neither on
+// documents arriving in ascending document-number order, nor on one document's
+// values arriving consecutively. numericIndexContent indexes by document number
+// precisely so that a change in how the caller traverses documents and fields
+// cannot silently corrupt the block -- the previous flat-buffer layout inferred
+// run boundaries from call order, and would have emitted two separate runs for
+// a document whose values were split, which the encoder cannot express.
+func TestNumericV2DocValuesOrderIndependence(t *testing.T) {
+	type call struct {
+		docNum uint32
+		val    uint64
+	}
+	const numDocs = 3
+
+	// docs 0 and 2 are multi-valued, doc 1 is single-valued
+	inOrder := []call{{0, 1}, {0, 2}, {1, 3}, {2, 4}, {2, 5}}
+	// same calls, documents interleaved and visited out of ascending order;
+	// each document's own values keep their relative order
+	scrambled := []call{{2, 4}, {0, 1}, {1, 3}, {2, 5}, {0, 2}}
+
+	runCalls := func(calls []call) *numericIndexContent {
+		nc := &numericIndexContent{numDocs: numDocs}
+		for _, c := range calls {
+			f := &stubNumericV2Field{
+				name:    numTestFieldName,
+				value:   c.val,
+				dvTerm:  numDVTerm(c.val),
+				options: index.IndexField | index.DocValues,
+			}
+			nc.process(f, true, c.docNum)
+		}
+		return nc
+	}
+
+	want := runCalls(inOrder)
+	got := runCalls(scrambled)
+
+	if !reflect.DeepEqual(got.dvTerms, want.dvTerms) {
+		t.Fatalf("doc value runs depend on call order:\n scrambled=%q\n in-order =%q",
+			got.dvTerms, want.dvTerms)
+	}
+
+	// one slot per document, and each document's values share a single run
+	if len(want.dvTerms) != numDocs {
+		t.Fatalf("expected %d run slots, got %d", numDocs, len(want.dvTerms))
+	}
+	for docNum, wantTerms := range [][]uint64{{1, 2}, {3}, {4, 5}} {
+		var expected []byte
+		for _, v := range wantTerms {
+			expected = append(append(expected, numDVTerm(v)...), index.DocValueTermSeparator)
+		}
+		if !reflect.DeepEqual(want.dvTerms[docNum], expected) {
+			t.Fatalf("doc %d run: got %q, want %q", docNum, want.dvTerms[docNum], expected)
+		}
+	}
+
+	// the search arrays stay one entry per value regardless of call order
+	if len(got.values) != len(inOrder) || len(got.docNums) != len(inOrder) {
+		t.Fatalf("expected %d search entries, got %d values / %d docNums",
+			len(inOrder), len(got.values), len(got.docNums))
 	}
 }

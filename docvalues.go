@@ -333,14 +333,6 @@ func (di *docValueReader) getDocValueLocs(docNum uint64) (uint64, uint64) {
 
 // fieldDocValueReader returns the doc value reader for a field, whichever
 // section persisted it.
-//
-// dvs.dvrs in VisitDocValues is keyed by field ID alone rather than by
-// (section, field), which is sound only because a field's doc values live in
-// exactly one section: a field handled by a section other than the inverted
-// text one is excluded from that section via
-// invertedTextIndexSectionExclusionChecks. The loop below therefore returns the
-// first reader it finds, and panics if a second section also claims the field,
-// since that would mean the exclusion checks and the sections had drifted apart.
 func (sb *SegmentBase) fieldDocValueReader(fieldID uint16) *docValueReader {
 	var rv *docValueReader
 	for secID := range sb.fieldDvReaders {

@@ -321,8 +321,8 @@ func (g *geoShapeV2IndexSectionOpaque) persist(w *FileWriter) error {
 			return err
 		}
 
-		content.innerCells, content.innerDocIDs = sortArrayPair(content.innerCells, content.innerDocIDs)
-		content.crossCells, content.crossDocIDs = sortArrayPair(content.crossCells, content.crossDocIDs)
+		content.innerCells, content.innerDocIDs = sortPairArray(content.innerCells, content.innerDocIDs)
+		content.crossCells, content.crossDocIDs = sortPairArray(content.crossCells, content.crossDocIDs)
 
 		// Write the index content for this field to the file
 		err = g.writeIndexContent(content, w)
@@ -524,15 +524,15 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 	// Each segment's inner and cross cells are already stored sorted
 	// So instead of concatenating every segment's cells and sorting the whole
 	// set, we k-way merge the pre-sorted per-segment runs.
-	innerCursors := make([]*sortedPairCursor, 0, len(indexInfos))
-	crossCursors := make([]*sortedPairCursor, 0, len(indexInfos))
+	innerCursors := make([]*pairCursor, 0, len(indexInfos))
+	crossCursors := make([]*pairCursor, 0, len(indexInfos))
 	for s, indexInfo := range indexInfos {
-		innerCursors = append(innerCursors, &sortedPairCursor{
+		innerCursors = append(innerCursors, &pairCursor{
 			keys:     indexInfo.content.innerCells,
 			payloads: indexInfo.content.innerDocIDs,
 			remap:    segRemaps[s],
 		})
-		crossCursors = append(crossCursors, &sortedPairCursor{
+		crossCursors = append(crossCursors, &pairCursor{
 			keys:     indexInfo.content.crossCells,
 			payloads: indexInfo.content.crossDocIDs,
 			remap:    segRemaps[s],
@@ -550,25 +550,25 @@ func (g *geoShapeV2IndexSectionOpaque) mergeIndexContents(indexInfos []*geoIndex
 	for s, indexInfo := range indexInfos {
 		remap := segRemaps[s]
 		for i, bbox := range indexInfo.content.boundingBoxes {
-			if remap[i] == pairDropped {
+			if remap[i] == droppedPair {
 				continue
 			}
 			mergedContent.boundingBoxes = append(mergedContent.boundingBoxes, bbox)
 		}
 		for i, shape := range indexInfo.content.shapes {
-			if remap[i] == pairDropped {
+			if remap[i] == droppedPair {
 				continue
 			}
 			mergedContent.shapes = append(mergedContent.shapes, shape)
 		}
 		for i, score := range indexInfo.content.docScoresInner {
-			if remap[i] == pairDropped {
+			if remap[i] == droppedPair {
 				continue
 			}
 			mergedContent.docScoresInner = append(mergedContent.docScoresInner, score)
 		}
 		for i, score := range indexInfo.content.docScoresCross {
-			if remap[i] == pairDropped {
+			if remap[i] == droppedPair {
 				continue
 			}
 			mergedContent.docScoresCross = append(mergedContent.docScoresCross, score)
@@ -589,7 +589,7 @@ func buildGeoDocRemaps(indexInfos []*geoIndexInfo,
 		for geoDocID, oldDocNum := range indexInfo.content.docNums {
 			newDocNum := indexInfo.newDocNums[oldDocNum]
 			if newDocNum == docDropped {
-				remap[geoDocID] = pairDropped
+				remap[geoDocID] = droppedPair
 				continue
 			}
 			remap[geoDocID] = uint32(numGeoDocs)

@@ -156,7 +156,7 @@ func (n *numericV2IndexSectionOpaque) process(f index.NumericV2Field,
 
 	indexContent, ok := n.indexContent[fieldID]
 	if !ok {
-		indexContent = &numericIndexContent{}
+		indexContent = &numericIndexContent{numDocs: n.numDocs}
 		n.indexContent[fieldID] = indexContent
 	}
 
@@ -174,35 +174,34 @@ func (n *numericV2IndexSectionOpaque) BytesWritten() uint64 {
 // -----------------------------------------------------------------------------
 
 // numericIndexContent holds one field's number_v2 content.
-//
-// During Process the entries accumulate in document order, because
-// processDocuments visits documents by ascending doc number. persist relies on
-// that: it emits the doc value block first, which requires document order, and
-// only then sorts values/docNums by value for the search arrays.
 type numericIndexContent struct {
-	// values holds each indexed value, sortable-encoded. Sorted ascending
-	// once persist or merge has finished with it.
+	// values holds each indexed value, sortable-encoded.
 	values []uint64
 	// docNums holds the segment document number owning each value, parallel
 	// to values.
 	docNums []uint32
 
-	// dvTerms is the concatenation of every entry's prefix-coded doc value
-	// term, each followed by index.DocValueTermSeparator, in document order.
-	// Empty when the field does not include doc values.
-	dvTerms []byte
-	// dvDocNums holds the distinct document numbers that contributed to
-	// dvTerms, ascending. dvEnds[i] is the end offset in dvTerms of
-	// dvDocNums[i]'s run; the run starts at dvEnds[i-1], or 0 for i == 0.
-	dvDocNums []uint32
-	dvEnds    []uint32
+	// dvTerms holds each document's doc value run, indexed by segment document
+	// number: dvTerms[docNum] is the concatenation of that document's
+	// prefix-coded values, each followed by index.DocValueTermSeparator.
+	dvTerms [][]byte
+
+	// numDocs is the segment's document count.
+	numDocs uint64
 
 	init bool
 }
 
 func (nc *numericIndexContent) alloc() {
-	nc.values = make([]uint64, 0)
-	nc.docNums = make([]uint32, 0)
+	nc.values = make([]uint64, 0, nc.numDocs)
+	nc.docNums = make([]uint32, 0, nc.numDocs)
+}
+
+// allocDVTerms makes room for the field's doc value runs, once.
+func (nc *numericIndexContent) allocDVTerms() {
+	if nc.dvTerms == nil {
+		nc.dvTerms = make([][]byte, nc.numDocs)
+	}
 }
 
 func (nc *numericIndexContent) process(f index.NumericV2Field,
@@ -218,26 +217,10 @@ func (nc *numericIndexContent) process(f index.NumericV2Field,
 	if !includeDocValues {
 		return
 	}
+	nc.allocDVTerms()
 
-	// a document with a multi-valued field contributes several entries in a
-	// row, which share one doc value run
-	if len(nc.dvDocNums) == 0 || nc.dvDocNums[len(nc.dvDocNums)-1] != docNum {
-		nc.dvDocNums = append(nc.dvDocNums, docNum)
-		nc.dvEnds = append(nc.dvEnds, 0)
-	}
-
-	nc.dvTerms = append(nc.dvTerms, f.DocValueTerm()...)
-	nc.dvTerms = append(nc.dvTerms, index.DocValueTermSeparator)
-	nc.dvEnds[len(nc.dvEnds)-1] = uint32(len(nc.dvTerms))
-}
-
-// dvRun returns the doc value bytes for the i'th distinct document.
-func (nc *numericIndexContent) dvRun(i int) []byte {
-	var start uint32
-	if i > 0 {
-		start = nc.dvEnds[i-1]
-	}
-	return nc.dvTerms[start:nc.dvEnds[i]]
+	nc.dvTerms[docNum] = append(append(nc.dvTerms[docNum], f.Value()...),
+		index.DocValueTermSeparator)
 }
 
 // -----------------------------------------------------------------------------
@@ -248,17 +231,18 @@ func (n *numericV2IndexSectionOpaque) persist(w *FileWriter) error {
 			continue
 		}
 
-		// The doc value block is written before the field record so that its
-		// offsets are known, and before the arrays below are sorted, because
-		// doc values must be emitted in ascending document order.
 		dvStart, dvEnd := uint64(fieldNotUninverted), uint64(fieldNotUninverted)
-		if len(content.dvDocNums) > 0 {
+		if len(content.dvTerms) > 0 {
 			encoder, err := n.newDocValueEncoder(n.optionsForFieldID(fieldID), w)
 			if err != nil {
 				return err
 			}
-			for i, docNum := range content.dvDocNums {
-				if err = encoder.Add(uint64(docNum), content.dvRun(i)); err != nil {
+
+			for docNum, termBytes := range content.dvTerms {
+				if len(termBytes) == 0 {
+					continue
+				}
+				if err = encoder.Add(uint64(docNum), termBytes); err != nil {
 					return err
 				}
 			}
@@ -267,15 +251,24 @@ func (n *numericV2IndexSectionOpaque) persist(w *FileWriter) error {
 			}
 		}
 
+		// record the starting position of this field's index content
 		fieldStart := w.Count()
-		if err := n.writeFieldRecordHeader(dvStart, dvEnd, w); err != nil {
+
+		tempBuf := n.grabBuf(binary.MaxVarintLen64)
+
+		// Write two varints for the doc value offsets
+		sz := binary.PutUvarint(tempBuf, dvStart)
+		if _, err := w.Write(tempBuf[:sz]); err != nil {
+			return err
+		}
+		sz = binary.PutUvarint(tempBuf, dvEnd)
+		if _, err := w.Write(tempBuf[:sz]); err != nil {
 			return err
 		}
 
-		// sort by value for the search arrays; the doc values written above
-		// keep their document ordering
+		// sort by value for the search arrays
 		content.values, content.docNums =
-			sortArrayPair(content.values, content.docNums)
+			sortPairArray(content.values, content.docNums)
 
 		if err := n.writeIndexContent(content, w); err != nil {
 			return err
@@ -288,12 +281,9 @@ func (n *numericV2IndexSectionOpaque) persist(w *FileWriter) error {
 	return nil
 }
 
-// newDocValueEncoder builds a content coder for one field's doc values, honouring
-// the field's chunking and compression options exactly as the inverted text
-// section does.
+// newDocValueEncoder builds a content coder for one field's doc values
 func (n *numericV2IndexSectionOpaque) newDocValueEncoder(
 	opts index.FieldIndexingOptions, w *FileWriter) (*chunkedContentCoder, error) {
-	// NOTE: doc values continue to use legacy chunk mode
 	chunkSize, err := getChunkSize(LegacyChunkMode, 0, 0)
 	if err != nil {
 		return nil, err
@@ -325,20 +315,6 @@ func (n *numericV2IndexSectionOpaque) flushDocValues(encoder *chunkedContentCode
 	return start, uint64(w.Count()), nil
 }
 
-// writeFieldRecordHeader writes the doc value offset pair that every section's
-// field record begins with.
-func (n *numericV2IndexSectionOpaque) writeFieldRecordHeader(dvStart, dvEnd uint64,
-	w *FileWriter) error {
-	tempBuf := n.grabBuf(binary.MaxVarintLen64)
-	for _, v := range []uint64{dvStart, dvEnd} {
-		sz := binary.PutUvarint(tempBuf, v)
-		if _, err := w.Write(tempBuf[:sz]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (n *numericV2IndexSectionOpaque) writeIndexContent(content *numericIndexContent,
 	w *FileWriter) error {
 	tempBuf := n.grabBuf(binary.MaxVarintLen64)
@@ -368,9 +344,7 @@ func (n *numericV2IndexSectionOpaque) writeIndexContent(content *numericIndexCon
 	return nil
 }
 
-// loadNumericIndexContent decodes a field's search arrays from mem. It does not
-// read the doc value block, which is reached through the field record's offsets
-// instead.
+// loadNumericIndexContent decodes a field's search arrays from mem.
 func loadNumericIndexContent(r *FileReader, mem []byte) (*numericIndexContent, error) {
 	var pos uint64
 
@@ -418,7 +392,7 @@ type numericIndexInfo struct {
 	content *numericIndexContent
 
 	// remap maps a segment document number to its number in the merged
-	// segment, with pairDropped marking deleted documents.
+	// segment, with droppedPair marking deleted documents.
 	remap []uint32
 }
 
@@ -474,15 +448,13 @@ func (n *numericV2IndexSection) Merge(opaque map[int]resetable, segments []*Segm
 			continue
 		}
 
-		// Merge in memory first: a field whose every document was dropped must
-		// not leave an orphan doc value block behind in the file.
+		// merge index content
 		mergedContent := no.mergeIndexContents(indexInfos)
 		if mergedContent == nil {
 			continue
 		}
 
-		// Doc values next, for the same reason as in persist: the offsets have
-		// to be known before the field record is written.
+		// merge doc values
 		dvStart, dvEnd := uint64(fieldNotUninverted), uint64(fieldNotUninverted)
 		if no.fieldsOptions[fieldName].IncludeDocValues() {
 			var err error
@@ -492,10 +464,20 @@ func (n *numericV2IndexSection) Merge(opaque map[int]resetable, segments []*Segm
 			}
 		}
 
+		// record the starting position of this field's index content
 		fieldStart := w.Count()
-		if err := no.writeFieldRecordHeader(dvStart, dvEnd, w); err != nil {
+		tempBuf := no.grabBuf(binary.MaxVarintLen64)
+
+		// Write the doc value offsets
+		sz := binary.PutUvarint(tempBuf, dvStart)
+		if _, err := w.Write(tempBuf[:sz]); err != nil {
 			return err
 		}
+		sz = binary.PutUvarint(tempBuf, dvEnd)
+		if _, err := w.Write(tempBuf[:sz]); err != nil {
+			return err
+		}
+
 		if err := no.writeIndexContent(mergedContent, w); err != nil {
 			return err
 		}
@@ -513,7 +495,7 @@ func buildDocNumRemap(newDocNums []uint64) []uint32 {
 	rv := make([]uint32, len(newDocNums))
 	for i, newDocNum := range newDocNums {
 		if newDocNum == docDropped {
-			rv[i] = pairDropped
+			rv[i] = droppedPair
 			continue
 		}
 		rv[i] = uint32(newDocNum)
@@ -534,9 +516,9 @@ func (n *numericV2IndexSectionOpaque) mergeIndexContents(
 		return nil
 	}
 
-	cursors := make([]*sortedPairCursor, 0, len(indexInfos))
+	cursors := make([]*pairCursor, 0, len(indexInfos))
 	for _, info := range indexInfos {
-		cursors = append(cursors, &sortedPairCursor{
+		cursors = append(cursors, &pairCursor{
 			keys:     info.content.values,
 			payloads: info.content.docNums,
 			remap:    info.remap,
@@ -554,12 +536,6 @@ func (n *numericV2IndexSectionOpaque) mergeIndexContents(
 
 // mergeDocValues concatenates the segments' existing doc value blocks into a new
 // one, remapping document numbers and dropping deleted documents.
-//
-// Correctness here rests on an ordering invariant that chunkedContentCoder.Add
-// requires but does not check: doc numbers must strictly increase.
-// mergeStoredAndRemap assigns merged doc numbers by walking segments in order
-// and doc numbers ascending within each segment, and iterateAllDocValues walks
-// chunks in order, so visiting the segments in the same order satisfies it.
 func (n *numericV2IndexSectionOpaque) mergeDocValues(fieldName string,
 	indexInfos []*numericIndexInfo, w *FileWriter, closeCh chan struct{}) (uint64, uint64, error) {
 	encoder, err := n.newDocValueEncoder(n.fieldsOptions[fieldName], w)
@@ -592,7 +568,7 @@ func (n *numericV2IndexSectionOpaque) mergeDocValues(fieldName string,
 		dvIterClone = dvIter.cloneInto(dvIterClone)
 		err = dvIterClone.iterateAllDocValues(sb, func(docNum uint64, terms []byte) error {
 			newDocNum := info.remap[docNum]
-			if newDocNum == pairDropped {
+			if newDocNum == droppedPair {
 				return nil
 			}
 			return encoder.Add(uint64(newDocNum), terms)

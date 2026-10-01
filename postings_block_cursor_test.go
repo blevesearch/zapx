@@ -584,3 +584,80 @@ func TestBlockMaxOneHit(t *testing.T) {
 		t.Fatalf("term bounds %+v, want %+v", tb, bd)
 	}
 }
+
+// fillNormsReference is fillNorms as it was written first, per doc checks and all
+func fillNormsReference(b *BlockCursor, out *segment.PostingsBlock, n int) {
+	if !b.normIsDense {
+		for i := 0; i < n; i++ {
+			out.Norms[i] = b.normConst
+		}
+		return
+	}
+	dense := b.normDense
+	for i := 0; i < n; i++ {
+		var id uint8
+		if d := int(out.Docs[i]); d < len(dense) {
+			id = dense[d]
+		}
+		out.Norms[i] = fieldNormFactor[id]
+	}
+}
+
+func TestFillNormsMatchesReference(t *testing.T) {
+	rnd := rand.New(rand.NewSource(5))
+	dense := make([]uint8, 5000)
+	for i := range dense {
+		dense[i] = uint8(rnd.Intn(256))
+	}
+	for _, c := range []struct {
+		name  string
+		dense bool
+		cut   int // length of the column
+	}{{"dense", true, 5000}, {"dense, short column", true, 2500}, {"constant", false, 0}} {
+		b := &BlockCursor{normIsDense: c.dense, normConst: fieldNormFactor[77]}
+		if c.dense {
+			b.normDense = dense[:c.cut]
+		}
+		for _, n := range []int{0, 1, 2, 7, 64, 127, 128} {
+			var blk, want segment.PostingsBlock
+			d := uint32(rnd.Intn(30))
+			for i := 0; i < n; i++ {
+				blk.Docs[i] = d
+				d += 1 + uint32(rnd.Intn(40)) // some are past the short column
+			}
+			want = blk
+			b.fillNorms(&blk, n)
+			fillNormsReference(b, &want, n)
+			for i := 0; i < n; i++ {
+				if blk.Norms[i] != want.Norms[i] {
+					t.Fatalf("%s n=%d doc %d: %v, want %v", c.name, n, blk.Docs[i], blk.Norms[i], want.Norms[i])
+				}
+			}
+		}
+	}
+}
+
+func BenchmarkFillNorms(b *testing.B) {
+	rnd := rand.New(rand.NewSource(5))
+	dense := make([]uint8, 50000)
+	for i := range dense {
+		dense[i] = uint8(rnd.Intn(256))
+	}
+	for _, gap := range []int{1, 10, 100} { // distance between the docs of a block
+		cur := &BlockCursor{normIsDense: true, normDense: dense}
+		var blk segment.PostingsBlock
+		for i := range blk.Docs {
+			blk.Docs[i] = uint32(10 + i*gap)
+		}
+		b.Run(fmt.Sprintf("gap=%d/new", gap), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				cur.fillNorms(&blk, 128)
+			}
+		})
+		b.Run(fmt.Sprintf("gap=%d/reference", gap), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				fillNormsReference(cur, &blk, 128)
+			}
+		})
+	}
+}

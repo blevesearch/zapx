@@ -248,20 +248,43 @@ func (b *BlockCursor) dropDeleted(out *segment.PostingsBlock, n int) int {
 }
 
 // fillNorms resolves the norm factor of the first n docs of out.
+//
+// For a column that has a norm per doc this is a gather: each doc number picks
+// a byte of the column, which picks a factor of a 256 entry table. The block
+// is scored as a whole by SIMD kernels afterwards, so this loop, scalar as it
+// has to be (neither NEON nor SSE2 has a gather), is a good part of what a
+// block costs. So the work in it is only that: the column is checked once for
+// the block, not for each doc, and the loop has no other bounds check to pay
+// than the column's.
 func (b *BlockCursor) fillNorms(out *segment.PostingsBlock, n int) {
+	if n <= 0 {
+		return
+	}
+	docs := out.Docs[:n]
+	norms := out.Norms[:n]
 	if !b.normIsDense {
-		for i := 0; i < n; i++ {
-			out.Norms[i] = b.normConst
+		c := b.normConst
+		for i := range norms {
+			norms[i] = c
 		}
 		return
 	}
+
 	dense := b.normDense
-	for i := 0; i < n; i++ {
+	// Docs ascend, so the last tells whether any is past the column: not the
+	// case for a column that covers the segment, which is all of them.
+	if int(docs[n-1]) < len(dense) {
+		for i, d := range docs {
+			norms[i] = fieldNormFactor[dense[d]]
+		}
+		return
+	}
+	for i, d := range docs {
 		var id uint8 // a doc past the column has no norm: id 0, as in norms.id
-		if d := int(out.Docs[i]); d < len(dense) {
+		if int(d) < len(dense) {
 			id = dense[d]
 		}
-		out.Norms[i] = fieldNormFactor[id]
+		norms[i] = fieldNormFactor[id]
 	}
 }
 

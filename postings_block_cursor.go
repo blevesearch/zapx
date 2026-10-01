@@ -1,0 +1,429 @@
+//  Copyright (c) 2026 Couchbase, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// 		http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package zap
+
+import (
+	"encoding/binary"
+	"math"
+
+	"github.com/RoaringBitmap/roaring/v2"
+	segment "github.com/blevesearch/scorch_segment_api/v2"
+)
+
+// BlockCursor implements segment.BlockCursor on top of the (unexported)
+// blockCursor: it hands out the postings of a list one decoded block at a time,
+// as bare doc numbers, frequencies and norms.
+//
+// Unlike PostingsIterator it knows nothing about locations. It does take care
+// of the same things PostingsIterator takes care of around the raw cursor:
+// 1-hit lists, deleted docs, and resolving norms from the field's norms column.
+type BlockCursor struct {
+	pl *PostingsList
+	c  blockCursor
+
+	withFreqs bool
+	withNorms bool
+
+	// exceptItr walks the deleted-doc bitmap in lockstep with the postings; it
+	// is nil when nothing is deleted.
+	exceptItr roaring.IntPeekable
+
+	// is1Hit lists have no blockCursor behind them: the one posting is handed
+	// out by the first call that gets to it.
+	is1Hit   bool
+	consumed bool
+
+	// lastBounds are the bounds of the block that was decoded last
+	lastBounds segment.BlockBounds
+
+	// The field's norms column, flattened so that the per-block loop does not
+	// re-decide its shape.
+	normDense   []uint8
+	normConst   float32
+	normIsDense bool
+}
+
+var _ segment.BlockCursor = (*BlockCursor)(nil)
+var _ segment.BlockCursorProvider = (*PostingsList)(nil)
+var _ segment.BlockMaxCursor = (*BlockCursor)(nil)
+
+// BlockCursor returns a cursor over the list. It implements
+// segment.BlockCursorProvider.
+func (p *PostingsList) BlockCursor(withFreqs, withNorms bool,
+	prealloc segment.BlockCursor) (segment.BlockCursor, error) {
+	rv, _ := prealloc.(*BlockCursor)
+	if rv == nil {
+		rv = &BlockCursor{}
+	} else {
+		// reuse the cursor, and in particular its decode buffer, for this list
+		buf := rv.c.buf
+		*rv = BlockCursor{}
+		rv.c.buf = buf
+	}
+
+	rv.pl = p
+	rv.withFreqs = withFreqs
+	rv.withNorms = withNorms
+
+	if p.except != nil && !p.except.IsEmpty() {
+		rv.exceptItr = p.except.Iterator()
+	}
+
+	if p.is1Hit {
+		rv.is1Hit = true
+		// an empty list (no segment behind it) with no 1-hit is handled below
+		return rv, nil
+	}
+	if p.sb == nil {
+		// emptyPostingsList
+		rv.consumed = true
+		return rv, nil
+	}
+
+	if p.norms != nil {
+		rv.normIsDense = p.norms.kind == normsKindDense
+		rv.normDense = p.norms.dense
+		// matches the iterator: a column without norms yields id 0
+		rv.normConst = fieldNormFactor[p.norms.constant]
+		if p.norms.kind == normsKindAbsent {
+			rv.normConst = fieldNormFactor[0]
+		}
+	} else {
+		rv.normConst = fieldNormFactor[0]
+	}
+
+	if err := rv.c.init(p.sb, &p.footer, withFreqs); err != nil {
+		return nil, err
+	}
+	return rv, nil
+}
+
+// Count implements segment.BlockCursor.
+func (b *BlockCursor) Count() uint64 { return b.pl.Count() }
+
+// LiveCount implements segment.BlockCursor.
+func (b *BlockCursor) LiveCount() (uint64, error) {
+	p := b.pl
+	if p.except == nil || p.except.IsEmpty() {
+		return p.Count(), nil
+	}
+	// walk a cursor of its own, without freqs or norms: only the doc numbers
+	// are decoded, and the deleted ones are dropped as they go by
+	sc, err := p.BlockCursor(false, false, nil)
+	if err != nil {
+		return 0, err
+	}
+	var blk segment.PostingsBlock
+	var live uint64
+	for {
+		n, err := sc.NextBlock(&blk)
+		if err != nil {
+			return 0, err
+		}
+		if n == 0 {
+			return live, nil
+		}
+		live += uint64(n)
+	}
+}
+
+// BytesRead implements segment.BlockCursor.
+func (b *BlockCursor) BytesRead() uint64 { return b.c.bytesRead }
+
+// NextBlock implements segment.BlockCursor.
+func (b *BlockCursor) NextBlock(out *segment.PostingsBlock) (int, error) {
+	if b.is1Hit {
+		return b.next1Hit(0, out), nil
+	}
+	for !b.consumed && !b.c.isExhausted() {
+		n, err := b.loadInto(0, out)
+		if err != nil {
+			return 0, err
+		}
+		if n > 0 {
+			return n, nil
+		}
+		// every doc in the block was deleted
+	}
+	return 0, nil
+}
+
+// SeekBlock implements segment.BlockCursor.
+func (b *BlockCursor) SeekBlock(target uint64, out *segment.PostingsBlock) (int, error) {
+	if b.is1Hit {
+		return b.next1Hit(target, out), nil
+	}
+	if target > math.MaxUint32 {
+		b.consumed = true
+		return 0, nil
+	}
+	if b.consumed {
+		return 0, nil
+	}
+
+	// skip data only; the cursor never moves backwards
+	b.c.seekBlock(uint32(target))
+	for !b.c.isExhausted() {
+		n, err := b.loadInto(uint32(target), out)
+		if err != nil {
+			return 0, err
+		}
+		if n > 0 {
+			return n, nil
+		}
+		// nothing left at or after target in this block (it was deleted)
+	}
+	return 0, nil
+}
+
+// loadInto decodes the block the cursor is on, copies the live entries that
+// are >= lo into out, and steps the cursor to the next block.
+func (b *BlockCursor) loadInto(lo uint32, out *segment.PostingsBlock) (int, error) {
+	c := &b.c
+	if err := c.loadBlock(); err != nil {
+		return 0, err
+	}
+
+	n := c.numDocs()
+	docs := c.docs()
+	start := 0
+	if lo > 0 && docs[0] < lo {
+		start = searchBlock(docs, lo)
+	}
+	n -= start
+	if n < 0 {
+		n = 0
+	}
+	copy(out.Docs[:n], docs[start:start+n])
+	if b.withFreqs {
+		copy(out.Freqs[:n], c.freqs()[start:start+n])
+	}
+
+	b.lastBounds = b.entryBounds()
+
+	// after this the block buffer isn't needed: step ahead
+	c.nextBlock()
+
+	if b.exceptItr != nil {
+		n = b.dropDeleted(out, n)
+	}
+	if b.withNorms {
+		b.fillNorms(out, n)
+	}
+	return n, nil
+}
+
+// dropDeleted compacts out so that it holds no deleted doc, returning the new
+// length. The bitmap and the postings are both ascending, so advancing the
+// peekable iterator is amortised constant work.
+func (b *BlockCursor) dropDeleted(out *segment.PostingsBlock, n int) int {
+	w := 0
+	for i := 0; i < n; i++ {
+		d := out.Docs[i]
+		b.exceptItr.AdvanceIfNeeded(d)
+		if b.exceptItr.HasNext() && b.exceptItr.PeekNext() == d {
+			continue
+		}
+		if w != i {
+			out.Docs[w] = d
+			if b.withFreqs {
+				out.Freqs[w] = out.Freqs[i]
+			}
+		}
+		w++
+	}
+	return w
+}
+
+// fillNorms resolves the norm factor of the first n docs of out.
+func (b *BlockCursor) fillNorms(out *segment.PostingsBlock, n int) {
+	if !b.normIsDense {
+		for i := 0; i < n; i++ {
+			out.Norms[i] = b.normConst
+		}
+		return
+	}
+	dense := b.normDense
+	for i := 0; i < n; i++ {
+		var id uint8 // a doc past the column has no norm: id 0, as in norms.id
+		if d := int(out.Docs[i]); d < len(dense) {
+			id = dense[d]
+		}
+		out.Norms[i] = fieldNormFactor[id]
+	}
+}
+
+// next1Hit hands out the inline posting of a 1-hit list if it's live and >= lo.
+func (b *BlockCursor) next1Hit(lo uint64, out *segment.PostingsBlock) int {
+	if b.consumed {
+		return 0
+	}
+	b.consumed = true
+
+	p := b.pl
+	if p.docNum1Hit == DocNum1HitFinished || p.docNum1Hit < lo {
+		return 0
+	}
+	if p.docNum1Hit > math.MaxUint32 {
+		return 0
+	}
+	d := uint32(p.docNum1Hit)
+	if p.except != nil && p.except.Contains(d) {
+		return 0
+	}
+	out.Docs[0] = d
+	b.lastBounds = b.oneHitBounds()
+	if b.withFreqs {
+		out.Freqs[0] = uint32(p.freq1Hit)
+	}
+	if b.withNorms {
+		out.Norms[0] = fieldNormFactor[p.norms.id(d)]
+	}
+	return 1
+}
+
+// ---------------------------------------------------------------------------
+//
+// BLOCK MAX
+//
+// ---------------------------------------------------------------------------
+
+// exhaustedBounds are the bounds of no block at all: nothing to score.
+var exhaustedBounds = segment.BlockBounds{LastDoc: docNumTerminated, FreqBounded: true}
+
+// oneHitBounds are the bounds of a 1-hit list's only posting
+func (b *BlockCursor) oneHitBounds() segment.BlockBounds {
+	p := b.pl
+	if p.docNum1Hit == DocNum1HitFinished || p.docNum1Hit > math.MaxUint32 {
+		return exhaustedBounds
+	}
+	d := uint32(p.docNum1Hit)
+	return segment.BlockBounds{
+		LastDoc:     d,
+		MaxFreq:     uint32(p.freq1Hit),
+		FreqBounded: true,
+		MaxNorm:     fieldNormFactor[p.norms.id(d)],
+	}
+}
+
+// entryBounds are the bounds of the block the skip cursor is on.
+func (b *BlockCursor) entryBounds() segment.BlockBounds {
+	c := &b.c
+	if c.exhausted {
+		return exhaustedBounds
+	}
+	return skipEntryBounds(&c.entry, c.hasFreqs)
+}
+
+func skipEntryBounds(e *skipEntry, hasFreqs bool) segment.BlockBounds {
+	bd := segment.BlockBounds{LastDoc: e.lastDoc}
+	if !hasFreqs {
+		// every frequency is 1, and nothing is known about the norms
+		bd.MaxFreq, bd.FreqBounded = 1, true
+		bd.MaxNorm = float32(math.Inf(1))
+		return bd
+	}
+	bd.MaxFreq = uint32(e.maxTF)
+	// a saturated maxTF means "at least this", which bounds nothing
+	bd.FreqBounded = e.maxTF < math.MaxUint8
+	bd.MaxNorm = fieldNormFactor[e.minNormID]
+	return bd
+}
+
+// BoundsAt implements segment.BlockMaxCursor.
+func (b *BlockCursor) BoundsAt(target uint32) (segment.BlockBounds, bool) {
+	if b.is1Hit {
+		bd := b.oneHitBounds()
+		return bd, bd.LastDoc != docNumTerminated && bd.LastDoc >= target
+	}
+	if b.pl.sb == nil {
+		return exhaustedBounds, false
+	}
+	c := &b.c
+	total := c.numFullBlocks
+	if c.tailLen > 0 {
+		total++
+	}
+	// the first block whose last doc is >= target; the skip entries are
+	// fixed-width and their last docs ascend
+	lo, hi := 0, total
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		var lastDoc uint32
+		if mid < c.numFullBlocks {
+			lastDoc = binary.LittleEndian.Uint32(c.skip[mid*c.entryLen:])
+		} else {
+			lastDoc = c.tailEntry.lastDoc
+		}
+		if lastDoc < target {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo == total {
+		return exhaustedBounds, false
+	}
+	if lo < c.numFullBlocks {
+		var e skipEntry
+		e.decode(c.skip[lo*c.entryLen:], c.hasFreqs)
+		return skipEntryBounds(&e, c.hasFreqs), true
+	}
+	return skipEntryBounds(&c.tailEntry, c.hasFreqs), true
+}
+
+// DecodedBounds implements segment.BlockMaxCursor.
+func (b *BlockCursor) DecodedBounds() segment.BlockBounds { return b.lastBounds }
+
+// TermBounds implements segment.BlockMaxCursor.
+func (b *BlockCursor) TermBounds() segment.BlockBounds {
+	if b.is1Hit {
+		return b.oneHitBounds()
+	}
+	if b.pl.sb == nil {
+		return exhaustedBounds
+	}
+	c := &b.c
+	rv := segment.BlockBounds{FreqBounded: true}
+	first := true
+	add := func(e *skipEntry) {
+		bd := skipEntryBounds(e, c.hasFreqs)
+		rv.LastDoc = bd.LastDoc
+		if first {
+			rv.MaxNorm = bd.MaxNorm
+			first = false
+		}
+		if bd.MaxNorm > rv.MaxNorm {
+			rv.MaxNorm = bd.MaxNorm
+		}
+		if !bd.FreqBounded {
+			rv.FreqBounded = false
+		} else if bd.MaxFreq > rv.MaxFreq {
+			rv.MaxFreq = bd.MaxFreq
+		}
+	}
+	var e skipEntry
+	for i := 0; i < c.numFullBlocks; i++ {
+		e.decode(c.skip[i*c.entryLen:], c.hasFreqs)
+		add(&e)
+	}
+	if c.tailLen > 0 {
+		add(&c.tailEntry)
+	}
+	if first {
+		return exhaustedBounds
+	}
+	return rv
+}

@@ -331,6 +331,26 @@ func (di *docValueReader) getDocValueLocs(docNum uint64) (uint64, uint64) {
 	return math.MaxUint64, math.MaxUint64
 }
 
+// fieldDocValueReader returns the doc value reader for a field, whichever
+// section persisted it.
+func (sb *SegmentBase) fieldDocValueReader(fieldID uint16) *docValueReader {
+	var rv *docValueReader
+	for secID := range sb.fieldDvReaders {
+		secDvReaders := sb.fieldDvReaders[secID]
+		if secDvReaders == nil || int(fieldID) >= len(secDvReaders) {
+			continue
+		}
+		if dvr := secDvReaders[fieldID]; dvr != nil {
+			if rv != nil {
+				panic(fmt.Sprintf("field %v has doc values in more than one "+
+					"section", sb.fieldsInv[fieldID]))
+			}
+			rv = dvr
+		}
+	}
+	return rv
+}
+
 // VisitDocValues is an implementation of the
 // DocValueVisitable interface
 func (sb *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
@@ -376,7 +396,7 @@ func (sb *SegmentBase) VisitDocValues(localDocNum uint64, fields []string,
 
 		// initialize the docValueReader for the field if needed
 		if initDvReaders {
-			dvIter = sb.fieldDvReaders[SectionInvertedTextIndex][fieldID]
+			dvIter = sb.fieldDocValueReader(fieldID)
 			if dvIter != nil {
 				dvs.dvrs[fieldID] = dvIter.cloneInto(dvs.dvrs[fieldID])
 			}

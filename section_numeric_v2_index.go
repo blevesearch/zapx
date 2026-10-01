@@ -219,7 +219,7 @@ func (nc *numericIndexContent) process(f index.NumericV2Field,
 	}
 	nc.allocDVTerms()
 
-	nc.dvTerms[docNum] = append(append(nc.dvTerms[docNum], f.Value()...),
+	nc.dvTerms[docNum] = append(append(nc.dvTerms[docNum], f.DocValue()...),
 		index.DocValueTermSeparator)
 }
 

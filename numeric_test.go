@@ -50,6 +50,7 @@ func (s *stubNumericV2Field) AnalyzedLength() int                              {
 func (s *stubNumericV2Field) AnalyzedTokenFrequencies() index.TokenFrequencies { return nil }
 func (s *stubNumericV2Field) NumPlainTextBytes() uint64                        { return 0 }
 func (s *stubNumericV2Field) SortableValue() uint64                            { return s.value }
+func (s *stubNumericV2Field) DocValue() []byte                                 { return s.dvTerm }
 
 type stubNumericDocument struct {
 	id     string

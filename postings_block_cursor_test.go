@@ -661,3 +661,65 @@ func BenchmarkFillNorms(b *testing.B) {
 		})
 	}
 }
+
+// BoundsAt answers the same wherever the cursor is: ahead of the target, on
+// it, or short of it by more blocks than the fast path probes.
+func TestBlockMaxBoundsAtWhileMoving(t *testing.T) {
+	sb := buildBlockCursorTestSegment(t)
+	dict, _ := sb.Dictionary("body")
+	rnd := rand.New(rand.NewSource(11))
+	for _, term := range []string{"common", "even", "tri", "pair", "rare", "missing"} {
+		pl, _ := dict.PostingsList([]byte(term), nil, nil)
+
+		var blocks []segment.BlockBounds
+		{
+			c2, bm2 := blockMaxCursor(t, pl)
+			var blk segment.PostingsBlock
+			for {
+				n, err := c2.NextBlock(&blk)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if n == 0 {
+					break
+				}
+				blocks = append(blocks, bm2.DecodedBounds())
+			}
+		}
+
+		for round := 0; round < 30; round++ {
+			cur, bm := blockMaxCursor(t, pl)
+			var blk segment.PostingsBlock
+			for step := 0; step < 12; step++ {
+				for ask := 0; ask < 8; ask++ {
+					target := uint32(rnd.Intn(blockCursorTestDocs + 30))
+					bd, ok := bm.BoundsAt(target)
+					want := -1
+					for i, b := range blocks {
+						if b.LastDoc >= target {
+							want = i
+							break
+						}
+					}
+					if ok != (want >= 0) || (ok && bd != blocks[want]) {
+						t.Fatalf("%s round %d step %d target=%d: got %+v/%v, want block %d of %d",
+							term, round, step, target, bd, ok, want, len(blocks))
+					}
+				}
+				var n int
+				var err error
+				if rnd.Intn(2) == 0 {
+					n, err = cur.NextBlock(&blk)
+				} else {
+					n, err = cur.SeekBlock(uint64(rnd.Intn(blockCursorTestDocs)), &blk)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if n == 0 {
+					break
+				}
+			}
+		}
+	}
+}

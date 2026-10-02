@@ -365,6 +365,10 @@ func skipEntryBounds(e *skipEntry, hasFreqs bool) segment.BlockBounds {
 	return bd
 }
 
+// boundsProbe is how many blocks, from the cursor's, BoundsAt looks at one by one
+// before it searches for the target.
+const boundsProbe = 4
+
 // BoundsAt implements segment.BlockMaxCursor.
 func (b *BlockCursor) BoundsAt(target uint32) (segment.BlockBounds, bool) {
 	if b.is1Hit {
@@ -381,16 +385,28 @@ func (b *BlockCursor) BoundsAt(target uint32) (segment.BlockBounds, bool) {
 	}
 	// the first block whose last doc is >= target; the skip entries are
 	// fixed-width and their last docs ascend
+	lastDocAt := func(i int) uint32 {
+		if i < c.numFullBlocks {
+			return binary.LittleEndian.Uint32(c.skip[i*c.entryLen:])
+		}
+		return c.tailEntry.lastDoc
+	}
 	lo, hi := 0, total
+	// Asked about in order, which is how a pruner walks a list, the answer is
+	// the block the cursor is at or one of the few after it: probe those first,
+	// unless the target is behind the cursor.
+	if i := c.blockIdx; i < total && (i == 0 || target > lastDocAt(i-1)) {
+		lo = i
+		for lo < total && lo < i+boundsProbe && lastDocAt(lo) < target {
+			lo++
+		}
+		if lo >= total || lastDocAt(lo) >= target {
+			hi = lo
+		}
+	}
 	for lo < hi {
 		mid := int(uint(lo+hi) >> 1)
-		var lastDoc uint32
-		if mid < c.numFullBlocks {
-			lastDoc = binary.LittleEndian.Uint32(c.skip[mid*c.entryLen:])
-		} else {
-			lastDoc = c.tailEntry.lastDoc
-		}
-		if lastDoc < target {
+		if lastDocAt(mid) < target {
 			lo = mid + 1
 		} else {
 			hi = mid

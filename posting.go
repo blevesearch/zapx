@@ -300,9 +300,9 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 
 var _ segment.BlockCursorProvider = (*PostingsList)(nil)
 
-// BlockCursor returns a cursor over the list, a *BlockPostingsIterator. It
-// implements segment.BlockCursorProvider.
-func (p *PostingsList) BlockCursor(withFreqs, withNorms bool,
+// BlockPostingsIterator returns a cursor over the list, a *BlockPostingsIterator.
+// It implements segment.BlockCursorProvider.
+func (p *PostingsList) BlockPostingsIterator(withFreqs, withNorms bool,
 	prealloc segment.BlockCursor) (segment.BlockCursor, error) {
 	rv, _ := prealloc.(*BlockPostingsIterator)
 	if rv == nil {

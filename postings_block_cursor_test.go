@@ -166,7 +166,7 @@ func TestBlockCursorMatchesPostingsIterator(t *testing.T) {
 			if !ok {
 				t.Fatal("PostingsList isn't a BlockCursorProvider")
 			}
-			cur, err := prov.BlockCursor(true, true, nil)
+			cur, err := prov.BlockPostingsIterator(true, true, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -179,7 +179,7 @@ func TestBlockCursorMatchesPostingsIterator(t *testing.T) {
 			}
 
 			// reusing the cursor on the same list gives the same answer
-			cur, err = prov.BlockCursor(true, true, cur)
+			cur, err = prov.BlockPostingsIterator(true, true, cur)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -197,7 +197,7 @@ func TestBlockCursorWithoutFreqsAndNorms(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := viaIterator(t, pl.(*PostingsList))
-		cur, err := pl.(segment.BlockCursorProvider).BlockCursor(false, false, nil)
+		cur, err := pl.(segment.BlockCursorProvider).BlockPostingsIterator(false, false, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -249,7 +249,7 @@ func TestBlockCursorSeekBlock(t *testing.T) {
 					}
 				}
 
-				cur, err := pl.(segment.BlockCursorProvider).BlockCursor(true, true, nil)
+				cur, err := pl.(segment.BlockCursorProvider).BlockPostingsIterator(true, true, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -285,7 +285,7 @@ func TestBlockCursorSeekBlockWalksForward(t *testing.T) {
 	sb := buildBlockCursorTestSegment(t)
 	dict, _ := sb.Dictionary("body")
 	pl, _ := dict.PostingsList([]byte("common"), nil, nil)
-	cur, _ := pl.(segment.BlockCursorProvider).BlockCursor(true, false, nil)
+	cur, _ := pl.(segment.BlockCursorProvider).BlockPostingsIterator(true, false, nil)
 
 	var blk segment.PostingsBlock
 	n, err := cur.SeekBlock(300, &blk)
@@ -308,7 +308,7 @@ func TestBlockCursorEmptyPostingsList(t *testing.T) {
 	sb := buildBlockCursorTestSegment(t)
 	dict, _ := sb.Dictionary("body")
 	pl, _ := dict.PostingsList([]byte("missing"), nil, nil)
-	cur, err := pl.(segment.BlockCursorProvider).BlockCursor(true, true, nil)
+	cur, err := pl.(segment.BlockCursorProvider).BlockPostingsIterator(true, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestBlockCursorLiveCount(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := uint64(len(viaIterator(t, pl.(*PostingsList))))
-			cur, err := pl.(segment.BlockCursorProvider).BlockCursor(true, true, nil)
+			cur, err := pl.(segment.BlockCursorProvider).BlockPostingsIterator(true, true, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -381,7 +381,7 @@ func buildSaturatedSegment(t *testing.T) *SegmentBase {
 
 func blockMaxCursor(t *testing.T, pl interface{}) (segment.BlockCursor, segment.BlockMaxCursor) {
 	t.Helper()
-	cur, err := pl.(segment.BlockCursorProvider).BlockCursor(true, true, nil)
+	cur, err := pl.(segment.BlockCursorProvider).BlockPostingsIterator(true, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

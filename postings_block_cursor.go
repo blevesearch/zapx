@@ -33,7 +33,7 @@ import (
 // PostingsIterator does: 1-hit lists, deleted docs, resolving norms from the
 // field's norms column, and, which PostingsIterator has no need of, the bounds of
 // blocks. Unlike PostingsIterator it knows nothing about locations. A PostingsList
-// hands one out through BlockCursor (see posting.go).
+// hands one out through BlockPostingsIterator (see posting.go).
 type BlockPostingsIterator struct {
 	pl *PostingsList
 	c  blockCursor
@@ -74,7 +74,7 @@ func (b *BlockPostingsIterator) LiveCount() (uint64, error) {
 	}
 	// walk a cursor of its own, without freqs or norms: only the doc numbers
 	// are decoded, and the deleted ones are dropped as they go by
-	sc, err := p.BlockCursor(false, false, nil)
+	sc, err := p.BlockPostingsIterator(false, false, nil)
 	if err != nil {
 		return 0, err
 	}

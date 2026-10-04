@@ -840,8 +840,8 @@ func TestTailBlockMaxBound(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			postings := model.terms[tc.term]
-			numFull := len(postings) / postingsBlockLen
-			tailLen := len(postings) % postingsBlockLen
+			numFull := len(postings) / segment.PostingsBlockLen
+			tailLen := len(postings) % segment.PostingsBlockLen
 			if tailLen == 0 {
 				t.Fatalf("term %q: expected a tail, got an exact multiple of the block size", tc.term)
 			}
@@ -857,7 +857,7 @@ func TestTailBlockMaxBound(t *testing.T) {
 			itr := pl.Iterator(true, true, false, nil).(*PostingsIterator)
 
 			if numFull > 0 {
-				wantMinNormID, wantMaxTF := boundOf(postings[:postingsBlockLen])
+				wantMinNormID, wantMaxTF := boundOf(postings[:segment.PostingsBlockLen])
 				if _, err := itr.Advance(postings[0].docNum); err != nil {
 					t.Fatal(err)
 				}
@@ -894,21 +894,21 @@ func TestTailBlockMaxBound(t *testing.T) {
 func TestSearchBlock(t *testing.T) {
 	rng := rand.New(rand.NewSource(11))
 	for trial := 0; trial < 500; trial++ {
-		var arr [postingsBlockLen]uint32
-		n := 1 + rng.Intn(postingsBlockLen)
+		var arr [segment.PostingsBlockLen]uint32
+		n := 1 + rng.Intn(segment.PostingsBlockLen)
 		v := uint32(rng.Intn(10))
 		for i := 0; i < n; i++ {
 			v += 1 + uint32(rng.Intn(50))
 			arr[i] = v
 		}
-		for i := n; i < postingsBlockLen; i++ {
+		for i := n; i < segment.PostingsBlockLen; i++ {
 			arr[i] = docNumTerminated
 		}
 
 		for probe := 0; probe < 20; probe++ {
 			target := uint32(rng.Intn(int(v) + 10))
 			want := 0
-			for want < postingsBlockLen && arr[want] < target {
+			for want < segment.PostingsBlockLen && arr[want] < target {
 				want++
 			}
 			if got := searchBlock(&arr, target); got != want {

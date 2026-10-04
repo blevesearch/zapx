@@ -20,12 +20,13 @@ import (
 	"math"
 
 	"github.com/blevesearch/freeway/bitpack"
+	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 
 // blockBuf holds one decoded block: 128 docs and their corresponding freqs
 type blockBuf struct {
-	docs  [postingsBlockLen]uint32
-	freqs [postingsBlockLen]uint32
+	docs  [segment.PostingsBlockLen]uint32
+	freqs [segment.PostingsBlockLen]uint32
 }
 
 // blockCursor iterates over the postings one block at a time. It reads the following
@@ -99,7 +100,7 @@ const docNumTerminated = uint32(math.MaxUint32)
 
 // allOnes is a 128 size array containing just 1s, useful in cases where
 // we are ignoring freqs.
-var allOnes = func() (a [postingsBlockLen]uint32) {
+var allOnes = func() (a [segment.PostingsBlockLen]uint32) {
 	for i := range a {
 		a[i] = 1
 	}
@@ -108,7 +109,7 @@ var allOnes = func() (a [postingsBlockLen]uint32) {
 
 // allTerminated is a 128 size array containing just "terminated" doc nums
 // which are used to signify that the postings list has come to an end.
-var allTerminated = func() (a [postingsBlockLen]uint32) {
+var allTerminated = func() (a [segment.PostingsBlockLen]uint32) {
 	for i := range a {
 		a[i] = docNumTerminated
 	}
@@ -131,8 +132,8 @@ func (c *blockCursor) init(sb *SegmentBase, h *termFooter, wantFreqs bool) error
 	c.docFreq = h.docFreq
 	c.hasFreqs = h.hasFreqs()
 	c.wantFreqs = wantFreqs && c.hasFreqs
-	c.numFullBlocks = int(h.docFreq) / postingsBlockLen
-	c.tailLen = int(h.docFreq) % postingsBlockLen
+	c.numFullBlocks = int(h.docFreq) / segment.PostingsBlockLen
+	c.tailLen = int(h.docFreq) % segment.PostingsBlockLen
 	c.entryLen = skipEntryLen(c.hasFreqs)
 
 	c.tailEntry = skipEntry{}
@@ -258,7 +259,7 @@ func (c *blockCursor) loadBlock() error {
 		}
 		bitpack.UnpackPlus1(raw[docBytes:], c.entry.tfNumBits, &c.buf.freqs)
 	}
-	c.nDocs = postingsBlockLen
+	c.nDocs = segment.PostingsBlockLen
 	c.blockLastDoc = c.entry.lastDoc
 	return nil
 }
@@ -271,10 +272,10 @@ func (c *blockCursor) numDocs() int { return c.nDocs }
 func (c *blockCursor) lastDoc() uint32 { return c.blockLastDoc }
 
 // docs returns the currently loaded block's docnum array
-func (c *blockCursor) docs() *[postingsBlockLen]uint32 { return &c.buf.docs }
+func (c *blockCursor) docs() *[segment.PostingsBlockLen]uint32 { return &c.buf.docs }
 
 // freqs returns the currently loaded block's freq array.
-func (c *blockCursor) freqs() *[postingsBlockLen]uint32 { return &c.buf.freqs }
+func (c *blockCursor) freqs() *[segment.PostingsBlockLen]uint32 { return &c.buf.freqs }
 
 // searchBlock returns the index of the first entry in a decoded block that is
 // greater than or equal to target -- a lower bound.
@@ -288,8 +289,8 @@ func (c *blockCursor) freqs() *[postingsBlockLen]uint32 { return &c.buf.freqs }
 // It relies on the padding invariant: the block always holds 128 non-decreasing
 // entries ending in a value no legal target can exceed, so the result is always
 // in range.
-func searchBlock(arr *[postingsBlockLen]uint32, target uint32) int {
-	base, span := 0, postingsBlockLen
+func searchBlock(arr *[segment.PostingsBlockLen]uint32, target uint32) int {
+	base, span := 0, segment.PostingsBlockLen
 	for {
 		step := span / 8
 		if step == 0 {

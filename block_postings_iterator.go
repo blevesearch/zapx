@@ -387,6 +387,12 @@ func (b *BlockPostingsIterator) BoundsAt(target uint32) (segment.BlockBounds, bo
 func (b *BlockPostingsIterator) DecodedBounds() segment.BlockBounds { return b.lastBounds }
 
 // TermBounds implements segment.BlockMaxPostingsIterator.
+//
+// A term with several skip entries has the block-max pair of the whole term in its
+// footer (see termBoundsMinEntries), and the bounds cost two byte loads and the last
+// skip entry, whatever the length of the list. One without -- a term of a few
+// entries, where the walk is next to nothing, or one written before the footer had
+// them -- is found by walking its skip entries.
 func (b *BlockPostingsIterator) TermBounds() segment.BlockBounds {
 	if b.is1Hit {
 		return b.oneHitBounds()
@@ -394,6 +400,34 @@ func (b *BlockPostingsIterator) TermBounds() segment.BlockBounds {
 	if b.pl.sb == nil {
 		return exhaustedBounds
 	}
+	h := &b.pl.footer
+	if !h.hasBounds() || (b.c.numFullBlocks == 0 && b.c.tailLen == 0) {
+		return b.termBoundsByScan()
+	}
+	rv := segment.BlockBounds{
+		LastDoc: b.lastEntryDoc(),
+		MaxFreq: uint32(h.maxTF),
+		// a saturated maxTF means "at least this", which bounds nothing
+		FreqBounded: h.maxTF < math.MaxUint8,
+		MaxNorm:     fieldNormFactor[h.minNormID],
+	}
+	return rv
+}
+
+// lastEntryDoc is the last doc of the list: that of its last skip entry, the
+// tail's if it has one.
+func (b *BlockPostingsIterator) lastEntryDoc() uint32 {
+	c := &b.c
+	if c.tailLen > 0 {
+		return c.tailEntry.lastDoc
+	}
+	var e skipEntry
+	e.decode(c.skip[(c.numFullBlocks-1)*c.entryLen:], c.hasFreqs)
+	return e.lastDoc
+}
+
+// termBoundsByScan finds the bounds of the whole list by walking its skip entries.
+func (b *BlockPostingsIterator) termBoundsByScan() segment.BlockBounds {
 	c := &b.c
 	rv := segment.BlockBounds{FreqBounded: true}
 	first := true

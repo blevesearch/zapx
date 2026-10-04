@@ -196,6 +196,12 @@ type postingsSerializer struct {
 	// is only read to compute the per-block score bound, and may be nil.
 	normIDs []uint8
 
+	// the block-max pair of the term so far: the lowest minNormID and the highest
+	// maxTF of the skip entries written, and how many there are
+	termMinNormID uint8
+	termMaxTF     uint8
+	entries       int
+
 	payloadStart uint64
 	payloadEnd   uint64
 
@@ -215,6 +221,17 @@ func (s *postingsSerializer) StartTerm(hasFreqs, hasLocs bool, normIDs []uint8) 
 	s.payloadStart = uint64(s.w.Count())
 	s.payloadEnd = s.payloadStart
 	s.skipBuf = s.skipBuf[:0]
+	s.termMinNormID, s.termMaxTF, s.entries = 0xFF, 0, 0
+}
+
+// addEntryBound folds the block-max pair of a skip entry into that of the term.
+func (s *postingsSerializer) addEntryBound(minNormID, maxTF uint8) {
+	if minNormID < s.termMinNormID {
+		s.termMinNormID = minNormID
+	}
+	if maxTF > s.termMaxTF {
+		s.termMaxTF = maxTF
+	}
 }
 
 // AddDoc stages one posting.  Doc numbers must arrive strictly increasing.
@@ -292,7 +309,9 @@ func (s *postingsSerializer) flushBlock() error {
 	}
 	if s.hasFreqs {
 		e.minNormID, e.maxTF = s.blockBound(segment.PostingsBlockLen)
+		s.addEntryBound(e.minNormID, e.maxTF)
 	}
+	s.entries++
 	var entry [skipEntryLenWithFreqs]byte
 	s.skipBuf = append(s.skipBuf, entry[:e.encode(entry[:], s.hasFreqs)]...)
 
@@ -376,7 +395,9 @@ func (s *postingsSerializer) FinishPayload() error {
 		}
 		if s.hasFreqs {
 			e.minNormID, e.maxTF = s.blockBound(s.n)
+			s.addEntryBound(e.minNormID, e.maxTF)
 		}
+		s.entries++
 		var entry [tailEntryLenWithFreqs]byte
 		s.skipBuf = append(s.skipBuf, entry[:e.encodeTail(entry[:], s.hasFreqs)]...)
 	}
@@ -576,7 +597,21 @@ func encodeBlockMaxTF(tf uint32) uint8 {
 const (
 	termHasFreqs = 1 << 0
 	termHasLocs  = 1 << 1
+	// termHasBounds says the footer carries the block-max pair of the whole term
+	// (see termBoundsMinEntries).
+	termHasBounds = 1 << 2
 )
+
+// termBoundsMinEntries is how many skip entries a term has to have for its footer to
+// carry the block-max pair of the whole term: the lowest minNormID and the highest
+// maxTF of its blocks (and tail), which are what a pruner asks for before it
+// reads anything (BlockMaxPostingsIterator.TermBounds). It is two bytes a term.
+// Without it the pair is found by walking the term's skip entries, which is next to
+// nothing for a term of a few entries -- and nearly every term of a real dictionary
+// is, so they don't pay for the bytes -- and a cost that grows with the length of
+// the list for one of millions of postings, which is why those do. (A variable, so
+// that a test can write footers without it, as segments written before it have.)
+var termBoundsMinEntries = 4
 
 type termFooter struct {
 	docFreq    uint32
@@ -593,6 +628,12 @@ type termFooter struct {
 	locsStart    uint64
 	skipStart    uint64
 
+	// minNormID and maxTF are the block-max pair of the whole term, valid when
+	// termHasBounds is set: the same two bytes a skip entry has, for the term, so
+	// that they are known without walking the skip entries.
+	minNormID uint8
+	maxTF     uint8
+
 	// locChunkSize is the chunking the location blob was written with, carried
 	// here rather than re-derived from the doc frequency the way earlier zap
 	// versions did.  A merge cannot know a term's post-deletion frequency until
@@ -605,8 +646,18 @@ type termFooter struct {
 func (h *termFooter) hasFreqs() bool { return h.flags&termHasFreqs != 0 }
 func (h *termFooter) hasLocs() bool  { return h.flags&termHasLocs != 0 }
 
-// maxTermFooterLen bounds the encoded footer: five uvarints and a flag byte.
-const maxTermFooterLen = 5*binary.MaxVarintLen64 + 1
+// hasBounds reports whether the footer carries the block-max pair of the term.
+func (h *termFooter) hasBounds() bool { return h.flags&termHasBounds != 0 }
+
+// maxTermFooterLen bounds the encoded footer: five uvarints, a flag byte and, for a
+// term that has them, the block-max pair.
+const maxTermFooterLen = 5*binary.MaxVarintLen64 + 1 + 2
+
+// termFooterReadCharge is what reading a term's footer is accounted for in the bytes
+// read of a query: the size of a footer without the block-max pair, as it has been.
+// (It is a bound, not the size of the footer that was read, and what is reported
+// shouldn't change because a footer may carry two bytes more.)
+const termFooterReadCharge = 5*binary.MaxVarintLen64 + 1
 
 func (h *termFooter) encode(dst []byte) int {
 	n := binary.PutUvarint(dst, uint64(h.docFreq))
@@ -617,6 +668,10 @@ func (h *termFooter) encode(dst []byte) int {
 	n += binary.PutUvarint(dst[n:], h.skipLen)
 	if h.hasLocs() {
 		n += binary.PutUvarint(dst[n:], h.locChunkSize)
+	}
+	if h.hasBounds() {
+		dst[n], dst[n+1] = h.minNormID, h.maxTF
+		n += 2
 	}
 	return n
 }
@@ -663,6 +718,14 @@ func (h *termFooter) decode(mem []byte, offset uint64) error {
 		if read <= 0 {
 			return fmt.Errorf("corrupt term footer: bad locChunkSize at offset %d", offset)
 		}
+		n += read
+	}
+	h.minNormID, h.maxTF = 0, 0
+	if h.hasBounds() {
+		if n+2 > len(buf) {
+			return fmt.Errorf("corrupt term footer: truncated block-max pair at offset %d", offset)
+		}
+		h.minNormID, h.maxTF = buf[n], buf[n+1]
 	}
 
 	total := h.payloadLen + h.locsLen + h.skipLen
@@ -718,6 +781,10 @@ func (s *postingsSerializer) Close(locsLen, locChunkSize uint64) (uint64, error)
 		h.flags |= termHasLocs
 		h.locChunkSize = locChunkSize
 	}
+	if s.hasFreqs && s.entries >= termBoundsMinEntries {
+		h.flags |= termHasBounds
+		h.minNormID, h.maxTF = s.termMinNormID, s.termMaxTF
+	}
 
 	if cap(s.footerBuf) < maxTermFooterLen {
 		s.footerBuf = make([]byte, maxTermFooterLen)
@@ -759,6 +826,12 @@ type TermPostingsInfo struct {
 	LocsStart    uint64
 	SkipStart    uint64
 	LocChunkSize uint64
+
+	// HasTermBounds says the footer carries the block-max pair of the whole term,
+	// which are TermMinNormID and TermMaxTF (the same bytes a skip entry has).
+	HasTermBounds bool
+	TermMinNormID uint8
+	TermMaxTF     uint8
 }
 
 // DescribeTermPostings decodes the term footer an FST value points at.
@@ -789,5 +862,9 @@ func DescribeTermPostings(mem []byte, fstVal uint64) (*TermPostingsInfo, error) 
 		LocsStart:    h.locsStart,
 		SkipStart:    h.skipStart,
 		LocChunkSize: h.locChunkSize,
+
+		HasTermBounds: h.hasBounds(),
+		TermMinNormID: h.minNormID,
+		TermMaxTF:     h.maxTF,
 	}, nil
 }

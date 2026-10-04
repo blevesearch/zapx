@@ -405,7 +405,7 @@ func (rv *PostingsList) read(postingsOffset uint64, d *Dictionary) error {
 	// Only the footer has actually been read. The payload is charged block by
 	// block as the cursor decodes it, which is the point of the format: a query
 	// that skips most of a long postings list should not be billed for it.
-	rv.incrementBytesRead(uint64(maxTermFooterLen))
+	rv.incrementBytesRead(uint64(termFooterReadCharge))
 
 	// The location blob keeps the chunked encoding of earlier zap versions, but
 	// its chunk size is read from the footer instead of being re-derived from a

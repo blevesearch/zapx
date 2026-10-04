@@ -55,6 +55,14 @@ type blockTestModel struct {
 func buildBlockTestSegment(t *testing.T, numDocs int, termVectors bool) (
 	*SegmentBase, *blockTestModel) {
 	t.Helper()
+	return buildBlockTestSegmentWith(t, numDocs, termVectors, nil)
+}
+
+// buildBlockTestSegmentWith is buildBlockTestSegment, with the tokens that extra
+// gives for each document (if it isn't nil) added to what the document has.
+func buildBlockTestSegmentWith(t *testing.T, numDocs int, termVectors bool,
+	extra func(i int) []string) (*SegmentBase, *blockTestModel) {
+	t.Helper()
 
 	model := &blockTestModel{numDocs: numDocs, terms: map[string][]expPosting{}}
 	results := make([]index.Document, 0, numDocs)
@@ -85,6 +93,9 @@ func buildBlockTestSegment(t *testing.T, numDocs int, termVectors bool) (
 		// Pad so field lengths vary and the norm column is not constant.
 		for p := 0; p < i%37; p++ {
 			tokens = append(tokens, "pad")
+		}
+		if extra != nil {
+			tokens = append(tokens, extra(i)...)
 		}
 
 		value := strings.Join(tokens, " ")
@@ -672,6 +683,12 @@ func TestBlockPostingsMerge(t *testing.T) {
 				sort.Slice(want[term], func(a, b int) bool {
 					return want[term][a].docNum < want[term][b].docNum
 				})
+			}
+
+			// The merge writes the bounds of each term of what it wrote, deleted
+			// docs left out of them.
+			if withPair, _ := checkTermBounds(t, msb, "body", want); withPair == 0 {
+				t.Fatal("no merged term has the bounds of the term in its footer: the check proves nothing")
 			}
 
 			for _, term := range sortedTerms(want) {

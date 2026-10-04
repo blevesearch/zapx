@@ -840,8 +840,8 @@ func TestTailBlockMaxBound(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			postings := model.terms[tc.term]
-			numFull := len(postings) / postingsBlockLen
-			tailLen := len(postings) % postingsBlockLen
+			numFull := len(postings) / segment.PostingsBlockLen
+			tailLen := len(postings) % segment.PostingsBlockLen
 			if tailLen == 0 {
 				t.Fatalf("term %q: expected a tail, got an exact multiple of the block size", tc.term)
 			}
@@ -857,7 +857,7 @@ func TestTailBlockMaxBound(t *testing.T) {
 			itr := pl.Iterator(true, true, false, nil).(*PostingsIterator)
 
 			if numFull > 0 {
-				wantMinNormID, wantMaxTF := boundOf(postings[:postingsBlockLen])
+				wantMinNormID, wantMaxTF := boundOf(postings[:segment.PostingsBlockLen])
 				if _, err := itr.Advance(postings[0].docNum); err != nil {
 					t.Fatal(err)
 				}
@@ -894,21 +894,21 @@ func TestTailBlockMaxBound(t *testing.T) {
 func TestSearchBlock(t *testing.T) {
 	rng := rand.New(rand.NewSource(11))
 	for trial := 0; trial < 500; trial++ {
-		var arr [postingsBlockLen]uint32
-		n := 1 + rng.Intn(postingsBlockLen)
+		var arr [segment.PostingsBlockLen]uint32
+		n := 1 + rng.Intn(segment.PostingsBlockLen)
 		v := uint32(rng.Intn(10))
 		for i := 0; i < n; i++ {
 			v += 1 + uint32(rng.Intn(50))
 			arr[i] = v
 		}
-		for i := n; i < postingsBlockLen; i++ {
+		for i := n; i < segment.PostingsBlockLen; i++ {
 			arr[i] = docNumTerminated
 		}
 
 		for probe := 0; probe < 20; probe++ {
 			target := uint32(rng.Intn(int(v) + 10))
 			want := 0
-			for want < postingsBlockLen && arr[want] < target {
+			for want < segment.PostingsBlockLen && arr[want] < target {
 				want++
 			}
 			if got := searchBlock(&arr, target); got != want {
@@ -1065,5 +1065,145 @@ func TestBlockCursorLazyBufReseedsFreqsOnReuse(t *testing.T) {
 	}
 	if got := c2.freqs()[1]; got != 1 {
 		t.Fatalf("wantFreqs=false on a fresh cursor: freqs()[1] = %d, want 1", got)
+	}
+}
+
+// TestBlockCursorLoadBlockInto checks loadBlockInto against loadBlock, block after
+// block, for lists of every shape (a single block, a block and a tail, a tail
+// only, many blocks) with and without frequencies: the same postings, the same
+// padding after them, the same view of the block (numDocs, lastDoc) and the same
+// bytes read; and that it leaves buf alone, and the freqs buffer alone when no
+// frequencies are decoded.
+func TestBlockCursorLoadBlockInto(t *testing.T) {
+	const poison = 0xDEADBEEF
+	for _, numDocs := range []int{3, 127, 128, 129, 256, 300, 700} {
+		sb, model := buildBlockTestSegment(t, numDocs, false)
+		dict, err := sb.dictionary("body")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, term := range []string{"all", "rep", "mod2", "mod3", "mod7", "mod50", "mod977"} {
+			if len(model.terms[term]) < 2 {
+				continue
+			}
+			pl, err := dict.postingsList([]byte(term), nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, wantFreqs := range []bool{true, false} {
+				for _, nilFreqs := range []bool{false, true} {
+					what := fmt.Sprintf("%d docs, term %s, wantFreqs=%v, nil freqs buffer=%v", numDocs, term, wantFreqs, nilFreqs)
+
+					var ref, ext blockCursor
+					if err := ref.init(sb, &pl.footer, wantFreqs); err != nil {
+						t.Fatal(err)
+					}
+					if err := ext.init(sb, &pl.footer, wantFreqs); err != nil {
+						t.Fatal(err)
+					}
+
+					blocks := 0
+					for !ref.isExhausted() {
+						if ext.isExhausted() {
+							t.Fatalf("%s: block %d: loadBlockInto's cursor is exhausted before the reference", what, blocks)
+						}
+						if err := ref.loadBlock(); err != nil {
+							t.Fatal(err)
+						}
+
+						var docs, freqs [segment.PostingsBlockLen]uint32
+						for i := range docs {
+							docs[i], freqs[i] = poison, poison
+						}
+						fp := &freqs
+						if nilFreqs {
+							fp = nil
+						}
+						n, err := ext.loadBlockInto(&docs, fp)
+						if err != nil {
+							t.Fatal(err)
+						}
+
+						if n != ref.numDocs() || ext.numDocs() != n {
+							t.Fatalf("%s: block %d: %d postings, numDocs %d, want %d", what, blocks, n, ext.numDocs(), ref.numDocs())
+						}
+						if ext.lastDoc() != ref.lastDoc() {
+							t.Fatalf("%s: block %d: lastDoc %d, want %d", what, blocks, ext.lastDoc(), ref.lastDoc())
+						}
+						if ext.bytesRead != ref.bytesRead {
+							t.Fatalf("%s: block %d: %d bytes read, want %d", what, blocks, ext.bytesRead, ref.bytesRead)
+						}
+						// all of docs, the padding after the postings included
+						if docs != *ref.docs() {
+							t.Fatalf("%s: block %d: docs\n got %v\nwant %v", what, blocks, docs, *ref.docs())
+						}
+						switch {
+						case wantFreqs && !nilFreqs:
+							for i := 0; i < n; i++ {
+								if freqs[i] != ref.freqs()[i] {
+									t.Fatalf("%s: block %d: freq %d is %d, want %d", what, blocks, i, freqs[i], ref.freqs()[i])
+								}
+							}
+						case !nilFreqs:
+							// no frequencies wanted: the buffer is not touched
+							for i := range freqs {
+								if freqs[i] != poison {
+									t.Fatalf("%s: block %d: freqs[%d] written without frequencies wanted", what, blocks, i)
+								}
+							}
+						}
+						// the block is not in buf, which it was not decoded into
+						if ext.buf != nil || ext.loaded {
+							t.Fatalf("%s: block %d: loadBlockInto touched buf (allocated %v, loaded %v)", what, blocks, ext.buf != nil, ext.loaded)
+						}
+
+						ref.nextBlock()
+						ext.nextBlock()
+						blocks++
+					}
+					if !ext.isExhausted() {
+						t.Fatalf("%s: loadBlockInto's cursor has blocks left after %d", what, blocks)
+					}
+
+					// an exhausted cursor has no postings, and is all terminator
+					var docs [segment.PostingsBlockLen]uint32
+					n, err := ext.loadBlockInto(&docs, nil)
+					if err != nil || n != 0 || docs != allTerminated {
+						t.Fatalf("%s: exhausted: %d postings, err %v, docs %v", what, n, err, docs[:4])
+					}
+				}
+			}
+		}
+	}
+}
+
+// loadBlock after loadBlockInto of the same block still fills buf: loadBlockInto
+// must not leave the cursor saying that buf holds a block it doesn't.
+func TestBlockCursorLoadBlockAfterLoadBlockInto(t *testing.T) {
+	sb, model := buildBlockTestSegment(t, 300, false)
+	dict, err := sb.dictionary("body")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pl, err := dict.postingsList([]byte("rep"), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c blockCursor
+	if err := c.init(sb, &pl.footer, true); err != nil {
+		t.Fatal(err)
+	}
+	var docs, freqs [segment.PostingsBlockLen]uint32
+	if _, err := c.loadBlockInto(&docs, &freqs); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.loadBlock(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < c.numDocs(); i++ {
+		want := model.terms["rep"][i]
+		if uint64(c.docs()[i]) != want.docNum || uint64(c.freqs()[i]) != want.freq {
+			t.Fatalf("posting %d: doc %d freq %d, want doc %d freq %d", i, c.docs()[i], c.freqs()[i], want.docNum, want.freq)
+		}
 	}
 }

@@ -298,6 +298,59 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 	return rv, nil
 }
 
+var _ segment.BlockPostingsList = (*PostingsList)(nil)
+
+// BlockIterator returns an iterator over the list's postings a block at a time,
+// a *BlockPostingsIterator. It implements segment.BlockPostingsList.
+func (p *PostingsList) BlockIterator(withFreqs, withNorms bool,
+	prealloc segment.BlockPostingsIterator) (segment.BlockPostingsIterator, error) {
+	rv, _ := prealloc.(*BlockPostingsIterator)
+	if rv == nil {
+		rv = &BlockPostingsIterator{}
+	} else {
+		// reuse the cursor, and in particular its decode buffer, for this list
+		buf := rv.c.buf
+		*rv = BlockPostingsIterator{}
+		rv.c.buf = buf
+	}
+
+	rv.pl = p
+	rv.withFreqs = withFreqs
+	rv.withNorms = withNorms
+
+	if p.except != nil && !p.except.IsEmpty() {
+		rv.exceptItr = p.except.Iterator()
+	}
+
+	if p.is1Hit {
+		rv.is1Hit = true
+		// an empty list (no segment behind it) with no 1-hit is handled below
+		return rv, nil
+	}
+	if p.sb == nil {
+		// emptyPostingsList
+		rv.consumed = true
+		return rv, nil
+	}
+
+	if p.norms != nil {
+		rv.normIsDense = p.norms.kind == normsKindDense
+		rv.normDense = p.norms.dense
+		// matches the iterator: a column without norms yields id 0
+		rv.normConst = fieldNormFactor[p.norms.constant]
+		if p.norms.kind == normsKindAbsent {
+			rv.normConst = fieldNormFactor[0]
+		}
+	} else {
+		rv.normConst = fieldNormFactor[0]
+	}
+
+	if err := rv.c.init(p.sb, &p.footer, withFreqs); err != nil {
+		return nil, err
+	}
+	return rv, nil
+}
+
 // Count returns the number of postings WITHOUT considering the except bitmap.
 // this is a conscious step, because the term field reader in bleve will call
 // this count per segment on _every_ term scorer creation, which is very very

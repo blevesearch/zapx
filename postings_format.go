@@ -20,6 +20,7 @@ import (
 	"math"
 
 	"github.com/blevesearch/freeway/bitpack"
+	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 
 // The code here decides the on disk shape of the postings list along with
@@ -150,12 +151,6 @@ func decodeNormsColumn(buf []byte, numDocs uint64) (*normsColumn, error) {
 //
 // --------------------------------------------------------------------------
 
-// Signifies the number of postings bitpacked into a block. This depends on
-// the SIMD kernels defined in freeway/bitpack, so if this number needs to be
-// changed the SIMD kernels have to be rewritten to support that new block
-// width.
-const postingsBlockLen = bitpack.BlockLen
-
 // postingsSerializer writes one term's postings in the block format described
 // above.  It is the only implementation of the write side: building a fresh
 // segment and merging existing ones both drive it, so there is no way for the
@@ -188,8 +183,8 @@ type postingsSerializer struct {
 	// FileWriter throughout -- rather than threaded through every method call.
 	w *FileWriter
 
-	docs  [postingsBlockLen]uint32
-	freqs [postingsBlockLen]uint32
+	docs  [segment.PostingsBlockLen]uint32
+	freqs [segment.PostingsBlockLen]uint32
 	n     int // documents staged in docs/freqs
 
 	docFreq  uint32
@@ -228,7 +223,7 @@ func (s *postingsSerializer) AddDoc(docNum, freq uint32) error {
 	s.freqs[s.n] = freq
 	s.n++
 	s.docFreq++
-	if s.n == postingsBlockLen {
+	if s.n == segment.PostingsBlockLen {
 		return s.flushBlock()
 	}
 	return nil
@@ -238,7 +233,7 @@ func (s *postingsSerializer) AddDoc(docNum, freq uint32) error {
 // n staged documents: the shortest field length and the highest term
 // frequency -- what a skip entry's minNormID/maxTF record; see the note
 // under SKIP ENTRIES on why the two need not come from the same document.
-// Called with postingsBlockLen for a full block and with s.n for the tail.
+// Called with segment.PostingsBlockLen for a full block and with s.n for the tail.
 func (s *postingsSerializer) blockBound(n int) (minNormID, maxTF uint8) {
 	minNormID = 0xFF
 	var mtf uint32
@@ -290,18 +285,18 @@ func (s *postingsSerializer) flushBlock() error {
 	}
 
 	e := skipEntry{
-		lastDoc:     s.docs[postingsBlockLen-1],
+		lastDoc:     s.docs[segment.PostingsBlockLen-1],
 		blockOffset: uint32(blockOffset),
 		docNumBits:  docNumBits,
 		tfNumBits:   tfNumBits,
 	}
 	if s.hasFreqs {
-		e.minNormID, e.maxTF = s.blockBound(postingsBlockLen)
+		e.minNormID, e.maxTF = s.blockBound(segment.PostingsBlockLen)
 	}
 	var entry [skipEntryLenWithFreqs]byte
 	s.skipBuf = append(s.skipBuf, entry[:e.encode(entry[:], s.hasFreqs)]...)
 
-	s.lastDoc = s.docs[postingsBlockLen-1]
+	s.lastDoc = s.docs[segment.PostingsBlockLen-1]
 	s.n = 0
 	return nil
 }
@@ -785,8 +780,8 @@ func DescribeTermPostings(mem []byte, fstVal uint64) (*TermPostingsInfo, error) 
 		DocFreq:      h.docFreq,
 		HasFreqs:     h.hasFreqs(),
 		HasLocs:      h.hasLocs(),
-		NumBlocks:    int(h.docFreq) / postingsBlockLen,
-		TailLen:      int(h.docFreq) % postingsBlockLen,
+		NumBlocks:    int(h.docFreq) / segment.PostingsBlockLen,
+		TailLen:      int(h.docFreq) % segment.PostingsBlockLen,
 		PayloadLen:   h.payloadLen,
 		LocsLen:      h.locsLen,
 		SkipLen:      h.skipLen,

@@ -141,32 +141,39 @@ func (b *BlockPostingsIterator) SeekBlock(target uint64, out *segment.PostingsBl
 	return 0, nil
 }
 
-// loadInto decodes the block the cursor is on, copies the live entries that
-// are >= lo into out, and steps the cursor to the next block.
+// loadInto decodes the block the iterator is on straight into out, drops the
+// entries below lo, and steps to the next block. Nothing is copied out of the
+// raw cursor's own buffer: the block is unpacked where the caller wants it.
 func (b *BlockPostingsIterator) loadInto(lo uint32, out *segment.PostingsBlock) (int, error) {
 	c := &b.c
-	if err := c.loadBlock(); err != nil {
+	var freqs *[segment.PostingsBlockLen]uint32
+	if b.withFreqs {
+		freqs = &out.Freqs
+	}
+	n, err := c.loadBlockInto(&out.Docs, freqs)
+	if err != nil {
 		return 0, err
 	}
 
-	n := c.numDocs()
-	docs := c.docs()
-	start := 0
-	if lo > 0 && docs[0] < lo {
-		start = searchBlock(docs, lo)
-	}
-	n -= start
-	if n < 0 {
-		n = 0
-	}
-	copy(out.Docs[:n], docs[start:start+n])
-	if b.withFreqs {
-		copy(out.Freqs[:n], c.freqs()[start:start+n])
+	// The block is padded with the terminator after its postings, which is what
+	// the search needs, so entries below lo are found in it as they would be in
+	// the raw cursor's buffer. Only the block a seek lands in has any to drop,
+	// so moving the rest to the front is paid once per seek, not once per block.
+	if lo > 0 && out.Docs[0] < lo {
+		start := searchBlock(&out.Docs, lo)
+		n -= start
+		if n < 0 {
+			n = 0
+		}
+		copy(out.Docs[:n], out.Docs[start:start+n])
+		if b.withFreqs {
+			copy(out.Freqs[:n], out.Freqs[start:start+n])
+		}
 	}
 
 	b.lastBounds = b.entryBounds()
 
-	// after this the block buffer isn't needed: step ahead
+	// the block is decoded: step ahead
 	c.nextBlock()
 
 	if b.exceptItr != nil {

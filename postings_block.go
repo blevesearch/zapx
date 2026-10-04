@@ -225,15 +225,43 @@ func (c *blockCursor) loadBlock() error {
 			copy(c.buf.freqs[:], allOnes[:])
 		}
 	}
+	return c.decodeBlock(&c.buf.docs, &c.buf.freqs)
+}
 
+// loadBlockInto is loadBlock for a consumer that wants the block in buffers of
+// its own: it unpacks the block straight into docs, and into freqs if the cursor
+// wants frequencies and freqs isn't nil, and returns how many postings the block
+// has (the entries after them in docs are the terminator padding, those in freqs
+// are untouched). Nothing is copied out of buf, so the block isn't decoded into
+// buf at all, which the block reading APIs (docs, freqs) are served from:
+// they don't see this block, and loaded keeps saying whether buf holds it.
+//
+// Everything else a load updates, it updates: numDocs and lastDoc describe the
+// block, and bytesRead counts it. Like loadBlock it doesn't move the cursor.
+//
+// Loading a block twice decodes it twice (and counts the bytes twice), unlike
+// loadBlock, which remembers that it has loaded the block into buf.
+func (c *blockCursor) loadBlockInto(docs, freqs *[segment.PostingsBlockLen]uint32) (int, error) {
+	if err := c.decodeBlock(docs, freqs); err != nil {
+		return 0, err
+	}
+	return c.nDocs, nil
+}
+
+// decodeBlock unpacks the block the cursor is on into docs, and freqs (if the
+// cursor wants them, and freqs isn't nil), and records what it has seen of the
+// block: nDocs, blockLastDoc and bytesRead. docs is always completely written:
+// padded with the terminator after the postings the block has, as searchBlock
+// needs. It is what loadBlock and loadBlockInto have in common.
+func (c *blockCursor) decodeBlock(docs, freqs *[segment.PostingsBlockLen]uint32) error {
 	if c.exhausted {
-		copy(c.buf.docs[:], allTerminated[:])
+		copy(docs[:], allTerminated[:])
 		c.nDocs = 0
 		c.blockLastDoc = docNumTerminated
 		return nil
 	}
 	if c.inTail {
-		return c.loadTail()
+		return c.decodeTail(docs, freqs)
 	}
 
 	start := c.payloadStart + uint64(c.entry.blockOffset)
@@ -251,13 +279,13 @@ func (c *blockCursor) loadBlock() error {
 	if len(raw) < docBytes {
 		return fmt.Errorf("corrupt postings block: %d bytes, need %d", len(raw), docBytes)
 	}
-	bitpack.UnpackDelta1(raw, c.prevLastDoc, c.entry.docNumBits, &c.buf.docs)
-	if c.wantFreqs {
+	bitpack.UnpackDelta1(raw, c.prevLastDoc, c.entry.docNumBits, docs)
+	if c.wantFreqs && freqs != nil {
 		tfBytes := bitpack.BlockBytes(c.entry.tfNumBits)
 		if len(raw) < docBytes+tfBytes {
 			return fmt.Errorf("corrupt postings block: missing frequency bytes")
 		}
-		bitpack.UnpackPlus1(raw[docBytes:], c.entry.tfNumBits, &c.buf.freqs)
+		bitpack.UnpackPlus1(raw[docBytes:], c.entry.tfNumBits, freqs)
 	}
 	c.nDocs = segment.PostingsBlockLen
 	c.blockLastDoc = c.entry.lastDoc
@@ -359,10 +387,11 @@ func (c *blockCursor) blockOffsetAt(i int) uint32 {
 	return binary.LittleEndian.Uint32(c.skip[i*c.entryLen+4:])
 }
 
-// loadTail decodes the fewer-than-128 documents that could not fill a block.
+// decodeTail decodes the fewer-than-128 documents that could not fill a block,
+// into docs and, if the cursor wants them and freqs isn't nil, freqs.
 // They are plain uvarints: there is no bit width to save on a run this short,
 // and it keeps the reader on the existing uvarint decoder.
-func (c *blockCursor) loadTail() error {
+func (c *blockCursor) decodeTail(docs, freqs *[segment.PostingsBlockLen]uint32) error {
 	// tailEntry.blockOffset is 0 when there are no full blocks -- the tail
 	// starts at the payload itself in that case, which is exactly what a
 	// zero offset already means.
@@ -385,20 +414,20 @@ func (c *blockCursor) loadTail() error {
 			return fmt.Errorf("error reading tail doc delta: %v", err)
 		}
 		prev += uint32(delta)
-		c.buf.docs[i] = prev
+		docs[i] = prev
 	}
 	if c.hasFreqs {
-		if c.wantFreqs {
+		if c.wantFreqs && freqs != nil {
 			for i := 0; i < c.tailLen; i++ {
 				freq, err := r.ReadUvarint()
 				if err != nil {
 					return fmt.Errorf("error reading tail freq: %v", err)
 				}
-				c.buf.freqs[i] = uint32(freq)
+				freqs[i] = uint32(freq)
 			}
 		}
 	}
-	copy(c.buf.docs[c.tailLen:], allTerminated[c.tailLen:])
+	copy(docs[c.tailLen:], allTerminated[c.tailLen:])
 	c.nDocs = c.tailLen
 	c.blockLastDoc = prev
 	return nil

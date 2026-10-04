@@ -586,7 +586,7 @@ func TestBlockMaxOneHit(t *testing.T) {
 }
 
 // fillNormsReference is fillNorms as it was written first, per doc checks and all
-func fillNormsReference(b *BlockCursor, out *segment.PostingsBlock, n int) {
+func fillNormsReference(b *PostingsBlockCursor, out *segment.PostingsBlock, n int) {
 	if !b.normIsDense {
 		for i := 0; i < n; i++ {
 			out.Norms[i] = b.normConst
@@ -614,7 +614,7 @@ func TestFillNormsMatchesReference(t *testing.T) {
 		dense bool
 		cut   int // length of the column
 	}{{"dense", true, 5000}, {"dense, short column", true, 2500}, {"constant", false, 0}} {
-		b := &BlockCursor{normIsDense: c.dense, normConst: fieldNormFactor[77]}
+		b := &PostingsBlockCursor{normIsDense: c.dense, normConst: fieldNormFactor[77]}
 		if c.dense {
 			b.normDense = dense[:c.cut]
 		}
@@ -644,7 +644,7 @@ func BenchmarkFillNorms(b *testing.B) {
 		dense[i] = uint8(rnd.Intn(256))
 	}
 	for _, gap := range []int{1, 10, 100} { // distance between the docs of a block
-		cur := &BlockCursor{normIsDense: true, normDense: dense}
+		cur := &PostingsBlockCursor{normIsDense: true, normDense: dense}
 		var blk segment.PostingsBlock
 		for i := range blk.Docs {
 			blk.Docs[i] = uint32(10 + i*gap)

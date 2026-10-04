@@ -28,7 +28,7 @@ import (
 
 const blockCursorTestDocs = 700
 
-func buildBlockCursorTestSegment(t *testing.T) *SegmentBase {
+func buildBlockPostingsIteratorTestSegment(t *testing.T) *SegmentBase {
 	t.Helper()
 	var results []index.Document
 	for i := 0; i < blockCursorTestDocs; i++ {
@@ -88,7 +88,7 @@ func viaIterator(t *testing.T, pl *PostingsList) []cursorPosting {
 	}
 }
 
-func drainBlockCursor(t *testing.T, c segment.BlockCursor) []cursorPosting {
+func drainBlockPostingsIterator(t *testing.T, c segment.BlockPostingsIterator) []cursorPosting {
 	t.Helper()
 	var blk segment.PostingsBlock
 	var rv []cursorPosting
@@ -143,8 +143,8 @@ func deletionSets() map[string]*roaring.Bitmap {
 	}
 }
 
-func TestBlockCursorMatchesPostingsIterator(t *testing.T) {
-	sb := buildBlockCursorTestSegment(t)
+func TestBlockPostingsIteratorMatchesPostingsIterator(t *testing.T) {
+	sb := buildBlockPostingsIteratorTestSegment(t)
 	dict, err := sb.Dictionary("body")
 	if err != nil {
 		t.Fatal(err)
@@ -162,15 +162,15 @@ func TestBlockCursorMatchesPostingsIterator(t *testing.T) {
 			}
 			want := viaIterator(t, pl.(*PostingsList))
 
-			prov, ok := pl.(segment.BlockCursorProvider)
+			prov, ok := pl.(segment.BlockPostingsList)
 			if !ok {
-				t.Fatal("PostingsList isn't a BlockCursorProvider")
+				t.Fatal("PostingsList isn't a BlockPostingsIteratorProvider")
 			}
-			cur, err := prov.BlockPostingsIterator(true, true, nil)
+			cur, err := prov.BlockIterator(true, true, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			comparePostings(t, what, drainBlockCursor(t, cur), want)
+			comparePostings(t, what, drainBlockPostingsIterator(t, cur), want)
 
 			// exhausted stays exhausted
 			var blk segment.PostingsBlock
@@ -179,17 +179,17 @@ func TestBlockCursorMatchesPostingsIterator(t *testing.T) {
 			}
 
 			// reusing the cursor on the same list gives the same answer
-			cur, err = prov.BlockPostingsIterator(true, true, cur)
+			cur, err = prov.BlockIterator(true, true, cur)
 			if err != nil {
 				t.Fatal(err)
 			}
-			comparePostings(t, what+" (reused)", drainBlockCursor(t, cur), want)
+			comparePostings(t, what+" (reused)", drainBlockPostingsIterator(t, cur), want)
 		}
 	}
 }
 
-func TestBlockCursorWithoutFreqsAndNorms(t *testing.T) {
-	sb := buildBlockCursorTestSegment(t)
+func TestBlockPostingsIteratorWithoutFreqsAndNorms(t *testing.T) {
+	sb := buildBlockPostingsIteratorTestSegment(t)
 	dict, _ := sb.Dictionary("body")
 	for _, term := range []string{"common", "rare"} {
 		pl, err := dict.PostingsList([]byte(term), nil, nil)
@@ -197,7 +197,7 @@ func TestBlockCursorWithoutFreqsAndNorms(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := viaIterator(t, pl.(*PostingsList))
-		cur, err := pl.(segment.BlockCursorProvider).BlockPostingsIterator(false, false, nil)
+		cur, err := pl.(segment.BlockPostingsList).BlockIterator(false, false, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -224,8 +224,8 @@ func TestBlockCursorWithoutFreqsAndNorms(t *testing.T) {
 	}
 }
 
-func TestBlockCursorSeekBlock(t *testing.T) {
-	sb := buildBlockCursorTestSegment(t)
+func TestBlockPostingsIteratorSeekBlock(t *testing.T) {
+	sb := buildBlockPostingsIteratorTestSegment(t)
 	dict, _ := sb.Dictionary("body")
 	rnd := rand.New(rand.NewSource(11))
 
@@ -249,7 +249,7 @@ func TestBlockCursorSeekBlock(t *testing.T) {
 					}
 				}
 
-				cur, err := pl.(segment.BlockCursorProvider).BlockPostingsIterator(true, true, nil)
+				cur, err := pl.(segment.BlockPostingsList).BlockIterator(true, true, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -274,18 +274,18 @@ func TestBlockCursorSeekBlock(t *testing.T) {
 					t.Fatalf("%s: first posting %+v, want %+v", what, got, want[0])
 				}
 				// the rest of the list follows with NextBlock
-				got = append(got, drainBlockCursor(t, cur)...)
+				got = append(got, drainBlockPostingsIterator(t, cur)...)
 				comparePostings(t, what, got, want)
 			}
 		}
 	}
 }
 
-func TestBlockCursorSeekBlockWalksForward(t *testing.T) {
-	sb := buildBlockCursorTestSegment(t)
+func TestBlockPostingsIteratorSeekBlockWalksForward(t *testing.T) {
+	sb := buildBlockPostingsIteratorTestSegment(t)
 	dict, _ := sb.Dictionary("body")
 	pl, _ := dict.PostingsList([]byte("common"), nil, nil)
-	cur, _ := pl.(segment.BlockCursorProvider).BlockPostingsIterator(true, false, nil)
+	cur, _ := pl.(segment.BlockPostingsList).BlockIterator(true, false, nil)
 
 	var blk segment.PostingsBlock
 	n, err := cur.SeekBlock(300, &blk)
@@ -304,11 +304,11 @@ func TestBlockCursorSeekBlockWalksForward(t *testing.T) {
 	}
 }
 
-func TestBlockCursorEmptyPostingsList(t *testing.T) {
-	sb := buildBlockCursorTestSegment(t)
+func TestBlockPostingsIteratorEmptyPostingsList(t *testing.T) {
+	sb := buildBlockPostingsIteratorTestSegment(t)
 	dict, _ := sb.Dictionary("body")
 	pl, _ := dict.PostingsList([]byte("missing"), nil, nil)
-	cur, err := pl.(segment.BlockCursorProvider).BlockPostingsIterator(true, true, nil)
+	cur, err := pl.(segment.BlockPostingsList).BlockIterator(true, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,8 +321,8 @@ func TestBlockCursorEmptyPostingsList(t *testing.T) {
 	}
 }
 
-func TestBlockCursorLiveCount(t *testing.T) {
-	sb := buildBlockCursorTestSegment(t)
+func TestBlockPostingsIteratorLiveCount(t *testing.T) {
+	sb := buildBlockPostingsIteratorTestSegment(t)
 	dict, _ := sb.Dictionary("body")
 	for delName, except := range deletionSets() {
 		for _, term := range []string{"common", "even", "tri", "rare", "pair", "missing"} {
@@ -331,7 +331,7 @@ func TestBlockCursorLiveCount(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := uint64(len(viaIterator(t, pl.(*PostingsList))))
-			cur, err := pl.(segment.BlockCursorProvider).BlockPostingsIterator(true, true, nil)
+			cur, err := pl.(segment.BlockPostingsList).BlockIterator(true, true, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -345,7 +345,7 @@ func TestBlockCursorLiveCount(t *testing.T) {
 			if got != want {
 				t.Fatalf("term=%s deleted=%s: live count %d, want %d", term, delName, got, want)
 			}
-			rest := drainBlockCursor(t, cur)
+			rest := drainBlockPostingsIterator(t, cur)
 			all := viaIterator(t, pl.(*PostingsList))
 			if len(rest) > len(all) {
 				t.Fatalf("term=%s deleted=%s: cursor moved by LiveCount", term, delName)
@@ -379,15 +379,15 @@ func buildSaturatedSegment(t *testing.T) *SegmentBase {
 	return seg.(*SegmentBase)
 }
 
-func blockMaxCursor(t *testing.T, pl interface{}) (segment.BlockCursor, segment.BlockMaxCursor) {
+func blockMaxCursor(t *testing.T, pl interface{}) (segment.BlockPostingsIterator, segment.BlockMaxPostingsIterator) {
 	t.Helper()
-	cur, err := pl.(segment.BlockCursorProvider).BlockPostingsIterator(true, true, nil)
+	cur, err := pl.(segment.BlockPostingsList).BlockIterator(true, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bm, ok := cur.(segment.BlockMaxCursor)
+	bm, ok := cur.(segment.BlockMaxPostingsIterator)
 	if !ok {
-		t.Fatal("not a BlockMaxCursor")
+		t.Fatal("not a BlockMaxPostingsIterator")
 	}
 	return cur, bm
 }
@@ -395,7 +395,7 @@ func blockMaxCursor(t *testing.T, pl interface{}) (segment.BlockCursor, segment.
 // every block's bounds bound its postings, and are exact when the frequency
 // isn't saturated
 func TestBlockMaxBoundsBoundThePostings(t *testing.T) {
-	sb := buildBlockCursorTestSegment(t)
+	sb := buildBlockPostingsIteratorTestSegment(t)
 	dict, _ := sb.Dictionary("body")
 	for delName, except := range deletionSets() {
 		for _, term := range []string{"common", "even", "tri", "rare", "pair", "filler3"} {
@@ -442,7 +442,7 @@ func TestBlockMaxBoundsBoundThePostings(t *testing.T) {
 // BoundsAt describes the block that holds the first posting >= target, and
 // doesn't move the cursor
 func TestBlockMaxBoundsAt(t *testing.T) {
-	sb := buildBlockCursorTestSegment(t)
+	sb := buildBlockPostingsIteratorTestSegment(t)
 	dict, _ := sb.Dictionary("body")
 	rnd := rand.New(rand.NewSource(3))
 	for _, term := range []string{"common", "even", "tri", "pair", "rare", "missing"} {
@@ -494,7 +494,7 @@ func TestBlockMaxBoundsAt(t *testing.T) {
 		}
 
 		// asking didn't move anything
-		got := drainBlockCursor(t, cur)
+		got := drainBlockPostingsIterator(t, cur)
 		if len(got) != len(all) {
 			t.Fatalf("%s: BoundsAt moved the cursor: %d postings, want %d", term, len(got), len(all))
 		}
@@ -502,7 +502,7 @@ func TestBlockMaxBoundsAt(t *testing.T) {
 }
 
 func TestBlockMaxTermBounds(t *testing.T) {
-	sb := buildBlockCursorTestSegment(t)
+	sb := buildBlockPostingsIteratorTestSegment(t)
 	dict, _ := sb.Dictionary("body")
 	for _, term := range []string{"common", "even", "tri", "pair", "rare", "missing"} {
 		pl, _ := dict.PostingsList([]byte(term), nil, nil)
@@ -568,7 +568,7 @@ func TestBlockMaxSaturatedFrequency(t *testing.T) {
 }
 
 func TestBlockMaxOneHit(t *testing.T) {
-	sb := buildBlockCursorTestSegment(t)
+	sb := buildBlockPostingsIteratorTestSegment(t)
 	dict, _ := sb.Dictionary("body")
 	pl, _ := dict.PostingsList([]byte("rare"), nil, nil) // 1-hit
 	_, bm := blockMaxCursor(t, pl)
@@ -665,7 +665,7 @@ func BenchmarkFillNorms(b *testing.B) {
 // BoundsAt answers the same wherever the cursor is: ahead of the target, on
 // it, or short of it by more blocks than the fast path probes.
 func TestBlockMaxBoundsAtWhileMoving(t *testing.T) {
-	sb := buildBlockCursorTestSegment(t)
+	sb := buildBlockPostingsIteratorTestSegment(t)
 	dict, _ := sb.Dictionary("body")
 	rnd := rand.New(rand.NewSource(11))
 	for _, term := range []string{"common", "even", "tri", "pair", "rare", "missing"} {

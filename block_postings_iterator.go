@@ -24,7 +24,7 @@ import (
 
 // BlockPostingsIterator is the variant of PostingsIterator that hands out the
 // postings of a list a block at a time, as bare doc numbers, frequencies and
-// norms: it implements segment.BlockCursor (and segment.BlockMaxCursor), the
+// norms: it implements segment.BlockPostingsIterator (and segment.BlockMaxPostingsIterator), the
 // interfaces the consumers of such postings use.
 //
 // It is built on the blockCursor of postings_block.go, as PostingsIterator is.
@@ -33,7 +33,7 @@ import (
 // PostingsIterator does: 1-hit lists, deleted docs, resolving norms from the
 // field's norms column, and, which PostingsIterator has no need of, the bounds of
 // blocks. Unlike PostingsIterator it knows nothing about locations. A PostingsList
-// hands one out through BlockPostingsIterator (see posting.go).
+// hands one out through BlockIterator (see posting.go).
 type BlockPostingsIterator struct {
 	pl *PostingsList
 	c  blockCursor
@@ -60,21 +60,21 @@ type BlockPostingsIterator struct {
 	normIsDense bool
 }
 
-var _ segment.BlockCursor = (*BlockPostingsIterator)(nil)
-var _ segment.BlockMaxCursor = (*BlockPostingsIterator)(nil)
+var _ segment.BlockPostingsIterator = (*BlockPostingsIterator)(nil)
+var _ segment.BlockMaxPostingsIterator = (*BlockPostingsIterator)(nil)
 
-// Count implements segment.BlockCursor.
+// Count implements segment.BlockPostingsIterator.
 func (b *BlockPostingsIterator) Count() uint64 { return b.pl.Count() }
 
-// LiveCount implements segment.BlockCursor.
+// LiveCount implements segment.BlockPostingsIterator.
 func (b *BlockPostingsIterator) LiveCount() (uint64, error) {
 	p := b.pl
 	if p.except == nil || p.except.IsEmpty() {
 		return p.Count(), nil
 	}
-	// walk a cursor of its own, without freqs or norms: only the doc numbers
+	// walk an iterator of its own, without freqs or norms: only the doc numbers
 	// are decoded, and the deleted ones are dropped as they go by
-	sc, err := p.BlockPostingsIterator(false, false, nil)
+	sc, err := p.BlockIterator(false, false, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -92,10 +92,10 @@ func (b *BlockPostingsIterator) LiveCount() (uint64, error) {
 	}
 }
 
-// BytesRead implements segment.BlockCursor.
+// BytesRead implements segment.BlockPostingsIterator.
 func (b *BlockPostingsIterator) BytesRead() uint64 { return b.c.bytesRead }
 
-// NextBlock implements segment.BlockCursor.
+// NextBlock implements segment.BlockPostingsIterator.
 func (b *BlockPostingsIterator) NextBlock(out *segment.PostingsBlock) (int, error) {
 	if b.is1Hit {
 		return b.next1Hit(0, out), nil
@@ -113,7 +113,7 @@ func (b *BlockPostingsIterator) NextBlock(out *segment.PostingsBlock) (int, erro
 	return 0, nil
 }
 
-// SeekBlock implements segment.BlockCursor.
+// SeekBlock implements segment.BlockPostingsIterator.
 func (b *BlockPostingsIterator) SeekBlock(target uint64, out *segment.PostingsBlock) (int, error) {
 	if b.is1Hit {
 		return b.next1Hit(target, out), nil
@@ -126,7 +126,7 @@ func (b *BlockPostingsIterator) SeekBlock(target uint64, out *segment.PostingsBl
 		return 0, nil
 	}
 
-	// skip data only; the cursor never moves backwards
+	// skip data only; the iterator never moves backwards
 	b.c.seekBlock(uint32(target))
 	for !b.c.isExhausted() {
 		n, err := b.loadInto(uint32(target), out)
@@ -318,11 +318,11 @@ func skipEntryBounds(e *skipEntry, hasFreqs bool) segment.BlockBounds {
 	return bd
 }
 
-// boundsProbe is how many blocks, from the cursor's, BoundsAt looks at one by one
+// boundsProbe is how many blocks, from the iterator's, BoundsAt looks at one by one
 // before it searches for the target.
 const boundsProbe = 4
 
-// BoundsAt implements segment.BlockMaxCursor.
+// BoundsAt implements segment.BlockMaxPostingsIterator.
 func (b *BlockPostingsIterator) BoundsAt(target uint32) (segment.BlockBounds, bool) {
 	if b.is1Hit {
 		bd := b.oneHitBounds()
@@ -346,8 +346,8 @@ func (b *BlockPostingsIterator) BoundsAt(target uint32) (segment.BlockBounds, bo
 	}
 	lo, hi := 0, total
 	// Asked about in order, which is how a pruner walks a list, the answer is
-	// the block the cursor is at or one of the few after it: probe those first,
-	// unless the target is behind the cursor.
+	// the block the iterator is at or one of the few after it: probe those first,
+	// unless the target is behind the iterator.
 	if i := c.blockIdx; i < total && (i == 0 || target > lastDocAt(i-1)) {
 		lo = i
 		for lo < total && lo < i+boundsProbe && lastDocAt(lo) < target {
@@ -376,10 +376,10 @@ func (b *BlockPostingsIterator) BoundsAt(target uint32) (segment.BlockBounds, bo
 	return skipEntryBounds(&c.tailEntry, c.hasFreqs), true
 }
 
-// DecodedBounds implements segment.BlockMaxCursor.
+// DecodedBounds implements segment.BlockMaxPostingsIterator.
 func (b *BlockPostingsIterator) DecodedBounds() segment.BlockBounds { return b.lastBounds }
 
-// TermBounds implements segment.BlockMaxCursor.
+// TermBounds implements segment.BlockMaxPostingsIterator.
 func (b *BlockPostingsIterator) TermBounds() segment.BlockBounds {
 	if b.is1Hit {
 		return b.oneHitBounds()

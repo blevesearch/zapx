@@ -298,12 +298,12 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 	return rv, nil
 }
 
-var _ segment.BlockCursorProvider = (*PostingsList)(nil)
+var _ segment.BlockPostingsList = (*PostingsList)(nil)
 
-// BlockPostingsIterator returns a cursor over the list, a *BlockPostingsIterator.
-// It implements segment.BlockCursorProvider.
-func (p *PostingsList) BlockPostingsIterator(withFreqs, withNorms bool,
-	prealloc segment.BlockCursor) (segment.BlockCursor, error) {
+// BlockIterator returns an iterator over the list's postings a block at a time,
+// a *BlockPostingsIterator. It implements segment.BlockPostingsList.
+func (p *PostingsList) BlockIterator(withFreqs, withNorms bool,
+	prealloc segment.BlockPostingsIterator) (segment.BlockPostingsIterator, error) {
 	rv, _ := prealloc.(*BlockPostingsIterator)
 	if rv == nil {
 		rv = &BlockPostingsIterator{}

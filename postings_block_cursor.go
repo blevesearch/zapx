@@ -22,18 +22,19 @@ import (
 	segment "github.com/blevesearch/scorch_segment_api/v2"
 )
 
-// PostingsBlockCursor implements segment.BlockCursor (and segment.BlockMaxCursor)
-// on top of the blockCursor of postings_block.go: it hands out the postings of a
-// list one decoded block at a time, as bare doc numbers, frequencies and norms.
+// BlockPostingsIterator is the variant of PostingsIterator that hands out the
+// postings of a list a block at a time, as bare doc numbers, frequencies and
+// norms: it implements segment.BlockCursor (and segment.BlockMaxCursor), the
+// interfaces the consumers of such postings use.
 //
+// It is built on the blockCursor of postings_block.go, as PostingsIterator is.
 // blockCursor knows the format: it moves over the skip data and decodes blocks.
-// PostingsBlockCursor is to it what PostingsIterator is, for the consumers of
-// segment.BlockCursor instead of those of segment.PostingsIterator: it takes care
-// of what is around the raw cursor, 1-hit lists, deleted docs, resolving norms from
-// the field's norms column, and the bounds of blocks. Unlike PostingsIterator it
-// knows nothing about locations. A PostingsList hands one out through BlockCursor
-// (see posting.go).
-type PostingsBlockCursor struct {
+// BlockPostingsIterator takes care of what is around the raw cursor, as
+// PostingsIterator does: 1-hit lists, deleted docs, resolving norms from the
+// field's norms column, and, which PostingsIterator has no need of, the bounds of
+// blocks. Unlike PostingsIterator it knows nothing about locations. A PostingsList
+// hands one out through BlockCursor (see posting.go).
+type BlockPostingsIterator struct {
 	pl *PostingsList
 	c  blockCursor
 
@@ -59,14 +60,14 @@ type PostingsBlockCursor struct {
 	normIsDense bool
 }
 
-var _ segment.BlockCursor = (*PostingsBlockCursor)(nil)
-var _ segment.BlockMaxCursor = (*PostingsBlockCursor)(nil)
+var _ segment.BlockCursor = (*BlockPostingsIterator)(nil)
+var _ segment.BlockMaxCursor = (*BlockPostingsIterator)(nil)
 
 // Count implements segment.BlockCursor.
-func (b *PostingsBlockCursor) Count() uint64 { return b.pl.Count() }
+func (b *BlockPostingsIterator) Count() uint64 { return b.pl.Count() }
 
 // LiveCount implements segment.BlockCursor.
-func (b *PostingsBlockCursor) LiveCount() (uint64, error) {
+func (b *BlockPostingsIterator) LiveCount() (uint64, error) {
 	p := b.pl
 	if p.except == nil || p.except.IsEmpty() {
 		return p.Count(), nil
@@ -92,10 +93,10 @@ func (b *PostingsBlockCursor) LiveCount() (uint64, error) {
 }
 
 // BytesRead implements segment.BlockCursor.
-func (b *PostingsBlockCursor) BytesRead() uint64 { return b.c.bytesRead }
+func (b *BlockPostingsIterator) BytesRead() uint64 { return b.c.bytesRead }
 
 // NextBlock implements segment.BlockCursor.
-func (b *PostingsBlockCursor) NextBlock(out *segment.PostingsBlock) (int, error) {
+func (b *BlockPostingsIterator) NextBlock(out *segment.PostingsBlock) (int, error) {
 	if b.is1Hit {
 		return b.next1Hit(0, out), nil
 	}
@@ -113,7 +114,7 @@ func (b *PostingsBlockCursor) NextBlock(out *segment.PostingsBlock) (int, error)
 }
 
 // SeekBlock implements segment.BlockCursor.
-func (b *PostingsBlockCursor) SeekBlock(target uint64, out *segment.PostingsBlock) (int, error) {
+func (b *BlockPostingsIterator) SeekBlock(target uint64, out *segment.PostingsBlock) (int, error) {
 	if b.is1Hit {
 		return b.next1Hit(target, out), nil
 	}
@@ -142,7 +143,7 @@ func (b *PostingsBlockCursor) SeekBlock(target uint64, out *segment.PostingsBloc
 
 // loadInto decodes the block the cursor is on, copies the live entries that
 // are >= lo into out, and steps the cursor to the next block.
-func (b *PostingsBlockCursor) loadInto(lo uint32, out *segment.PostingsBlock) (int, error) {
+func (b *BlockPostingsIterator) loadInto(lo uint32, out *segment.PostingsBlock) (int, error) {
 	c := &b.c
 	if err := c.loadBlock(); err != nil {
 		return 0, err
@@ -180,7 +181,7 @@ func (b *PostingsBlockCursor) loadInto(lo uint32, out *segment.PostingsBlock) (i
 // dropDeleted compacts out so that it holds no deleted doc, returning the new
 // length. The bitmap and the postings are both ascending, so advancing the
 // peekable iterator is amortised constant work.
-func (b *PostingsBlockCursor) dropDeleted(out *segment.PostingsBlock, n int) int {
+func (b *BlockPostingsIterator) dropDeleted(out *segment.PostingsBlock, n int) int {
 	w := 0
 	for i := 0; i < n; i++ {
 		d := out.Docs[i]
@@ -208,7 +209,7 @@ func (b *PostingsBlockCursor) dropDeleted(out *segment.PostingsBlock, n int) int
 // block costs. So the work in it is only that: the column is checked once for
 // the block, not for each doc, and the loop has no other bounds check to pay
 // than the column's.
-func (b *PostingsBlockCursor) fillNorms(out *segment.PostingsBlock, n int) {
+func (b *BlockPostingsIterator) fillNorms(out *segment.PostingsBlock, n int) {
 	if n <= 0 {
 		return
 	}
@@ -241,7 +242,7 @@ func (b *PostingsBlockCursor) fillNorms(out *segment.PostingsBlock, n int) {
 }
 
 // next1Hit hands out the inline posting of a 1-hit list if it's live and >= lo.
-func (b *PostingsBlockCursor) next1Hit(lo uint64, out *segment.PostingsBlock) int {
+func (b *BlockPostingsIterator) next1Hit(lo uint64, out *segment.PostingsBlock) int {
 	if b.consumed {
 		return 0
 	}
@@ -279,7 +280,7 @@ func (b *PostingsBlockCursor) next1Hit(lo uint64, out *segment.PostingsBlock) in
 var exhaustedBounds = segment.BlockBounds{LastDoc: docNumTerminated, FreqBounded: true}
 
 // oneHitBounds are the bounds of a 1-hit list's only posting
-func (b *PostingsBlockCursor) oneHitBounds() segment.BlockBounds {
+func (b *BlockPostingsIterator) oneHitBounds() segment.BlockBounds {
 	p := b.pl
 	if p.docNum1Hit == DocNum1HitFinished || p.docNum1Hit > math.MaxUint32 {
 		return exhaustedBounds
@@ -294,7 +295,7 @@ func (b *PostingsBlockCursor) oneHitBounds() segment.BlockBounds {
 }
 
 // entryBounds are the bounds of the block the skip cursor is on.
-func (b *PostingsBlockCursor) entryBounds() segment.BlockBounds {
+func (b *BlockPostingsIterator) entryBounds() segment.BlockBounds {
 	c := &b.c
 	if c.exhausted {
 		return exhaustedBounds
@@ -322,7 +323,7 @@ func skipEntryBounds(e *skipEntry, hasFreqs bool) segment.BlockBounds {
 const boundsProbe = 4
 
 // BoundsAt implements segment.BlockMaxCursor.
-func (b *PostingsBlockCursor) BoundsAt(target uint32) (segment.BlockBounds, bool) {
+func (b *BlockPostingsIterator) BoundsAt(target uint32) (segment.BlockBounds, bool) {
 	if b.is1Hit {
 		bd := b.oneHitBounds()
 		return bd, bd.LastDoc != docNumTerminated && bd.LastDoc >= target
@@ -376,10 +377,10 @@ func (b *PostingsBlockCursor) BoundsAt(target uint32) (segment.BlockBounds, bool
 }
 
 // DecodedBounds implements segment.BlockMaxCursor.
-func (b *PostingsBlockCursor) DecodedBounds() segment.BlockBounds { return b.lastBounds }
+func (b *BlockPostingsIterator) DecodedBounds() segment.BlockBounds { return b.lastBounds }
 
 // TermBounds implements segment.BlockMaxCursor.
-func (b *PostingsBlockCursor) TermBounds() segment.BlockBounds {
+func (b *BlockPostingsIterator) TermBounds() segment.BlockBounds {
 	if b.is1Hit {
 		return b.oneHitBounds()
 	}

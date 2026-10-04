@@ -300,17 +300,17 @@ func (p *PostingsList) iterator(includeFreq, includeNorm, includeLocs bool,
 
 var _ segment.BlockCursorProvider = (*PostingsList)(nil)
 
-// BlockCursor returns a cursor over the list, a *PostingsBlockCursor. It
+// BlockCursor returns a cursor over the list, a *BlockPostingsIterator. It
 // implements segment.BlockCursorProvider.
 func (p *PostingsList) BlockCursor(withFreqs, withNorms bool,
 	prealloc segment.BlockCursor) (segment.BlockCursor, error) {
-	rv, _ := prealloc.(*PostingsBlockCursor)
+	rv, _ := prealloc.(*BlockPostingsIterator)
 	if rv == nil {
-		rv = &PostingsBlockCursor{}
+		rv = &BlockPostingsIterator{}
 	} else {
 		// reuse the cursor, and in particular its decode buffer, for this list
 		buf := rv.c.buf
-		*rv = PostingsBlockCursor{}
+		*rv = BlockPostingsIterator{}
 		rv.c.buf = buf
 	}
 

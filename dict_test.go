@@ -272,3 +272,98 @@ func TestDictionaryBug1156(t *testing.T) {
 		t.Errorf("expected: %v, got: %v", expected, got)
 	}
 }
+
+// TestTermOffsetCacheWarmedByPostingsList verifies the FST hot-term offset
+// cache: PostingsList() stores the FST postings offset in termOffsetCache so
+// that subsequent PostingsList calls for the same term bypass the FST
+// traversal entirely.
+func TestTermOffsetCacheWarmedByPostingsList(t *testing.T) {
+	tmpPath := getTempPath("scorch_termoffset.zap")
+	_ = os.RemoveAll(tmpPath)
+	defer os.RemoveAll(tmpPath)
+
+	testSeg, _, err := buildTestSegmentMulti()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = PersistSegmentBase(testSeg, tmpPath); err != nil {
+		t.Fatal(err)
+	}
+
+	seg, err := zapPlugin.Open(tmpPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if cerr := seg.Close(); cerr != nil {
+			t.Fatal(cerr)
+		}
+	}()
+
+	rawDict, err := seg.Dictionary("desc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := rawDict.(*Dictionary)
+
+	// Cache must be empty for "some" before any PostingsList call.
+	ce := d.sb.invIndexCache.getOrCreateEntry(d.fieldID)
+	if _, ok := ce.termOffsetCache.Load("some"); ok {
+		t.Fatal("termOffsetCache already has 'some' before PostingsList — unexpected")
+	}
+
+	// First PostingsList call should traverse the FST and populate the cache.
+	pl, err := d.PostingsList([]byte("some"), nil, nil)
+	if err != nil {
+		t.Fatalf("PostingsList('some'): %v", err)
+	}
+	if pl == nil || pl == emptyPostingsList {
+		t.Fatal("expected non-empty PostingsList for 'some'")
+	}
+
+	// Cache must now hold the offset for "some".
+	raw, ok := ce.termOffsetCache.Load("some")
+	if !ok {
+		t.Fatal("termOffsetCache was not populated after PostingsList('some')")
+	}
+	offset1 := raw.(uint64)
+
+	// Second call must return a valid PostingsList using the cached offset.
+	pl2, err := d.PostingsList([]byte("some"), nil, nil)
+	if err != nil {
+		t.Fatalf("second PostingsList('some'): %v", err)
+	}
+	if pl2 == nil || pl2 == emptyPostingsList {
+		t.Fatal("expected non-empty PostingsList on second call")
+	}
+
+	// The cache entry must not have changed.
+	raw2, ok := ce.termOffsetCache.Load("some")
+	if !ok {
+		t.Fatal("termOffsetCache lost 'some' after second PostingsList")
+	}
+	if raw2.(uint64) != offset1 {
+		t.Errorf("offset changed between calls: first=%d second=%d", offset1, raw2.(uint64))
+	}
+
+	// Absent terms must be stored with the sentinel so subsequent calls
+	// skip the FST traversal (critical for rare-entity queries with many
+	// segment×field misses).
+	if _, err = d.PostingsList([]byte("notinindex"), nil, nil); err != nil {
+		t.Fatalf("PostingsList('notinindex'): %v", err)
+	}
+	raw3, ok3 := ce.termOffsetCache.Load("notinindex")
+	if !ok3 {
+		t.Error("termOffsetCache should store absent terms with the not-found sentinel")
+	} else if raw3.(uint64) != termNotFoundSentinel {
+		t.Errorf("absent term cached with wrong value: got %d, want %d (sentinel)", raw3.(uint64), uint64(termNotFoundSentinel))
+	}
+	// A second PostingsList call for the absent term must use the cache (no FST hit).
+	pl3, err3 := d.PostingsList([]byte("notinindex"), nil, nil)
+	if err3 != nil {
+		t.Fatalf("second PostingsList('notinindex'): %v", err3)
+	}
+	if pl3 != emptyPostingsList && pl3 != nil {
+		t.Error("absent term should still return empty/nil PostingsList on second call")
+	}
+}

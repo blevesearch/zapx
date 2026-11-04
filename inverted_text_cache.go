@@ -97,9 +97,39 @@ func (sc *invertedIndexCache) insertLOCKED(fieldID uint16, fst *vellum.FST) {
 	}
 }
 
+// getOrCreateEntry returns the invertedCacheEntry for fieldID, creating an
+// empty entry if none exists yet (for segments that have no FST loaded but
+// still need the termOffset cache).
+func (sc *invertedIndexCache) getOrCreateEntry(fieldID uint16) *invertedCacheEntry {
+	sc.m.RLock()
+	entry, ok := sc.cache[fieldID]
+	sc.m.RUnlock()
+	if ok {
+		return entry
+	}
+	sc.m.Lock()
+	defer sc.m.Unlock()
+	if entry, ok = sc.cache[fieldID]; ok {
+		return entry
+	}
+	entry = &invertedCacheEntry{}
+	if sc.cache == nil {
+		sc.cache = make(map[uint16]*invertedCacheEntry)
+	}
+	sc.cache[fieldID] = entry
+	return entry
+}
+
 // invertedCacheEntry is the vellum FST and is the value stored in the invertedIndexCache cache, for a given fieldID.
 type invertedCacheEntry struct {
 	fst *vellum.FST
+
+	// termOffsetCache maps term → posting-list offset within the segment
+	// file, avoiding repeated FST traversals for repeated queries on the
+	// same term.  Uses sync.Map (write-once, read-many pattern).
+	// Populated for both found terms (the resolved offset) and absent terms
+	// (termNotFoundSentinel), so repeated misses also skip the FST.
+	termOffsetCache sync.Map // key: string, val: uint64
 }
 
 func (ce *invertedCacheEntry) load() (*vellum.FST, uint64, error) {

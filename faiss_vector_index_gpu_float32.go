@@ -212,6 +212,10 @@ func (f *faissGPUFloat32Index) ntotal() int64 {
 	return f.cpuIdx.Ntotal()
 }
 
+func (f *faissGPUFloat32Index) numVecs() int {
+	return f.params.numVecs
+}
+
 func (f *faissGPUFloat32Index) reconstructBatch(vecIDs []int64, prealloc []float32) ([]float32, error) {
 	return f.cpuIdx.ReconstructBatch(vecIDs, prealloc)
 }
@@ -353,12 +357,42 @@ func (f *faissGPUFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *v
 }
 
 func (f *faissGPUFloat32Index) trainAndAddCPU(trainingData *vectorSet, vecsToAdd *vectorSet) error {
-	nvecsToTrain := f.params.numTrainingVecs(trainingData.nvecs)
-	err := f.cpuIdx.Train(trainingData.floatData[:nvecsToTrain*f.dim()])
+	err := f.trainCPU(trainingData)
 	if err != nil {
 		return err
 	}
 	return f.cpuIdx.Add(vecsToAdd.floatData)
+}
+
+// attempt to train the GPU index without adding any vectors to it, and sync the
+// trained state back to the CPU index, which is the one that gets serialized
+// out. Falls back to training on the CPU index if any GPU step fails.
+func (f *faissGPUFloat32Index) train(trainingData *vectorSet) error {
+	f.waitGPU()
+	gpuState := f.gpu.Load()
+	if gpuState == nil {
+		return f.trainCPU(trainingData)
+	}
+
+	nvecsToTrain := f.params.numTrainingVecs(trainingData.nvecs)
+	err := gpuState.idx.Train(trainingData.floatData[:nvecsToTrain*f.dim()])
+	if err != nil {
+		f.teardownGPU()
+		return f.trainCPU(trainingData)
+	}
+
+	err = f.syncGPUToCPU()
+	if err != nil {
+		f.teardownGPU()
+		return f.trainCPU(trainingData)
+	}
+
+	return nil
+}
+
+func (f *faissGPUFloat32Index) trainCPU(trainingData *vectorSet) error {
+	nvecsToTrain := f.params.numTrainingVecs(trainingData.nvecs)
+	return f.cpuIdx.Train(trainingData.floatData[:nvecsToTrain*f.dim()])
 }
 
 func (f *faissGPUFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {

@@ -20,6 +20,7 @@ package zap
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"sync/atomic"
 
@@ -108,6 +109,47 @@ func (f *faissFloat32Index) search(qVector *vectorSet, k int64, selector faiss.S
 }
 
 func (f *faissFloat32Index) write(buf []byte, w *FileWriter) error {
+	// A writer callback may change the payload's length, and is not known to
+	// be decomposable across chunks, so the whole index has to exist before
+	// its length prefix can be written. That case keeps the buffered path.
+	if w.processor != nil {
+		return f.writeBuffered(buf, w)
+	}
+
+	// Ask faiss for the exact serialized size up front
+	size, err := faiss.IndexSerializedSize(f.idx)
+	if err != nil {
+		return err
+	}
+	atomic.AddUint64(&f.params.stats.TotVecSectionFloatIndexBytesWritten, size)
+
+	// write the length of the serialized vector index bytes
+	n := binary.PutUvarint(buf, size)
+	_, err = w.Write(buf[:n])
+	if err != nil {
+		return err
+	}
+
+	written, err := faiss.WriteIndexChunked(f.idx, 0, func(chunk []byte) error {
+		_, werr := w.Write(chunk)
+		return werr
+	})
+	if err != nil {
+		return err
+	}
+	if written != size {
+		// The length prefix is already out, so a disagreement here would
+		// leave a segment that reads back as garbage. Fail loudly instead.
+		return fmt.Errorf("faiss wrote %d index bytes against a declared size of %d",
+			written, size)
+	}
+	return nil
+}
+
+// writeBuffered serializes the index into memory and writes it out in one
+// piece. Used when a writer callback is in play, since the post-callback
+// length cannot be known before the callback has seen everything.
+func (f *faissFloat32Index) writeBuffered(buf []byte, w *FileWriter) error {
 	idxBytes, err := faiss.WriteIndexIntoBuffer(f.idx)
 	if err != nil {
 		return err
@@ -179,13 +221,8 @@ func (f *faissFloat32Index) setNProbe(nprobe int32) {
 	f.idx.SetNProbe(nprobe)
 }
 
-func (f *faissFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
-	nvecsToTrain := f.params.numTrainingVecs(trainingData.nvecs)
-	err := f.idx.Train(trainingData.floatData[:nvecsToTrain*f.dim()])
-	if err != nil {
-		return err
-	}
-	return f.add(vecsToAdd)
+func (f *faissFloat32Index) train(trainingData *vectorSet) error {
+	return f.idx.Train(trainingData.floatData)
 }
 
 func (f *faissFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {

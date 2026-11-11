@@ -52,35 +52,23 @@ type faissIndexParams struct {
 	optimization string
 	// numVecs is the number of vectors expected to populate the index.
 	// It is needed at construction time because the underlying faiss
-	// index reports zero vectors until trainAndAdd/add is called, but
+	// index reports zero vectors until train/add is called, but
 	// some construction-time decisions (e.g. whether to clone to GPU)
 	// depend on the eventual vector count.
 	numVecs int
-	// nlist is the number of centroids the index is being built with.
-	// zero during query time.
-	nlist int
 	// ioFlags used to read the index from bytes
 	ioFlags int
 	stats   *seg.Stats
 }
 
 // newFaissIndexParams constructs a faissIndexParams with the given optimization
-// type, expected vector count and centroid count.
-func newFaissIndexParams(optimization string, numVecs, nlist, ioFlags int) *faissIndexParams {
+// type and expected vector count.
+func newFaissIndexParams(optimization string, numVecs, ioFlags int) *faissIndexParams {
 	return &faissIndexParams{
 		optimization: optimization,
 		numVecs:      numVecs,
-		nlist:        nlist,
 		ioFlags:      ioFlags,
 	}
-}
-
-// numTrainingVecs returns how many of the availableVecs vectors to train on.
-func (p *faissIndexParams) numTrainingVecs(availableVecs int) int {
-	if p.nlist <= 0 {
-		return availableVecs
-	}
-	return min(p.nlist*trainingPointsPerCentroid, availableVecs)
 }
 
 func (p *faissIndexParams) size() uint64 {
@@ -145,11 +133,16 @@ type faissIndexIVF interface {
 	// inverted lists are probed during search, and is a key parameter that controls the
 	// trade-off between search accuracy and latency.
 	setNProbe(nprobe int32)
-	// trains the IVF index on the provided training data and adds the vectors to
-	// the trained index. The training step performs k-means clustering to partition
-	// the data space, which enables efficient non-exhaustive search during query time.
-	// directMap and nprobe must be set after this call (GPU sync clears them).
-	trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error
+	// trains the IVF index on exactly the vectors it is given, adding nothing to
+	// it. Sizing the training set is the caller's job -- see trainingSetSize and
+	// sampleTrainingVectors -- so that what gets trained on is decided in one
+	// place rather than silently clipped here.
+	// The training step performs k-means clustering to partition the data space,
+	// which enables efficient non-exhaustive search during query time. Vectors go
+	// in afterwards through add, in as many calls as the caller likes.
+	// directMap and nprobe must be set after training and adding, since a GPU
+	// sync clears both.
+	train(trainingData *vectorSet) error
 	// sets the quantizers for the IVF index. The quantizer is a separate
 	// IVF index that is trained on the same data and used to assign vectors
 	// to clusters in the IVF index.

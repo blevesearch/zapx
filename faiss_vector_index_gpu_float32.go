@@ -20,7 +20,6 @@ package zap
 import (
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"reflect"
 	"sync/atomic"
 
@@ -308,57 +307,32 @@ func (f *faissGPUFloat32Index) setNProbe(nprobe int32) {
 	f.cpuIdx.SetNProbe(nprobe)
 }
 
-// attempt to train and add the vectors to the GPU index. If it fails,
-// fallback to the CPU index
-func (f *faissGPUFloat32Index) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
+// attempt to train the GPU index. Nothing is added here -- vectors go in
+// afterwards through add, in as many calls as the caller likes.
+func (f *faissGPUFloat32Index) train(trainingData *vectorSet) error {
 	f.waitGPU()
 	gpuState := f.gpu.Load()
 	if gpuState == nil {
-		return f.trainAndAddCPU(trainingData, vecsToAdd)
+		return f.trainCPU(trainingData)
 	}
 
-	nvecsToTrain := f.params.numTrainingVecs(trainingData.nvecs)
-	err := gpuState.idx.Train(trainingData.floatData[:nvecsToTrain*f.dim()])
+	err := gpuState.idx.Train(trainingData.floatData)
 	if err != nil {
 		f.teardownGPU()
-		return f.trainAndAddCPU(trainingData, vecsToAdd)
-	}
-
-	err = gpuState.idx.Add(vecsToAdd.floatData)
-	if err != nil {
-		// Fallback to full CPU train and add if:
-		// 1. We get a non-OOM error from the GPU index
-		if !errors.Is(err, faiss.ErrGPUOutOfMemory) {
-			f.teardownGPU()
-			return f.trainAndAddCPU(trainingData, vecsToAdd)
-		}
-		// 2. We get an OOM error but syncing GPU to CPU fails.
-		if f.syncGPUToCPU() != nil {
-			f.teardownGPU()
-			return f.trainAndAddCPU(trainingData, vecsToAdd)
-		}
-		// OOM but CPU sync succeeded: both indexes are trained.
-		// Teardown GPU to avoid discrepancy, add to CPU instead.
-		f.teardownGPU()
-		return f.cpuIdx.Add(vecsToAdd.floatData)
+		return f.trainCPU(trainingData)
 	}
 
 	err = f.syncGPUToCPU()
 	if err != nil {
 		f.teardownGPU()
-		return f.trainAndAddCPU(trainingData, vecsToAdd)
+		return f.trainCPU(trainingData)
 	}
 
 	return nil
 }
 
-func (f *faissGPUFloat32Index) trainAndAddCPU(trainingData *vectorSet, vecsToAdd *vectorSet) error {
-	nvecsToTrain := f.params.numTrainingVecs(trainingData.nvecs)
-	err := f.cpuIdx.Train(trainingData.floatData[:nvecsToTrain*f.dim()])
-	if err != nil {
-		return err
-	}
-	return f.cpuIdx.Add(vecsToAdd.floatData)
+func (f *faissGPUFloat32Index) trainCPU(trainingData *vectorSet) error {
+	return f.cpuIdx.Train(trainingData.floatData)
 }
 
 func (f *faissGPUFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {

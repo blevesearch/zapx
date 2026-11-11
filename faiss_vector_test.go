@@ -18,8 +18,11 @@
 package zap
 
 import (
+	"bytes"
 	"encoding/binary"
+	"fmt"
 	"math"
+	"math/rand/v2"
 	"os"
 	"testing"
 
@@ -892,5 +895,392 @@ func TestIndexExhaustion(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Sampled merge: choosing the training set
+// ---------------------------------------------------------------------------
+
+func fakeVecIndexes(sizes []int) []*vecIndexInfo {
+	out := make([]*vecIndexInfo, len(sizes))
+	for i, n := range sizes {
+		ids := make([]int64, n)
+		for j := range ids {
+			ids[j] = int64(j)
+		}
+		out[i] = &vecIndexInfo{vecIds: ids}
+	}
+	return out
+}
+
+// The sample must total exactly what was asked for, and must never ask a
+// segment for more vectors than it holds.
+func TestSampleCountsExactAndBounded(t *testing.T) {
+	cases := [][]int{
+		{1000, 1000, 1000},
+		{10, 999999, 50},      // wildly uneven
+		{7, 7, 7, 7, 7, 7, 7}, // remainders everywhere
+		{1},
+	}
+	for _, sizes := range cases {
+		total := 0
+		for _, n := range sizes {
+			total += n
+		}
+		for _, want := range []int{1, 13, 100, total / 2, total} {
+			if want > total {
+				continue
+			}
+			vis := fakeVecIndexes(sizes)
+			counts := sampleCountsForTraining(vis, want, total)
+			sum := 0
+			for i, c := range counts {
+				if c > len(vis[i].vecIds) {
+					t.Fatalf("sizes=%v want=%d: segment %d asked for %d of %d",
+						sizes, want, i, c, len(vis[i].vecIds))
+				}
+				sum += c
+			}
+			if sum != want {
+				t.Errorf("sizes=%v want=%d: allocated %d", sizes, want, sum)
+			}
+		}
+	}
+}
+
+// Allocation must be proportional, which is the whole point: a segment holding
+// most of the merge must supply most of the training data.
+func TestSampleCountsAreProportional(t *testing.T) {
+	sizes := []int{900000, 50000, 50000}
+	vis := fakeVecIndexes(sizes)
+	counts := sampleCountsForTraining(vis, 10000, 1000000)
+	if counts[0] < 8800 || counts[0] > 9200 {
+		t.Errorf("dominant segment got %d of 10000, want ~9000", counts[0])
+	}
+}
+
+// Drawn ids must be unique, in range, sorted, and must leave the caller's
+// vecIds alone - the add pass still walks those in their original order.
+func TestSampleIDsAreValidAndNonDestructive(t *testing.T) {
+	sizes := []int{500, 300}
+	vis := fakeVecIndexes(sizes)
+	orig := append([]int64(nil), vis[0].vecIds...)
+
+	counts := sampleCountsForTraining(vis, 200, 800)
+	got := sampleIDsForTraining(vis, counts)
+
+	for i, ids := range got {
+		seen := map[int64]bool{}
+		for k, id := range ids {
+			if seen[id] {
+				t.Fatalf("segment %d: duplicate id %d", i, id)
+			}
+			seen[id] = true
+			if id < 0 || int(id) >= sizes[i] {
+				t.Fatalf("segment %d: id %d out of range", i, id)
+			}
+			if k > 0 && ids[k-1] > id {
+				t.Fatalf("segment %d: not sorted at %d", i, k)
+			}
+		}
+	}
+	for i := range orig {
+		if vis[0].vecIds[i] != orig[i] {
+			t.Fatalf("caller's vecIds were reordered at %d", i)
+		}
+	}
+}
+
+// trainingSetSize is the single definition of how many vectors get trained on,
+// now that train() takes whatever it is handed.
+func TestTrainingSetSize(t *testing.T) {
+	if got := trainingSetSize(0, 5000); got != 5000 {
+		t.Errorf("no nlist: got %d, want all %d", got, 5000)
+	}
+	// 15M vectors, nlist = 4*sqrt(n): sampling should be a small fraction.
+	if got := trainingSetSize(15491, 15000000); got >= 15000000/10 {
+		t.Errorf("15M merge trains on %d, expected well under a tenth", got)
+	}
+	// A small set trains on everything.
+	if got := trainingSetSize(4000, 1000); got != 1000 {
+		t.Errorf("small set: got %d, want %d", got, 1000)
+	}
+}
+
+// The chunk budget must hold memory flat as dimensionality changes - that is
+// why it is expressed in bytes rather than in vectors.
+func TestChunkIsAByteBudgetNotAVectorCount(t *testing.T) {
+	for _, d := range []int{128, 768, 1536, 4096} {
+		n := vectorsPerChunk(d)
+		bytes := n * d * 4
+		if bytes > reconstructChunkBytes {
+			t.Errorf("dims=%d: chunk is %d bytes, over budget %d",
+				d, bytes, reconstructChunkBytes)
+		}
+		if bytes < reconstructChunkBytes/2 {
+			t.Errorf("dims=%d: chunk is %d bytes, wastes most of budget %d",
+				d, bytes, reconstructChunkBytes)
+		}
+	}
+	if vectorsPerChunk(0) < 1 {
+		t.Error("degenerate dims must still yield at least one vector")
+	}
+}
+
+// sampleTrainingVectors must draw whole rows of the source, never part of one
+// and never the same row twice, and must carry the binary rows across in step
+// with the float rows so that BIVF training sees a consistent pair.
+func TestSampleTrainingVectors(t *testing.T) {
+	const dims = 8
+	const nvecs = 500
+
+	// every component of row i has magnitude i+1, with a sign pattern derived
+	// from i, so a row identifies its source and no two rows binarize alike.
+	data := make([]float32, nvecs*dims)
+	for i := 0; i < nvecs; i++ {
+		for j := 0; j < dims; j++ {
+			val := float32(i + 1)
+			if (i>>(j%8))&1 == 1 {
+				val = -val
+			}
+			data[i*dims+j] = val
+		}
+	}
+	vecs, err := newVectorSet(dims, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vecs.binarize()
+
+	// asking for the whole set must not copy it
+	if got := sampleTrainingVectors(vecs, nvecs); got != vecs {
+		t.Error("n == nvecs should hand back the input untouched")
+	}
+	if got := sampleTrainingVectors(vecs, nvecs+10); got != vecs {
+		t.Error("n > nvecs should hand back the input untouched")
+	}
+
+	const want = 120
+	got := sampleTrainingVectors(vecs, want)
+	if got.nvecs != want || len(got.floatData) != want*dims || got.dim != dims {
+		t.Fatalf("got %d vectors of %d dims in %d floats, want %d / %d / %d",
+			got.nvecs, got.dim, len(got.floatData), want, dims, want*dims)
+	}
+	if len(got.binaryData) != want*(dims/8) {
+		t.Fatalf("binary data is %d bytes, want %d", len(got.binaryData), want*(dims/8))
+	}
+
+	stride := dims / 8
+	seen := map[int]bool{}
+	for i := 0; i < got.nvecs; i++ {
+		row := got.floatData[i*dims : (i+1)*dims]
+		src := int(math.Abs(float64(row[0]))) - 1
+		if src < 0 || src >= nvecs {
+			t.Fatalf("row %d carries %v, which is outside the source", i, row[0])
+		}
+		if seen[src] {
+			t.Fatalf("source row %d was drawn twice", src)
+		}
+		seen[src] = true
+
+		srcRow := vecs.floatData[src*dims : (src+1)*dims]
+		for j := range row {
+			if row[j] != srcRow[j] {
+				t.Fatalf("row %d is not a whole copy of source row %d", i, src)
+			}
+		}
+		gotBin := got.binaryData[i*stride : (i+1)*stride]
+		wantBin := vecs.binaryData[src*stride : (src+1)*stride]
+		if !bytes.Equal(gotBin, wantBin) {
+			t.Fatalf("row %d: binary data does not match source row %d", i, src)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Sampled merge: end to end
+// ---------------------------------------------------------------------------
+
+// buildVecSegOnDisk makes a persisted segment of n vectors, with ids prefixed
+// so each segment's documents stay distinguishable after a merge.
+func buildVecSegOnDisk(t *testing.T, prefix string, n, dims int,
+	optimizeFor, metric string, rng *rand.Rand, path string) (segment.Segment, []float32, string) {
+	t.Helper()
+	var docs []index.Document
+	var probeVec []float32
+	var probeID string
+	for i := 0; i < n; i++ {
+		vec := make([]float32, dims)
+		for j := range vec {
+			vec[j] = rng.Float32()*2 - 1
+		}
+		id := fmt.Sprintf("%s-%d", prefix, i)
+		if i == n/2 {
+			probeVec = append([]float32(nil), vec...)
+			probeID = id
+		}
+		docs = append(docs, newVecStubDocument(id, []index.Field{
+			newStubFieldSplitString("_id", nil, id, true, false, false),
+			newStubFieldVecWithOptimization("vec", vec, dims,
+				metric, index.IndexField, optimizeFor),
+		}))
+	}
+	plugin := &ZapPlugin{}
+	s, _, err := plugin.New(docs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ups, ok := s.(segment.UnpersistedSegment); ok {
+		if err = ups.Persist(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	onDisk, err := plugin.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return onDisk, probeVec, probeID
+}
+
+// The sampled merge must produce an index that holds every document and can
+// find them again.
+//
+// Self-recall is the assertion worth making. An absolute hit count proves
+// nothing on its own, because an IVF search probes only nprobe of nlist
+// clusters and a correct index legitimately returns a fraction of the corpus.
+// But a vector always falls in its own cluster, and its own cluster is the
+// first one probed, so querying with a vector that went into the index must
+// bring back that vector's document.
+//
+// The sizes matter. Sampling only bites once nlist is non-zero, which is from
+// ivfThreshold upward, so a test built on the smaller stub datasets would not
+// exercise this code at all.
+//
+// Run for a float32 optimization and a BIVF one, because they take different
+// routes through the merge: BIVF binarizes every sample and every chunk, trains
+// two indexes off the one sample, and writes a streamed backing index followed
+// by a buffered binary one.
+//
+// Each is paired with a metric it can actually serve. A BIVF index keeps one
+// sign bit per dimension, which discards magnitude, so Hamming distance
+// approximates angular similarity and the pairing with Euclidean distance is
+// meaningless -- under l2_norm a BIVF index does not return its own vectors,
+// at any size.
+func TestSampledMergeBuildsAUsableIndex(t *testing.T) {
+	for _, tc := range []struct {
+		optimizeFor string
+		metric      string
+	}{
+		{index.IndexOptimizedForLatency, index.EuclideanDistance},
+		{index.IndexBIVFWithBackingSQ8, index.CosineSimilarity},
+	} {
+		t.Run(tc.optimizeFor, func(t *testing.T) {
+			testSampledMergeBuildsAUsableIndex(t, tc.optimizeFor, tc.metric)
+		})
+	}
+}
+
+func testSampledMergeBuildsAUsableIndex(t *testing.T, optimizeFor, metric string) {
+	// 128 dimensions rather than 8, so a BIVF index has a realistic code space:
+	// one sign bit per dimension means 8 dims would give only 256 distinct
+	// codes for 2,700 vectors.
+	const dims = 128
+	const perSeg = 900
+	const nSegs = 3
+	total := perSeg * nSegs
+
+	if nlist := determineCentroids(total); trainingSetSize(nlist, total) >= total {
+		t.Fatalf("test does not exercise sampling: all %d vectors would be trained on", total)
+	}
+
+	rng := rand.New(rand.NewPCG(42, 1024))
+	var segs []segment.Segment
+	var paths []string
+	var probeVec []float32
+	var probeID string
+	for i := 0; i < nSegs; i++ {
+		p := fmt.Sprintf("./test-sampled-merge-%s-src-%d", optimizeFor, i)
+		paths = append(paths, p)
+		s, vec, id := buildVecSegOnDisk(t, fmt.Sprintf("s%d", i), perSeg, dims,
+			optimizeFor, metric, rng, p)
+		segs = append(segs, s)
+		if i == nSegs/2 {
+			probeVec, probeID = vec, id
+		}
+	}
+	mergedPath := "./test-sampled-merge-" + optimizeFor + "-out"
+	defer func() {
+		for _, s := range segs {
+			_ = s.Close()
+		}
+		for _, p := range paths {
+			_ = os.RemoveAll(p)
+		}
+		_ = os.RemoveAll(mergedPath)
+	}()
+
+	plugin := &ZapPlugin{}
+	drops := make([]*roaring.Bitmap, len(segs))
+	if _, _, err := plugin.Merge(segs, drops, mergedPath, nil, nil); err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	merged, err := plugin.Open(mergedPath)
+	if err != nil {
+		t.Fatalf("open merged: %v", err)
+	}
+	defer merged.Close()
+
+	if got := merged.Count(); got != uint64(total) {
+		t.Errorf("merged segment holds %d docs, want %d", got, total)
+	}
+
+	vecSeg, ok := merged.(segment.VectorSegment)
+	if !ok {
+		t.Fatal("merged segment is not a VectorSegment")
+	}
+	vecIndex, err := vecSeg.InterpretVectorIndex("vec", nil)
+	if err != nil {
+		t.Fatalf("InterpretVectorIndex: %v", err)
+	}
+	defer vecIndex.Close()
+
+	const k = 10
+	pl, err := vecIndex.Search(probeVec, k, nil)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	itr := pl.Iterator(nil)
+	var hits []uint64
+	for {
+		next, err := itr.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if next == nil {
+			break
+		}
+		hits = append(hits, next.Number())
+	}
+	if len(hits) == 0 {
+		t.Fatal("search returned nothing: the merged index is empty or untrained")
+	}
+
+	found := false
+	for _, docNum := range hits {
+		err = merged.VisitStoredFields(docNum, func(field string, _ byte,
+			value []byte, _ []uint64) bool {
+			if field == "_id" && string(value) == probeID {
+				found = true
+			}
+			return true
+		})
+		if err != nil {
+			t.Fatalf("VisitStoredFields(%d): %v", docNum, err)
+		}
+	}
+	if !found {
+		t.Errorf("querying with %q's own vector did not return it in the top %d of %d",
+			probeID, k, total)
 	}
 }

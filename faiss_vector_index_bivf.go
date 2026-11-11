@@ -20,6 +20,7 @@ package zap
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"reflect"
 
 	index "github.com/blevesearch/bleve_index_api"
@@ -149,6 +150,67 @@ func (b *faissBinaryIndex) search(qVector *vectorSet, k int64, selector faiss.Se
 }
 
 func (b *faissBinaryIndex) write(buf []byte, w *FileWriter) error {
+	// A writer callback may change the payload's length, and is not known to
+	// be decomposable across chunks, so the whole index has to exist before
+	// its length prefix can be written. That case keeps the buffered path.
+	if w.processor != nil {
+		return b.writeBuffered(buf, w)
+	}
+
+	// Only the backing index is streamed. The binary half holds dim/8 bytes per
+	// vector against the backing index's dim or dim*4, so it is a small
+	// fraction of the payload and not worth chunking.
+
+	// Ask faiss for the exact serialized size up front
+	size, err := faiss.IndexSerializedSize(b.backing)
+	if err != nil {
+		return err
+	}
+
+	// write the length of the serialized vector index bytes
+	n := binary.PutUvarint(buf, size)
+	_, err = w.Write(buf[:n])
+	if err != nil {
+		return err
+	}
+
+	written, err := faiss.WriteIndexChunked(b.backing, 0, func(chunk []byte) error {
+		_, werr := w.Write(chunk)
+		return werr
+	})
+	if err != nil {
+		return err
+	}
+	if written != size {
+		// The length prefix is already out, so a disagreement here would
+		// leave a segment that reads back as garbage. Fail loudly instead.
+		return fmt.Errorf("faiss wrote %d backing index bytes against a declared size of %d",
+			written, size)
+	}
+
+	binaryBytes, err := faiss.WriteBinaryIndexIntoBuffer(b.binary)
+	if err != nil {
+		return err
+	}
+
+	// write the length of the serialized vector index bytes
+	n = binary.PutUvarint(buf, uint64(len(binaryBytes)))
+	_, err = w.Write(buf[:n])
+	if err != nil {
+		return err
+	}
+
+	_, err = w.Write(binaryBytes)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// writeBuffered serializes both indexes into memory and writes them out whole.
+// Used when a writer callback is in play, since the post-callback length cannot
+// be known before the callback has seen everything.
+func (b *faissBinaryIndex) writeBuffered(buf []byte, w *FileWriter) error {
 	backingBytes, err := faiss.WriteIndexIntoBuffer(b.backing)
 	if err != nil {
 		return err
@@ -286,21 +348,15 @@ func (b *faissBinaryIndex) setNProbe(nprobe int32) {
 	b.binary.SetNProbe(nprobe)
 }
 
-func (b *faissBinaryIndex) trainAndAdd(trainingData *vectorSet, vecsToAdd *vectorSet) error {
-	nvecsToTrain := b.params.numTrainingVecs(trainingData.nvecs)
-	var err error
+func (b *faissBinaryIndex) train(trainingData *vectorSet) error {
 	if b.backing.IsSQIndex() {
-		err = b.backing.Train(trainingData.floatData[:nvecsToTrain*b.dim()])
+		err := b.backing.Train(trainingData.floatData)
 		if err != nil {
 			return err
 		}
 	}
 
-	err = b.binary.Train(trainingData.binaryData[:nvecsToTrain*(b.dim()/8)])
-	if err != nil {
-		return err
-	}
-	return b.add(vecsToAdd)
+	return b.binary.Train(trainingData.binaryData)
 }
 
 func (b *faissBinaryIndex) setQuantizers(trainedIndex faissIndexIVF) error {

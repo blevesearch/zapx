@@ -22,6 +22,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -536,7 +538,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 		if trainedIndex == nil {
 			ioFlags = faissIOFlagsReadOnly
 		}
-		reconsParams := newFaissIndexParams(currVecIndex.indexOptimizedFor, currVecIndex.nvecs, 0, ioFlags)
+		reconsParams := newFaissIndexParams(currVecIndex.indexOptimizedFor, currVecIndex.nvecs, ioFlags)
 		reconsParams.stats = v.stats
 		// load binary index from disk if present
 		if currVecIndex.indexType == faissBIVFIndex {
@@ -608,6 +610,13 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 	config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, nlist, useGPU, v.stats)
 	// merging of indexes with reconstruction method.
 	atomic.AddUint64(&v.stats.TotVecSectionNaiveMerges, 1)
+
+	if !useGPU {
+		err = v.sampledReconstructMerge(config, vecIndexes, nvecs, w, closeCh)
+		freeReconstructedIndexes(vecIndexes)
+		return err
+	}
+
 	// the vecIds in each index contain only the valid vectors,
 	// so we reconstruct only those.
 	indexData := make([]float32, 0, indexDataCap)
@@ -666,24 +675,25 @@ func (v *vectorIndexOpaque) writeFaissIndex(vecs *vectorSet, config *faissIndexC
 	}
 	// if we are using an IVF index, train and add first, then set the direct map
 	// and nprobe. The order matters for GPU indexes: CloneToCPU (done inside
-	// trainAndAdd) clears the direct map and nprobe, so they must be set after.
+	// train and add) clears the direct map and nprobe, so they must be set after.
 	if ivfIndex := index.castIVF(); ivfIndex != nil {
 		atomic.AddUint64(&v.stats.TotVecSectionIVFIndexesCreated, 1)
-		// train the vector index and add the vectors to it. The training step
-		// performs k-means clustering to partition the data space such that during
-		// search time we probe only a subset of vectors (non-exhaustive search).
+		// sample a training set of vectors from the input vector set
+		// and train the index on it
+		trainingSet := sampleTrainingVectors(vecs, trainingSetSize(config.nlist, vecs.nvecs))
 		start := time.Now()
-		err = ivfIndex.trainAndAdd(vecs, vecs)
+		err = ivfIndex.train(trainingSet)
 		if err != nil {
 			return err
 		}
 
-		if v.trainingPhase {
-			atomic.AddUint64(&v.stats.TotVecSectionTrainingPhaseTrainingTime, uint64(time.Since(start)))
-		} else {
-			atomic.AddUint64(&v.stats.TotVecSectionTrainingTime, uint64(time.Since(start)))
+		v.recordTrainingTime(start)
+
+		// then add the vectors to the trained index
+		err = index.add(vecs)
+		if err != nil {
+			return err
 		}
-		atomic.AddUint64(&v.stats.TotVecSectionTrainOps, 1)
 
 		// the direct map maintained in the IVF index is essential for the
 		// reconstruction of vectors based on the sequential vector IDs in the
@@ -706,22 +716,34 @@ func (v *vectorIndexOpaque) writeFaissIndex(vecs *vectorSet, config *faissIndexC
 		}
 	}
 
+	return v.emitFaissIndex(index, config, w)
+}
+
+// records how long a training run took against whichever of the two counters
+// this index build belongs to.
+func (v *vectorIndexOpaque) recordTrainingTime(start time.Time) {
+	if v.trainingPhase {
+		atomic.AddUint64(&v.stats.TotVecSectionTrainingPhaseTrainingTime, uint64(time.Since(start)))
+	} else {
+		atomic.AddUint64(&v.stats.TotVecSectionTrainingTime, uint64(time.Since(start)))
+	}
+	atomic.AddUint64(&v.stats.TotVecSectionTrainOps, 1)
+}
+
+// writes out the index type marker followed by the serialized index.
+func (v *vectorIndexOpaque) emitFaissIndex(index faissIndex,
+	config *faissIndexConfig, w *FileWriter) error {
 	// get a temporary buffer for writing out the index
 	tempBuf := v.grabBuf(binary.MaxVarintLen64)
 	// write the type of the vector index
 	n := binary.PutUvarint(tempBuf, uint64(config.indexType))
-	_, err = w.Write(tempBuf[:n])
+	_, err := w.Write(tempBuf[:n])
 	if err != nil {
 		return err
 	}
 
-	// serialize the merged index into a byte slice, and write it out
-	err = index.write(tempBuf, w)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	// serialize the index into the writer
+	return index.write(tempBuf, w)
 }
 
 // returns the index description string and index type constant for the binary
@@ -1098,7 +1120,7 @@ func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimens
 
 // Factory function to create a faissIndex for the given index config.
 func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
-	params := newFaissIndexParams(cfg.optimizationType, cfg.numVecs, cfg.nlist, faissIOFlags)
+	params := newFaissIndexParams(cfg.optimizationType, cfg.numVecs, faissIOFlags)
 	params.stats = cfg.stats
 	switch cfg.indexType {
 	case faissFP32Index:
@@ -1151,4 +1173,270 @@ func canFastMerge(trainedIndex faissIndexIVF, opt string, totalVecs int) bool {
 		minVecsForFastMerge = ivfSq8Threshold
 	}
 	return trainedIndex.ntotal() >= int64(minVecsForFastMerge) && totalVecs >= minVecsForFastMerge
+}
+
+// reconstructChunkBytes bounds the buffer the merge reconstructs into while
+// adding vectors to the merged index.
+const reconstructChunkBytes = 128 * 1024 * 1024 // 128 MB
+
+// vectorsPerChunk turns the byte budget into a whole number of vectors, never
+// fewer than one.
+func vectorsPerChunk(dims int) int {
+	if dims <= 0 {
+		return 1
+	}
+	return reconstructChunkBytes / (dims * 4)
+}
+
+// trainingSetSize is how many vectors the trainer should look at. It is the
+// only definition of that number: train() takes whatever it is handed, so every
+// path that trains an index sizes its training set through here.
+func trainingSetSize(nlist, nvecs int) int {
+	if nlist <= 0 {
+		return nvecs
+	}
+	return min(nlist*trainingPointsPerCentroid, nvecs)
+}
+
+// sampleCountsForTraining spreads `nTrainingVecs` training slots across the segments in
+// proportion to how many vectors each one contributes to the merge.
+func sampleCountsForTraining(vecIndexes []*vecIndexInfo, nTrainingVecs, nvecs int) []int {
+	counts := make([]int, len(vecIndexes))
+	if nTrainingVecs <= 0 || nvecs <= 0 {
+		return counts
+	}
+
+	type remainder struct {
+		idx  int
+		frac float64
+	}
+	var rems []remainder
+
+	assigned := 0
+	for i, vi := range vecIndexes {
+		if vi == nil || len(vi.vecIds) == 0 {
+			continue
+		}
+		exact := float64(nTrainingVecs) * float64(len(vi.vecIds)) / float64(nvecs)
+		n := min(int(exact), len(vi.vecIds))
+		counts[i] = n
+		assigned += n
+		rems = append(rems, remainder{i, exact - float64(n)})
+	}
+
+	// hand out whatever the truncation left over, largest fraction first
+	sort.Slice(rems, func(a, b int) bool { return rems[a].frac > rems[b].frac })
+	for _, r := range rems {
+		if assigned >= nTrainingVecs {
+			break
+		}
+		if counts[r.idx] < len(vecIndexes[r.idx].vecIds) {
+			counts[r.idx]++
+			assigned++
+		}
+	}
+	return counts
+}
+
+// sampleIDsForTraining draws each segment's allocated share at random.
+func sampleIDsForTraining(vecIndexes []*vecIndexInfo, counts []int) [][]int64 {
+	out := make([][]int64, len(vecIndexes))
+	for i, vi := range vecIndexes {
+		k := counts[i]
+		if k <= 0 || vi == nil {
+			continue
+		}
+		if k >= len(vi.vecIds) {
+			out[i] = append([]int64(nil), vi.vecIds...)
+		} else {
+			pool := append([]int64(nil), vi.vecIds...)
+			for j := 0; j < k; j++ {
+				p := j + rand.IntN(len(pool)-j)
+				pool[j], pool[p] = pool[p], pool[j]
+			}
+			out[i] = pool[:k:k]
+		}
+		ids := out[i]
+		sort.Slice(ids, func(a, b int) bool { return ids[a] < ids[b] })
+	}
+	return out
+}
+
+// sampleTrainingVectors draws n vectors at random from vecs, without
+// replacement, for use as a training set.
+func sampleTrainingVectors(vecs *vectorSet, n int) *vectorSet {
+	if n <= 0 || n >= vecs.nvecs {
+		return vecs
+	}
+
+	// partial Fisher-Yates: n swaps, and the caller's data is untouched
+	perm := make([]int, vecs.nvecs)
+	for i := range perm {
+		perm[i] = i
+	}
+	for i := 0; i < n; i++ {
+		j := i + rand.IntN(len(perm)-i)
+		perm[i], perm[j] = perm[j], perm[i]
+	}
+	rows := perm[:n]
+	// ascending rows walk the source buffer in order
+	sort.Ints(rows)
+
+	out := &vectorSet{
+		dim:       vecs.dim,
+		nvecs:     n,
+		floatData: make([]float32, n*vecs.dim),
+	}
+	for i, row := range rows {
+		copy(out.floatData[i*vecs.dim:], vecs.floatData[row*vecs.dim:(row+1)*vecs.dim])
+	}
+
+	// carry the binary rows across rather than recomputing them: BIVF training
+	// needs them, and the caller has already binarized the full set.
+	if vecs.binaryData != nil {
+		stride := vecs.dim / 8
+		out.binaryData = make([]uint8, n*stride)
+		for i, row := range rows {
+			copy(out.binaryData[i*stride:], vecs.binaryData[row*stride:(row+1)*stride])
+		}
+	}
+
+	return out
+}
+
+// reconstructTrainingSample picks the training sample and materializes just
+// those vectors.
+func (v *vectorIndexOpaque) reconstructTrainingSample(config *faissIndexConfig,
+	vecIndexes []*vecIndexInfo, nvecs int,
+	closeCh chan struct{}) (*vectorSet, error) {
+	trainSize := trainingSetSize(config.nlist, nvecs)
+	counts := sampleCountsForTraining(vecIndexes, trainSize, nvecs)
+	sample := sampleIDsForTraining(vecIndexes, counts)
+
+	sampled := 0
+	for _, ids := range sample {
+		sampled += len(ids)
+	}
+
+	buf := make([]float32, sampled*config.dimension)
+	offset := 0
+	for i, ids := range sample {
+		if len(ids) == 0 {
+			continue
+		}
+		if isClosed(closeCh) {
+			return nil, seg.ErrClosed
+		}
+		// reconstruct straight into this segment's slot in the sample buffer,
+		// rather than into a scratch buffer that is then copied across.
+		need := len(ids) * config.dimension
+		_, err := vecIndexes[i].index.reconstructBatch(ids, buf[offset:offset+need])
+		if err != nil {
+			return nil, err
+		}
+		atomic.AddUint64(&v.stats.TotVecSectionVecsReconstructed, uint64(len(ids)))
+		offset += need
+	}
+
+	vecs, err := newVectorSet(config.dimension, buf[:offset])
+	if err != nil {
+		return nil, err
+	}
+	if config.indexType == faissBIVFIndex {
+		vecs.binarize()
+	}
+	return vecs, nil
+}
+
+// addInChunks adds every vector in the merge to the index, reconstructing a
+// chunk at a time and reusing one buffer throughout. The index must already be
+// trained.
+func (v *vectorIndexOpaque) addInChunks(index faissIndex,
+	config *faissIndexConfig, vecIndexes []*vecIndexInfo,
+	closeCh chan struct{}) error {
+	perChunk := vectorsPerChunk(config.dimension)
+	recons := make([]float32, perChunk*config.dimension)
+
+	for _, vi := range vecIndexes {
+		if vi == nil || len(vi.vecIds) == 0 {
+			continue
+		}
+		for start := 0; start < len(vi.vecIds); start += perChunk {
+			if isClosed(closeCh) {
+				return seg.ErrClosed
+			}
+			ids := vi.vecIds[start:min(start+perChunk, len(vi.vecIds))]
+
+			chunk := recons[:len(ids)*config.dimension]
+			if _, err := vi.index.reconstructBatch(ids, chunk); err != nil {
+				return err
+			}
+			atomic.AddUint64(&v.stats.TotVecSectionVecsReconstructed, uint64(len(ids)))
+
+			vecs, err := newVectorSet(config.dimension, chunk)
+			if err != nil {
+				return err
+			}
+			if config.indexType == faissBIVFIndex {
+				vecs.binarize()
+			}
+
+			if err = index.add(vecs); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// sampledReconstructMerge builds the merged index without ever holding the
+// whole vector set: it trains on a proportional random sample and then adds
+// every vector a chunk at a time.
+func (v *vectorIndexOpaque) sampledReconstructMerge(config *faissIndexConfig,
+	vecIndexes []*vecIndexInfo, nvecs int, w *FileWriter,
+	closeCh chan struct{}) error {
+	index, err := faissIndexFactory(config)
+	if err != nil {
+		return err
+	}
+	// ensure the faiss index is closed after use
+	defer index.close()
+
+	ivfIndex := index.castIVF()
+	if ivfIndex == nil {
+		// a flat index is never trained, so there is nothing to sample for,
+		// but it still gains from adding in chunks.
+		atomic.AddUint64(&v.stats.TotVecSectionFlatIndexesCreated, 1)
+		if err = v.addInChunks(index, config, vecIndexes, closeCh); err != nil {
+			return err
+		}
+		return v.emitFaissIndex(index, config, w)
+	}
+
+	atomic.AddUint64(&v.stats.TotVecSectionIVFIndexesCreated, 1)
+
+	sample, err := v.reconstructTrainingSample(config, vecIndexes, nvecs, closeCh)
+	if err != nil {
+		return err
+	}
+
+	start := time.Now()
+	if err = ivfIndex.train(sample); err != nil {
+		return err
+	}
+	v.recordTrainingTime(start)
+
+	if err = v.addInChunks(index, config, vecIndexes, closeCh); err != nil {
+		return err
+	}
+
+	// the direct map and nprobe are set after training and adding, since on
+	// GPU indexes CloneToCPU clears both. Direct map type 1 is the array-based
+	// one, which is what sequential vector IDs from 0 to N-1 want.
+	if err = ivfIndex.setDirectMap(1); err != nil {
+		return err
+	}
+	ivfIndex.setNProbe(calculateNprobe(config.nlist, config.optimizationType))
+
+	return v.emitFaissIndex(index, config, w)
 }

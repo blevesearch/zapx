@@ -391,24 +391,15 @@ func (b *faissBinaryIndex) isMergeable() bool {
 }
 
 func (b *faissBinaryIndex) mergeFrom(other faissIndex, offset int64) error {
-	if idx, ok := other.(*faissBinaryIndex); ok {
-		if !idx.isMergeable() {
-			return errNotSupported
-		}
-		// merge the binary and the backing index, both flat and SQ8 indexes support
-		// merge_from API underneath the hood. the add_id is kept to 0 since we will
-		// be merging the largest set of indexes which will be sequential in the list
-		// of segments being merged, so there won't be any ID conflicts.
-		err := b.backing.MergeFrom(idx.backing, 0)
-		if err != nil {
-			return err
-		}
-		err = b.binary.MergeFrom(idx.binary, offset)
-		if err != nil {
-			return err
-		}
-
-		return nil
+	// BOTH halves have to clear before EITHER is merged.
+	o, ok := other.(*faissBinaryIndex)
+	if !ok || !o.isMergeable() || !b.binary.CanMergeFrom(o.binary) ||
+		(b.backing.IsSQIndex() && !b.backing.CanMergeFrom(o.backing)) {
+		return errIndexNotMergeable
 	}
-	return errNotSupported
+	// merge the binary and the backing index
+	if err := b.backing.MergeFrom(o.backing, 0); err != nil {
+		return err
+	}
+	return b.binary.MergeFrom(o.binary, offset)
 }

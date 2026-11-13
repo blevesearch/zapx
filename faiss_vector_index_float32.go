@@ -238,6 +238,9 @@ func (f *faissFloat32Index) setQuantizers(trainedIndex faissIndexIVF) error {
 func (f *faissFloat32Index) isMergeable() bool {
 	switch f.params.optimization {
 	case index.IndexOptimizedForLatency, index.IndexOptimizedForRecall:
+		if f.params.fastMerge {
+			return f.params.numVecs >= ivfThreshold
+		}
 		return f.params.numVecs >= ivfSq8Threshold
 	case index.IndexOptimizedForMemoryEfficient, index.IndexIVFRaBitQ:
 		return f.params.numVecs >= ivfThreshold
@@ -247,13 +250,9 @@ func (f *faissFloat32Index) isMergeable() bool {
 }
 
 func (f *faissFloat32Index) mergeFrom(other faissIndex, offset int64) error {
-	otherFaissIndex, ok := other.(*faissFloat32Index)
-	if !ok {
-		return errNotSupported
+	o, ok := other.(*faissFloat32Index)
+	if !ok || !o.isMergeable() || !f.idx.CanMergeFrom(o.idx) {
+		return errIndexNotMergeable
 	}
-
-	if otherFaissIndex.isMergeable() {
-		return f.idx.MergeFrom(otherFaissIndex.idx, offset)
-	}
-	return errNotSupported
+	return f.idx.MergeFrom(o.idx, offset)
 }

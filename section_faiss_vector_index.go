@@ -50,10 +50,14 @@ const (
 	// for latency.
 	nprobeLatencyOptimization = 2
 	// The threshold for number of vectors at or beyond which we start building
-	// the IVF class of indexes.
+	// the IVF class of indexes. It is also the point at which a fast-merge
+	// segment becomes eligible for a native merge, since below it the index is
+	// plain Flat and has no inverted lists to merge.
 	ivfThreshold = 1000
 	// The threshold for number of vectors at or beyond which we start building
 	// the IVF class of indexes with SQ8 quantization for memory efficiency.
+	// Only reached when fast merge is off; a fast-merge field is quantized from
+	// ivfThreshold up, so that every IVF segment it writes shares one type.
 	ivfSq8Threshold = 10000
 	// Number of training vectors per centroid used while training an IVF index.
 	// faiss warns below 39 points per centroid, so this is the smallest value
@@ -142,9 +146,6 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		indexes = indexes[:0] // resizing the slices
 		vecSegs = vecSegs[:0]
 		vecToDocID = vecToDocID[:0]
-		// flag to indicate if there are deleted/updated vectors
-		// in any of the vector indexes being merged.
-		var drops bool
 		for segI, sb := range segments {
 			if isClosed(closeCh) {
 				return seg.ErrClosed
@@ -205,10 +206,6 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 					// This accounts only for valid vector IDs, so deleted
 					// ones won't be reconstructed in the final index.
 					newIndexInfo.vecIds = append(newIndexInfo.vecIds, int64(vecID))
-				} else {
-					// some vectors are dropped, so we can't do a fast merge using faiss's
-					// native merge capabilities, because of the data drift issue.
-					drops = true
 				}
 			}
 
@@ -255,7 +252,7 @@ func (v *faissVectorIndexSection) Merge(opaque map[int]resetable, segments []*Se
 		}
 
 		useGPU := vo.fieldsOptions[fieldName].UseGPU()
-		err = vo.mergeAndWriteVectorIndexes(trainedIndex, vecSegs, indexes, w, closeCh, useGPU, drops)
+		err = vo.mergeAndWriteVectorIndexes(trainedIndex, vecSegs, indexes, w, closeCh, useGPU)
 		if err != nil {
 			return err
 		}
@@ -387,7 +384,7 @@ func calculateNprobe(nlist int, indexOptimizedFor string) int32 {
 
 // todo: need to detect and handle data drift in a more intelligent way
 func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *faissIndexConfig,
-	drops bool, vecIndexes []*vecIndexInfo, w *FileWriter, closeCh chan struct{}) error {
+	vecIndexes []*vecIndexInfo, w *FileWriter, closeCh chan struct{}) error {
 	// create a faissIndex for the merged index using nlist and nprobe from the
 	// trained index's config. cfg is always a CPU config here, since setQuantizers
 	// and the native merge below are CPU-only operations.
@@ -412,37 +409,45 @@ func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *fa
 	// index to ensure that we probe the same number of clusters
 	ivfMergedIdx.setNProbe(int32(nprobe))
 	// using the trained index to copy the quantizers and set them in the final
-	// merged index if possible
-	err = ivfMergedIdx.setQuantizers(trainedIndex)
-	if err != nil {
-		return err
+	// merged index
+	if err = ivfMergedIdx.setQuantizers(trainedIndex); err != nil {
+		return errFastMergeIncompatible
 	}
 
+	// Reconstruction buffer for the non-merge_from paths.
 	var reconsVecs []float32
 	reconsAndAddFrom := func(vecIDs []int64, srcIdx faissIndex) error {
-		neededReconsLen := len(vecIDs) * cfg.dimension
-		if cap(reconsVecs) < neededReconsLen {
-			reconsVecs = make([]float32, neededReconsLen)
+		per := vectorsPerChunk(cfg.dimension)
+		if reconsVecs == nil {
+			reconsVecs = make([]float32, per*cfg.dimension)
 		}
-		reconsVecs = reconsVecs[:neededReconsLen]
-		reconsVecs, err = srcIdx.reconstructBatch(vecIDs, reconsVecs)
-		if err != nil {
-			return err
-		}
+		for start := 0; start < len(vecIDs); start += per {
+			if isClosed(closeCh) {
+				return seg.ErrClosed
+			}
+			end := start + per
+			if end > len(vecIDs) {
+				end = len(vecIDs)
+			}
+			ids := vecIDs[start:end]
 
-		vecSet, err := newVectorSet(cfg.dimension, reconsVecs)
-		if err != nil {
-			return err
+			chunk := reconsVecs[:len(ids)*cfg.dimension]
+			chunk, rerr := srcIdx.reconstructBatch(ids, chunk)
+			if rerr != nil {
+				return rerr
+			}
+			vecSet, verr := newVectorSet(cfg.dimension, chunk)
+			if verr != nil {
+				return verr
+			}
+			if cfg.indexType == faissBIVFIndex {
+				vecSet.binarize()
+			}
+			if aerr := ivfMergedIdx.add(vecSet); aerr != nil {
+				return aerr
+			}
 		}
-		if cfg.indexType == faissBIVFIndex {
-			vecSet.binarize()
-		}
-		// add to target index the reconstructed vectors for the valid vector IDs from the source index.
-		err = ivfMergedIdx.add(vecSet)
-		if err != nil {
-			return err
-		}
-		reconsVecs = reconsVecs[:0]
+		atomic.AddUint64(&v.stats.TotVecSectionVecsReconstructed, uint64(len(vecIDs)))
 		return nil
 	}
 
@@ -451,30 +456,23 @@ func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *fa
 			return seg.ErrClosed
 		}
 		childIdx := vi.index
-		if drops {
-			// if there are some deletes or updates in the segments being merged,
-			// we can't say definitely which mutation can cause a data drift solely
-			// by the vector count - as a fallback mechanism we reconstruct + add
-			// the vectors in this scenario using the trained template since we can't
-			// use merge_from.
-			err = reconsAndAddFrom(vi.vecIds, childIdx)
-			if err != nil {
-				return err
-			}
-			atomic.AddUint64(&v.stats.TotVecSectionVecsReconstructed, uint64(len(vi.vecIds)))
-		} else {
-			if err = ivfMergedIdx.mergeFrom(childIdx, mergedIdx.ntotal()); err != nil {
-				// either the childIdx isn't compatible for fast merge or merge_from failed
-				// so, in either case we can fallback to reconstructing and adding the vectors
-				// one by one from the source index to the target index as a error handling mechanism.
-				err = reconsAndAddFrom(vi.vecIds, childIdx)
-				if err != nil {
-					return err
-				}
-				atomic.AddUint64(&v.stats.TotVecSectionVecsReconstructed, uint64(len(vi.vecIds)))
-			} else {
+		if len(vi.vecIds) == vi.nvecs {
+			mergeErr := ivfMergedIdx.mergeFrom(childIdx, mergedIdx.ntotal())
+			if mergeErr == nil {
 				atomic.AddUint64(&v.stats.TotVecSectionFastMerges, 1)
+				continue
 			}
+			if !errors.Is(mergeErr, errIndexNotMergeable) {
+				return fmt.Errorf("fast merge failed after merge_from had begun, "+
+					"source index is no longer intact: %w", mergeErr)
+			}
+			// Declined with both indexes intact, so fall through and
+			// reconstruct this one from a source that is still whole.
+		}
+
+		// Reconstruct and add against the trained template.
+		if err = reconsAndAddFrom(vi.vecIds, childIdx); err != nil {
+			return err
 		}
 	}
 
@@ -490,7 +488,7 @@ func (v *vectorIndexOpaque) fastMergeIndexes(trainedIndex faissIndexIVF, cfg *fa
 }
 
 func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIVF, sbs []*SegmentBase,
-	vecIndexes []*vecIndexInfo, w *FileWriter, closeCh chan struct{}, useGPU, drops bool) error {
+	vecIndexes []*vecIndexInfo, w *FileWriter, closeCh chan struct{}, useGPU bool) error {
 	// safe to assume that all the indexes are of the same config values, given
 	// that they are extracted from the field mapping info.
 	var dims, metric, indexDataCap, reconsCap, nvecs int
@@ -538,7 +536,7 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 		if trainedIndex == nil {
 			ioFlags = faissIOFlagsReadOnly
 		}
-		reconsParams := newFaissIndexParams(currVecIndex.indexOptimizedFor, currVecIndex.nvecs, ioFlags)
+		reconsParams := newFaissIndexParams(currVecIndex.indexOptimizedFor, currVecIndex.nvecs, ioFlags, v.fastMergeEnabled())
 		reconsParams.stats = v.stats
 		// load binary index from disk if present
 		if currVecIndex.indexType == faissBIVFIndex {
@@ -592,22 +590,27 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 
 	// create the faiss index config to hold the merged data, either via fast merge or reconstruction
 	nlist := v.numCentroids(nvecs)
-	// We perform fast merge whenever a compatible trained index is available,
-	// regardless of whether the GPU is enabled for this field.
-	if canFastMerge(trainedIndex, indexOptimizedFor, nvecs) {
-		config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, nlist, false, v.stats)
-		err := v.fastMergeIndexes(trainedIndex, config, drops, vecIndexes, w, closeCh)
-		if err != nil {
+
+	// can use fast merge
+	if trainedIndex != nil && nvecs >= ivfThreshold {
+		config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, nlist, false, v.fastMergeEnabled(), v.stats)
+		err := v.fastMergeIndexes(trainedIndex, config, vecIndexes, w, closeCh)
+		switch {
+		case err == nil:
+			// free the indexes as we won't need them anymore after the fast merge
+			freeReconstructedIndexes(vecIndexes)
+			return nil
+		case errors.Is(err, errFastMergeIncompatible):
+			// Not an error: this merge cannot use the template, so fall
+			// THROUGH to the reconstruct path.
+		default:
 			atomic.AddUint64(&v.stats.TotVecSectionFastMergeErrs, 1)
 			return err
 		}
-		// free the indexes as we won't need them anymore after the fast merge
-		freeReconstructedIndexes(vecIndexes)
-		return nil
 	}
 
 	// Reconstruct Merge Path:
-	config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, nlist, useGPU, v.stats)
+	config := newFaissIndexConfig(indexType, indexOptimizedFor, dims, metric, nvecs, nlist, useGPU, v.fastMergeEnabled(), v.stats)
 	// merging of indexes with reconstruction method.
 	atomic.AddUint64(&v.stats.TotVecSectionNaiveMerges, 1)
 
@@ -655,12 +658,14 @@ func (v *vectorIndexOpaque) mergeAndWriteVectorIndexes(trainedIndex faissIndexIV
 	if err != nil {
 		return err
 	}
-	return v.writeFaissIndex(vecSet, config, w)
+	return v.writeFaissIndex(vecSet, config, nil, w)
 }
 
 // constructs a faiss on the vectors according to the provided config and writes it out
 // the given writer
-func (v *vectorIndexOpaque) writeFaissIndex(vecs *vectorSet, config *faissIndexConfig, w *FileWriter) error {
+// if a trainer is provided, it will use the trainer's centroids to construct the index
+func (v *vectorIndexOpaque) writeFaissIndex(vecs *vectorSet, config *faissIndexConfig,
+	trainer faissIndexIVF, w *FileWriter) error {
 	// create the faiss index based on the provided description string, and the metric type.
 	index, err := faissIndexFactory(config)
 	if err != nil {
@@ -678,16 +683,23 @@ func (v *vectorIndexOpaque) writeFaissIndex(vecs *vectorSet, config *faissIndexC
 	// train and add) clears the direct map and nprobe, so they must be set after.
 	if ivfIndex := index.castIVF(); ivfIndex != nil {
 		atomic.AddUint64(&v.stats.TotVecSectionIVFIndexesCreated, 1)
-		// sample a training set of vectors from the input vector set
-		// and train the index on it
-		trainingSet := sampleTrainingVectors(vecs, trainingSetSize(config.nlist, vecs.nvecs))
-		start := time.Now()
-		err = ivfIndex.train(trainingSet)
-		if err != nil {
-			return err
-		}
+		if trainer != nil {
+			// Adopt the shared centroid space.
+			if err = ivfIndex.setQuantizers(trainer); err != nil {
+				return err
+			}
+		} else {
+			// sample a training set of vectors from the input vector set
+			// and train the index on it
+			trainingSet := sampleTrainingVectors(vecs, trainingSetSize(config.nlist, vecs.nvecs))
+			start := time.Now()
+			err = ivfIndex.train(trainingSet)
+			if err != nil {
+				return err
+			}
 
-		v.recordTrainingTime(start)
+			v.recordTrainingTime(start)
+		}
 
 		// then add the vectors to the trained index
 		err = index.add(vecs)
@@ -813,9 +825,18 @@ func (vo *vectorIndexOpaque) numCentroids(nvecs int) int {
 	return nlist
 }
 
+// fastMergeEnabled reports whether this index is configured for fast merge.
+func (vo *vectorIndexOpaque) fastMergeEnabled() bool {
+	if vo.config == nil {
+		return false
+	}
+	_, ok := vo.config[index.TrainedIndexCallback]
+	return ok
+}
+
 // determineFloat32IndexToUse returns a description string for the float32
 // index and quantizer type, and an index type constant.
-func determineFloat32IndexToUse(nvecs, nlist int, optimizationType string) string {
+func determineFloat32IndexToUse(nvecs, nlist int, optimizationType string, fastMerge bool) string {
 	if nvecs < ivfThreshold {
 		return "Flat"
 	}
@@ -829,12 +850,11 @@ func determineFloat32IndexToUse(nvecs, nlist int, optimizationType string) strin
 	case index.IndexIVFRaBitQ:
 		return fmt.Sprintf("IVF%d,RaBitQ", nlist)
 	default:
-		switch {
-		case nvecs >= ivfSq8Threshold:
+		// A fast-merge field has no IVF,Flat tier
+		if nvecs >= ivfSq8Threshold || fastMerge {
 			return fmt.Sprintf("IVF%d,SQ8", nlist)
-		default:
-			return fmt.Sprintf("IVF%d,Flat", nlist)
 		}
+		return fmt.Sprintf("IVF%d,Flat", nlist)
 	}
 }
 
@@ -919,8 +939,25 @@ func (vo *vectorIndexOpaque) writeVectorIndexes(w *FileWriter) error {
 		// and create the faiss index for the vectors associated with this field and
 		// write out the index into the segment writer.
 		indexType := determineIndexTypeFromOptimization(content.optimizedFor)
-		config := newFaissIndexConfig(indexType, content.optimizedFor, content.dimension, metric, nvecs, nlist, content.useGPU, vo.stats)
-		err = vo.writeFaissIndex(vecSet, config, w)
+
+		// Adopt the trained template's centroid space when one exists
+		var trainer faissIndexIVF
+		if !vo.trainingPhase {
+			if int(fieldID) < len(vo.fieldsInv) {
+				trainer, err = trainedIndexFromConfig(vo.config, vo.fieldsInv[fieldID])
+			}
+			if err != nil {
+				return err
+			}
+			if trainer != nil {
+				if _, tnlist := trainer.ivfParams(); tnlist > 0 {
+					nlist = tnlist
+				}
+			}
+		}
+
+		config := newFaissIndexConfig(indexType, content.optimizedFor, content.dimension, metric, nvecs, nlist, content.useGPU, vo.fastMergeEnabled(), vo.stats)
+		err = vo.writeFaissIndex(vecSet, config, trainer, w)
 		if err != nil {
 			return err
 		}
@@ -1036,6 +1073,8 @@ type vectorIndexOpaque struct {
 	fieldVectorIndex map[uint16]*vectorIndexContent
 	// fieldsOptions contains field indexing options
 	fieldsOptions map[string]index.FieldIndexingOptions
+	// fieldsInv maps fieldID to field name.
+	fieldsInv []string
 	// tmp0 is a reusable buffer
 	tmp0 []byte
 	// numDocs tracks the total number of documents processed during introduction, helpful while
@@ -1066,6 +1105,7 @@ func (vo *vectorIndexOpaque) Reset() error {
 	vo.tmp0 = vo.tmp0[:0]
 	vo.fieldsOptions = nil
 	vo.config = nil
+	vo.fieldsInv = nil
 	vo.trainingPhase = false
 	atomic.StoreUint64(&vo.bytesWritten, 0)
 	return nil
@@ -1073,6 +1113,8 @@ func (vo *vectorIndexOpaque) Reset() error {
 
 func (v *vectorIndexOpaque) Set(key string, val interface{}) {
 	switch key {
+	case "fieldsInv":
+		v.fieldsInv = val.([]string)
 	case "fieldsOptions":
 		v.fieldsOptions = val.(map[string]index.FieldIndexingOptions)
 	case "config":
@@ -1101,11 +1143,12 @@ type faissIndexConfig struct {
 	optimizationType string
 	nlist            int
 	useGPU           bool
+	fastMerge        bool
 	stats            *seg.Stats
 }
 
 func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimension,
-	metricType, numVecs, nlist int, useGPU bool, stats *seg.Stats) *faissIndexConfig {
+	metricType, numVecs, nlist int, useGPU, fastMerge bool, stats *seg.Stats) *faissIndexConfig {
 	return &faissIndexConfig{
 		indexType:        idxType,
 		dimension:        dimension,
@@ -1114,17 +1157,18 @@ func newFaissIndexConfig(idxType faissIndexType, optimizationType string, dimens
 		nlist:            nlist,
 		optimizationType: optimizationType,
 		useGPU:           useGPU,
+		fastMerge:        fastMerge,
 		stats:            stats,
 	}
 }
 
 // Factory function to create a faissIndex for the given index config.
 func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
-	params := newFaissIndexParams(cfg.optimizationType, cfg.numVecs, faissIOFlags)
+	params := newFaissIndexParams(cfg.optimizationType, cfg.numVecs, faissIOFlags, cfg.fastMerge)
 	params.stats = cfg.stats
 	switch cfg.indexType {
 	case faissFP32Index:
-		description := determineFloat32IndexToUse(cfg.numVecs, cfg.nlist, cfg.optimizationType)
+		description := determineFloat32IndexToUse(cfg.numVecs, cfg.nlist, cfg.optimizationType, cfg.fastMerge)
 		idx, err := faiss.IndexFactory(cfg.dimension, description, cfg.metricType)
 		if err != nil {
 			return nil, err
@@ -1140,7 +1184,7 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 			return nil, err
 		}
 
-		description = determineFloat32IndexToUse(cfg.numVecs, cfg.nlist, cfg.optimizationType)
+		description = determineFloat32IndexToUse(cfg.numVecs, cfg.nlist, cfg.optimizationType, cfg.fastMerge)
 		backingIdx, err := faiss.IndexFactory(cfg.dimension, description, cfg.metricType)
 		if err != nil {
 			return nil, err
@@ -1149,30 +1193,6 @@ func faissIndexFactory(cfg *faissIndexConfig) (faissIndex, error) {
 	default:
 		return nil, errNotSupported
 	}
-}
-
-// canFastMerge determines whether we can use the fast merge capabilities of faiss based on
-//   - the presence of a trained index
-//   - the optimization type of the index.
-//   - the total number of vectors being merged.
-func canFastMerge(trainedIndex faissIndexIVF, opt string, totalVecs int) bool {
-	// if the trained index isn't IVF or not available, fallback to naive merge
-	if trainedIndex == nil {
-		return false
-	}
-
-	var minVecsForFastMerge int
-	switch opt {
-	case index.IndexBIVFWithBackingFlat, index.IndexBIVFWithBackingSQ8:
-		fallthrough
-	case index.IndexOptimizedForMemoryEfficient:
-		fallthrough
-	case index.IndexIVFRaBitQ:
-		minVecsForFastMerge = ivfThreshold
-	default:
-		minVecsForFastMerge = ivfSq8Threshold
-	}
-	return trainedIndex.ntotal() >= int64(minVecsForFastMerge) && totalVecs >= minVecsForFastMerge
 }
 
 // reconstructChunkBytes bounds the buffer the merge reconstructs into while

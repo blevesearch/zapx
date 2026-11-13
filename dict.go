@@ -56,6 +56,12 @@ func (d *Dictionary) PostingsList(term []byte, except *roaring.Bitmap,
 	return d.postingsList(term, except, preallocPL)
 }
 
+// termNotFoundSentinel is stored in termOffsetCache when an FST lookup
+// returns !exists, so subsequent queries skip the FST traversal entirely.
+// A real posting-list offset can never equal math.MaxUint64 (it is a byte
+// offset within a segment file bounded by the file size).
+const termNotFoundSentinel = ^uint64(0)
+
 func (d *Dictionary) postingsList(term []byte, except *roaring.Bitmap, rv *PostingsList) (*PostingsList, error) {
 	if d.fstReader == nil {
 		if rv == nil || rv == emptyPostingsList {
@@ -64,16 +70,42 @@ func (d *Dictionary) postingsList(term []byte, except *roaring.Bitmap, rv *Posti
 		return d.postingsListInit(rv, except), nil
 	}
 
+	// Fast path: avoid FST traversal for terms seen in a previous query.
+	// The cache stores both found offsets and the termNotFoundSentinel so
+	// that rare-entity queries (many segment×field misses) skip the FST
+	// after the first traversal.
+	var ce *invertedCacheEntry
+	if d.sb != nil {
+		ce = d.sb.invIndexCache.getOrCreateEntry(d.fieldID)
+		if v, ok := ce.termOffsetCache.Load(string(term)); ok {
+			offset := v.(uint64)
+			if offset == termNotFoundSentinel {
+				if rv == nil || rv == emptyPostingsList {
+					return emptyPostingsList, nil
+				}
+				return d.postingsListInit(rv, except), nil
+			}
+			return d.postingsListFromOffset(offset, except, rv)
+		}
+	}
+
 	postingsOffset, exists, err := d.fstReader.Get(term)
 
 	if err != nil {
 		return nil, fmt.Errorf("vellum err: %v", err)
 	}
 	if !exists {
+		if ce != nil {
+			ce.termOffsetCache.Store(string(term), termNotFoundSentinel)
+		}
 		if rv == nil || rv == emptyPostingsList {
 			return emptyPostingsList, nil
 		}
 		return d.postingsListInit(rv, except), nil
+	}
+
+	if ce != nil {
+		ce.termOffsetCache.Store(string(term), postingsOffset)
 	}
 
 	return d.postingsListFromOffset(postingsOffset, except, rv)

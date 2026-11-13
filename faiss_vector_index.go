@@ -30,6 +30,12 @@ var (
 	errNilIndex     error = errors.New("faiss index is nil")
 	errNilParams    error = errors.New("faiss index params is nil")
 	errNotSupported error = errors.New("operation not supported")
+	// errIndexNotMergeable is recoverable by the caller and can fall
+	// back to reconstructing the vectors from the source segment instead of merging.
+	errIndexNotMergeable error = errors.New("index cannot be merged from the given index")
+	// the trained template cannot serve this merge at all, so the caller throws the target
+	// away and reconstructs every segment against an index it trains itself.
+	errFastMergeIncompatible error = errors.New("trained index incompatible with merge target")
 )
 
 var reflectStaticSizeFaissIndexParams uint64
@@ -58,16 +64,20 @@ type faissIndexParams struct {
 	numVecs int
 	// ioFlags used to read the index from bytes
 	ioFlags int
-	stats   *seg.Stats
+	// fastMerge says this index belongs to a fast-merge-configured field
+	fastMerge bool
+	stats     *seg.Stats
 }
 
 // newFaissIndexParams constructs a faissIndexParams with the given optimization
 // type and expected vector count.
-func newFaissIndexParams(optimization string, numVecs, ioFlags int) *faissIndexParams {
+func newFaissIndexParams(optimization string, numVecs, ioFlags int,
+	fastMerge bool) *faissIndexParams {
 	return &faissIndexParams{
 		optimization: optimization,
 		numVecs:      numVecs,
 		ioFlags:      ioFlags,
+		fastMerge:    fastMerge,
 	}
 }
 
@@ -149,8 +159,15 @@ type faissIndexIVF interface {
 	setQuantizers(trainedIndex faissIndexIVF) error
 	// returns whether the participating index is eligible for fast merge
 	isMergeable() bool
-	// merged another faiss index into the current IVF index,
+	// merges another faiss index into the current IVF index
 	// with an offset to adjust vector IDs from the other index.
+	//
+	// Compatibility is settled against metadata before anything is committed
+	//
+	//   errIndexNotMergeable -- declined, neither index touched, reconstruct
+	//                           from the source instead.
+	//   any other error      -- merge_from had already begun, the source is
+	//                           partly drained and this merge cannot recover.
 	mergeFrom(other faissIndex, offset int64) error
 }
 

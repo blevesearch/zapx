@@ -1284,3 +1284,72 @@ func testSampledMergeBuildsAUsableIndex(t *testing.T, optimizeFor, metric string
 			probeID, k, total)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Fast merge: segment layout
+// ---------------------------------------------------------------------------
+
+// With fast merge on, a segment above the IVF threshold must get the
+// quantized layout, not IVF,Flat -- otherwise it can never be merged into a
+// large quantized target and every vector is reconstructed instead.
+func TestFastMergeUsesQuantizedLayoutForSmallSegments(t *testing.T) {
+	const nlist = 40
+	cases := []struct {
+		nvecs     int
+		fastMerge bool
+		want      string
+	}{
+		// Below the IVF threshold there are no centroids to share; Flat stands.
+		{nvecs: 999, fastMerge: true, want: "Flat"},
+		{nvecs: 999, fastMerge: false, want: "Flat"},
+		// The band that the 16 MB segment bound actually produces (~4,000).
+		{nvecs: 4000, fastMerge: true, want: fmt.Sprintf("IVF%d,SQ8", nlist)},
+		{nvecs: 4000, fastMerge: false, want: fmt.Sprintf("IVF%d,Flat", nlist)},
+		// Above the SQ8 threshold both agree, as before.
+		{nvecs: 20000, fastMerge: true, want: fmt.Sprintf("IVF%d,SQ8", nlist)},
+		{nvecs: 20000, fastMerge: false, want: fmt.Sprintf("IVF%d,SQ8", nlist)},
+	}
+	for _, c := range cases {
+		got := determineFloat32IndexToUse(c.nvecs, nlist, index.IndexOptimizedForLatency, c.fastMerge)
+		if got != c.want {
+			t.Errorf("nvecs=%d fastMerge=%v: got %q, want %q", c.nvecs, c.fastMerge, got, c.want)
+		}
+	}
+}
+
+// The other optimizations already use a quantized layout throughout, so fast
+// merge must not perturb them.
+func TestFastMergeLeavesOtherOptimizationsAlone(t *testing.T) {
+	const nlist = 40
+	for _, opt := range []string{
+		index.IndexOptimizedForMemoryEfficient,
+		index.IndexIVFRaBitQ,
+	} {
+		on := determineFloat32IndexToUse(4000, nlist, opt, true)
+		off := determineFloat32IndexToUse(4000, nlist, opt, false)
+		if on != off {
+			t.Errorf("%s: fast merge changed the layout (%q vs %q)", opt, on, off)
+		}
+	}
+}
+
+// isMergeable has to agree with the layout chooser: a fast-merge segment above
+// ivfThreshold is built quantized and shares the centroid space, so holding it
+// to ivfSq8Threshold would reject exactly the segments template adoption makes
+// mergeable.
+func TestIsMergeableTracksTheLayoutThreshold(t *testing.T) {
+	mk := func(nvecs int, fastMerge bool) *faissFloat32Index {
+		return &faissFloat32Index{
+			params: newFaissIndexParams(index.IndexOptimizedForLatency, nvecs, 0, fastMerge),
+		}
+	}
+	if !mk(4000, true).isMergeable() {
+		t.Error("fast merge: a 4,000 vector segment is built quantized and must be mergeable")
+	}
+	if mk(4000, false).isMergeable() {
+		t.Error("without fast merge a 4,000 vector segment is IVF,Flat and must not be mergeable")
+	}
+	if mk(999, true).isMergeable() {
+		t.Error("below ivfThreshold there are no centroids to share")
+	}
+}

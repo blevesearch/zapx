@@ -344,7 +344,7 @@ func (f *faissGPUFloat32Index) isMergeable() bool {
 }
 
 func (f *faissGPUFloat32Index) mergeFrom(other faissIndex, offset int64) error {
-	return errNotSupported
+	return errIndexNotMergeable
 }
 
 // syncGPUToCPU clones the current GPU index state back to the CPU index,

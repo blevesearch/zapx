@@ -194,7 +194,7 @@ func readVectorSectionFromFile(opts *vectorCacheOptions) (index faissIndex,
 	}
 	pos += int(indexSize)
 
-	params := newFaissIndexParams(opts.optStr, int(numVecs), faissIOFlagsReadOnly)
+	params := newFaissIndexParams(opts.optStr, int(numVecs), faissIOFlagsReadOnly, false)
 	if faissIndexType(indexType) == faissBIVFIndex {
 		// read the faiss binary index size
 		binSize, n := binary.Uvarint(mem[pos : pos+binary.MaxVarintLen64])

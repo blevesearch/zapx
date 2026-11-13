@@ -672,6 +672,10 @@ func (sb *SegmentBase) DocNumbers(ids []string) (*roaring.Bitmap, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Empty segments have nil _id dictionary
+		if idDict == nil || idDict.fst == nil {
+			return rv, nil
+		}
 
 		postingsList := emptyPostingsList
 

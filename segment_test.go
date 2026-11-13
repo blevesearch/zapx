@@ -766,3 +766,48 @@ func (f fieldTerms) Merge(other fieldTerms) {
 		f[field] = terms
 	}
 }
+
+func TestDocNumbersWithNoIDDictionary(t *testing.T) {
+	tests := []struct {
+		name string
+		sb   *SegmentBase
+	}{
+		{
+			// _id present in fieldsMap, but its inverted text section address
+			// is zero -- dictionary() falls through and returns a nil *Dictionary
+			name: "id field has a zero section address",
+			sb: &SegmentBase{
+				fieldsMap:         map[string]uint16{"_id": 1},
+				fieldsInv:         []string{"_id"},
+				fieldsSectionsMap: [][]uint64{{SectionInvertedTextIndex: 0}},
+				numDocs:           3,
+			},
+		},
+		{
+			// fieldsMap is non-empty, so the len() guard lets us through, but
+			// _id itself is absent -- fieldIDPlus1 is 0
+			name: "id field absent from a non-empty fields map",
+			sb: &SegmentBase{
+				fieldsMap:         map[string]uint16{"value": 1},
+				fieldsInv:         []string{"value"},
+				fieldsSectionsMap: [][]uint64{{SectionInvertedTextIndex: 0}},
+				numDocs:           3,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.sb.DocNumbers([]string{"a", "b", "c"})
+			if err != nil {
+				t.Fatalf("DocNumbers: %v", err)
+			}
+			if got == nil {
+				t.Fatal("DocNumbers returned a nil bitmap")
+			}
+			if n := got.GetCardinality(); n != 0 {
+				t.Errorf("segment has no _id dictionary but claimed %d of the ids", n)
+			}
+		})
+	}
+}
